@@ -144,3 +144,33 @@ export const shipmentLineItems = mysqlTable("shipment_line_items", {
   valueShare: varchar("valueShare", { length: 16 }).notNull(),
 });
 export type ShipmentLineItem = typeof shipmentLineItems.$inferSelect;
+
+export const payments = mysqlTable("payments", {
+  id: int("id").autoincrement().primaryKey(),
+  poId: int("poId"),
+  shipmentId: int("shipmentId"),
+  sequenceNo: int("sequenceNo").notNull(),
+  expectedAmount: varchar("expectedAmount", { length: 32 }).notNull(),
+  expectedDate: timestamp("expectedDate").notNull(),
+  currency: varchar("currency", { length: 8 }).notNull(),
+  paid: boolean("paid").default(false).notNull(),
+  paidAmount: varchar("paidAmount", { length: 32 }),
+  paidDate: timestamp("paidDate"),
+  fxRate: varchar("fxRate", { length: 16 }),
+  baseCurrencyAmount: varchar("baseCurrencyAmount", { length: 32 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type Payment = typeof payments.$inferSelect;
+
+export const transactions = mysqlTable("transactions", {
+  id: int("id").autoincrement().primaryKey(),
+  date: timestamp("date").notNull(),
+  amount: varchar("amount", { length: 32 }).notNull(),
+  currency: varchar("currency", { length: 8 }).notNull(),
+  fxRate: varchar("fxRate", { length: 16 }).notNull(),
+  counterparty: varchar("counterparty", { length: 256 }),
+  description: text("description"),
+  matchedPaymentId: int("matchedPaymentId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type Transaction = typeof transactions.$inferSelect;

@@ -1,0 +1,71 @@
+import { eq, isNull } from "drizzle-orm";
+import { db } from "./dbClient";
+import { payments, transactions, type Payment, type Transaction } from "../drizzle/schema";
+import { logChange } from "./changeLog";
+
+export interface CreateExpectedPaymentInput {
+  poId?: number;
+  shipmentId?: number;
+  sequenceNo: number;
+  expectedAmount: string;
+  expectedDate: Date;
+  currency: string;
+}
+
+export async function createExpectedPayment(input: CreateExpectedPaymentInput): Promise<Payment> {
+  const [result] = await db.insert(payments).values(input);
+  const [row] = await db.select().from(payments).where(eq(payments.id, result.insertId));
+  return row;
+}
+
+export async function markPaymentPaid(
+  id: number,
+  opts: { amount: string; fxRate: string; paidDate: Date; changedBy: number },
+): Promise<Payment> {
+  const baseCurrencyAmount = (parseFloat(opts.amount) * parseFloat(opts.fxRate)).toFixed(2);
+  await db
+    .update(payments)
+    .set({
+      paid: true,
+      paidAmount: opts.amount,
+      paidDate: opts.paidDate,
+      fxRate: opts.fxRate,
+      baseCurrencyAmount,
+    })
+    .where(eq(payments.id, id));
+
+  await logChange({
+    entityType: "payment",
+    entityId: id,
+    field: "paid",
+    oldValue: "false",
+    newValue: "true",
+    changedBy: opts.changedBy,
+  });
+
+  const [row] = await db.select().from(payments).where(eq(payments.id, id));
+  return row;
+}
+
+export interface RecordTransactionInput {
+  date: Date;
+  amount: string;
+  currency: string;
+  fxRate: string;
+  counterparty?: string;
+  description?: string;
+}
+
+export async function recordTransaction(input: RecordTransactionInput): Promise<Transaction> {
+  const [result] = await db.insert(transactions).values(input);
+  const [row] = await db.select().from(transactions).where(eq(transactions.id, result.insertId));
+  return row;
+}
+
+export async function matchTransactionToPayment(transactionId: number, paymentId: number): Promise<void> {
+  await db.update(transactions).set({ matchedPaymentId: paymentId }).where(eq(transactions.id, transactionId));
+}
+
+export async function listUnmatchedTransactions(): Promise<Transaction[]> {
+  return db.select().from(transactions).where(isNull(transactions.matchedPaymentId));
+}
