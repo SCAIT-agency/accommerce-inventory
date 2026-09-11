@@ -68,7 +68,7 @@ export async function markShipmentDeparted(id: number, actualDate: Date, opts: {
     entityType: "shipment",
     entityId: id,
     field: "actualDepartDate",
-    oldValue: null,
+    oldValue: shipment.actualDepartDate?.toISOString() ?? null,
     newValue: actualDate.toISOString(),
     changedBy: opts.changedBy,
   });
@@ -77,8 +77,32 @@ export async function markShipmentDeparted(id: number, actualDate: Date, opts: {
 export async function recordShipmentCosts(
   id: number,
   costs: { freightCost: string; dutyCost: string; costCurrency: string },
+  opts: { reasonCategory: ReasonCategory; reasonNote?: string; changedBy: number },
 ): Promise<Shipment> {
+  const [before] = await db.select().from(shipments).where(eq(shipments.id, id));
   await db.update(shipments).set(costs).where(eq(shipments.id, id));
+
+  await logChange({
+    entityType: "shipment",
+    entityId: id,
+    field: "freightCost",
+    oldValue: before.freightCost,
+    newValue: costs.freightCost,
+    reasonCategory: opts.reasonCategory,
+    reasonNote: opts.reasonNote,
+    changedBy: opts.changedBy,
+  });
+  await logChange({
+    entityType: "shipment",
+    entityId: id,
+    field: "dutyCost",
+    oldValue: before.dutyCost,
+    newValue: costs.dutyCost,
+    reasonCategory: opts.reasonCategory,
+    reasonNote: opts.reasonNote,
+    changedBy: opts.changedBy,
+  });
+
   const [row] = await db.select().from(shipments).where(eq(shipments.id, id));
   return row;
 }

@@ -45,14 +45,57 @@ describe("shipments", () => {
 
   it("records freight/duty cost on a shipment for later per-line landed-cost allocation", async () => {
     const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
-    const updated = await recordShipmentCosts(shipment.id, { freightCost: "4200.00", dutyCost: "980.00", costCurrency: "EUR" });
+    const updated = await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "4200.00", dutyCost: "980.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
     expect(updated.freightCost).toBe("4200.00");
     expect(updated.costCurrency).toBe("EUR");
+  });
+
+  it("logs change_log entries with a required reason when shipment costs are recorded", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "4200.00", dutyCost: "980.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+    const entries = await db.select().from(changeLog);
+    expect(entries).toHaveLength(2);
+    const freightEntry = entries.find((e) => e.field === "freightCost");
+    const dutyEntry = entries.find((e) => e.field === "dutyCost");
+    expect(freightEntry?.oldValue).toBeNull();
+    expect(freightEntry?.newValue).toBe("4200.00");
+    expect(freightEntry?.reasonCategory).toBe("freight_rate_change");
+    expect(dutyEntry?.oldValue).toBeNull();
+    expect(dutyEntry?.newValue).toBe("980.00");
+    expect(dutyEntry?.reasonCategory).toBe("freight_rate_change");
   });
 
   it("blocks marking a shipment departed without a planned depart date first", async () => {
     const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
     await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: 1 })).rejects.toThrow(/planned depart date/);
+  });
+
+  it("logs the shipment's real prior actualDepartDate as oldValue, not a hardcoded null, when marking departed again", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
+    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-10-05"), {
+      reasonCategory: "logistics_delay",
+      changedBy: 1,
+    });
+    const firstActualDate = new Date("2026-10-06");
+    await markShipmentDeparted(shipment.id, firstActualDate, { changedBy: 1 });
+    await db.delete(changeLog);
+
+    const correctedActualDate = new Date("2026-10-07");
+    await markShipmentDeparted(shipment.id, correctedActualDate, { changedBy: 1 });
+
+    const entries = await db.select().from(changeLog);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].field).toBe("actualDepartDate");
+    expect(entries[0].oldValue).toBe(firstActualDate.toISOString());
+    expect(entries[0].newValue).toBe(correctedActualDate.toISOString());
   });
 
   it("logs a change_log entry with a logistics_delay reason when the planned depart date slips", async () => {
