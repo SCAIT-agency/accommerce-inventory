@@ -72,4 +72,29 @@ describe("getShipmentLandedUnitCost", () => {
     // (1000 * 0.15 EXW + 150 freight * 1.0 share + 20 duty * 1.0 share) / 1000 units
     expect(result).toEqual([{ skuId: sku.id, landedUnitCost: (150 + 20.0 + 1000 * 0.15) / 1000 }]);
   });
+
+  it("throws instead of dividing by zero when a shipment line item has qty 0", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "EUR" }],
+      createdBy: 1,
+    });
+    const [lineItem] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container2",
+      lineItems: [{ poLineItemId: lineItem.id, skuId: sku.id, qty: 0, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: 1,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "150.00", dutyCost: "20.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+
+    await expect(getShipmentLandedUnitCost(shipment.id)).rejects.toThrow(/invalid qty/);
+  });
 });

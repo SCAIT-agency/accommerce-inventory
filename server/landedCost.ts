@@ -71,6 +71,9 @@ export async function getShipmentLandedUnitCost(
 
   const results = [];
   for (const line of lines) {
+    if (line.qty <= 0) {
+      throw new Error(`shipment line item ${line.id} has invalid qty ${line.qty}, cannot compute landed unit cost`);
+    }
     const [poLine] = await db.select().from(poLineItems).where(eq(poLineItems.id, line.poLineItemId));
     const exwTotal = parseFloat(poLine.unitPrice) * line.qty;
     const allocatedFreight = freightCost * parseFloat(line.weightShare);
