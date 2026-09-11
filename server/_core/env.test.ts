@@ -1,7 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 describe("ENV", () => {
   const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+  });
 
   afterEach(() => {
     process.env = { ...originalEnv };
