@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -174,3 +174,25 @@ export const transactions = mysqlTable("transactions", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type Transaction = typeof transactions.$inferSelect;
+
+export const LEDGER_EVENT_TYPES = ["receipt", "sale", "adjustment"] as const;
+
+export const inventoryLedger = mysqlTable(
+  "inventory_ledger",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    skuId: int("skuId").notNull(),
+    warehouseId: int("warehouseId").notNull(),
+    eventType: mysqlEnum("eventType", LEDGER_EVENT_TYPES).notNull(),
+    qty: int("qty").notNull(),
+    unitCost: varchar("unitCost", { length: 32 }),
+    date: timestamp("date").notNull(),
+    sourceRef: varchar("sourceRef", { length: 128 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    skuWarehouseDateIdx: index("sku_warehouse_date_idx").on(table.skuId, table.warehouseId, table.date),
+  }),
+);
+export type LedgerEvent = typeof inventoryLedger.$inferSelect;
+export type InsertLedgerEvent = typeof inventoryLedger.$inferInsert;
