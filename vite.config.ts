@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
+import path from 'node:path'
 
 export default defineConfig({
+  root: 'client',
   server: {
     proxy: {
       '/api/trpc': {
@@ -10,6 +12,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: 'dist/client',
+    outDir: path.resolve(__dirname, 'dist/client'),
+    emptyOutDir: true,
   },
 })
