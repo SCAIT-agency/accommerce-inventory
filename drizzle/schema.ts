@@ -54,3 +54,29 @@ export const warehouses = mysqlTable("warehouses", {
 });
 export type Warehouse = typeof warehouses.$inferSelect;
 export type InsertWarehouse = typeof warehouses.$inferInsert;
+
+export const REASON_CATEGORIES = [
+  "production_delay",
+  "artwork_delay",
+  "customs_hold",
+  "logistics_delay",
+  "payment_timing",
+  "vendor_price_change",
+  "freight_rate_change",
+  "holiday_capacity",
+  "other",
+] as const;
+
+export const changeLog = mysqlTable("change_log", {
+  id: int("id").autoincrement().primaryKey(),
+  entityType: varchar("entityType", { length: 64 }).notNull(),
+  entityId: int("entityId").notNull(),
+  field: varchar("field", { length: 128 }).notNull(),
+  oldValue: text("oldValue"),
+  newValue: text("newValue"),
+  reasonCategory: mysqlEnum("reasonCategory", REASON_CATEGORIES),
+  reasonNote: text("reasonNote"),
+  changedBy: int("changedBy").notNull(),
+  changedAt: timestamp("changedAt").defaultNow().notNull(),
+});
+export type ChangeLogEntry = typeof changeLog.$inferSelect;
