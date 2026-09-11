@@ -39,11 +39,41 @@ describe("payments and transactions", () => {
       amount: "30746.70",
       fxRate: "0.93",
       paidDate: new Date("2026-09-09"),
+      reasonCategory: "payment_timing",
       changedBy: 1,
     });
 
     expect(paid.paid).toBe(true);
     expect(paid.baseCurrencyAmount).toBe("28594.43");
+  });
+
+  it("logs change_log entries with real prior values when a payment is marked paid", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const payment = await createExpectedPayment({
+      poId: po.id, sequenceNo: 1, expectedAmount: "30746.70", expectedDate: new Date("2026-09-09"), currency: "USD",
+    });
+
+    await markPaymentPaid(payment.id, {
+      amount: "30746.70",
+      fxRate: "0.93",
+      paidDate: new Date("2026-09-09"),
+      reasonCategory: "payment_timing",
+      changedBy: 1,
+    });
+
+    const entries = await db.select().from(changeLog);
+    expect(entries).toHaveLength(3);
+    const paidEntry = entries.find((e) => e.field === "paid");
+    const fxRateEntry = entries.find((e) => e.field === "fxRate");
+    const paidAmountEntry = entries.find((e) => e.field === "paidAmount");
+    expect(paidEntry?.oldValue).toBe("false");
+    expect(paidEntry?.newValue).toBe("true");
+    expect(paidEntry?.reasonCategory).toBe("payment_timing");
+    expect(fxRateEntry?.oldValue).toBeNull();
+    expect(fxRateEntry?.newValue).toBe("0.93");
+    expect(paidAmountEntry?.oldValue).toBeNull();
+    expect(paidAmountEntry?.newValue).toBe("30746.70");
   });
 
   it("surfaces an unmatched transaction until it's manually linked to a payment", async () => {

@@ -1,7 +1,7 @@
 import { eq, isNull } from "drizzle-orm";
 import { db } from "./dbClient";
 import { payments, transactions, type Payment, type Transaction } from "../drizzle/schema";
-import { logChange } from "./changeLog";
+import { logChange, type ReasonCategory } from "./changeLog";
 
 export interface CreateExpectedPaymentInput {
   poId?: number;
@@ -20,9 +20,18 @@ export async function createExpectedPayment(input: CreateExpectedPaymentInput): 
 
 export async function markPaymentPaid(
   id: number,
-  opts: { amount: string; fxRate: string; paidDate: Date; changedBy: number },
+  opts: {
+    amount: string;
+    fxRate: string;
+    paidDate: Date;
+    reasonCategory: ReasonCategory;
+    reasonNote?: string;
+    changedBy: number;
+  },
 ): Promise<Payment> {
+  const [before] = await db.select().from(payments).where(eq(payments.id, id));
   const baseCurrencyAmount = (parseFloat(opts.amount) * parseFloat(opts.fxRate)).toFixed(2);
+
   await db
     .update(payments)
     .set({
@@ -38,8 +47,30 @@ export async function markPaymentPaid(
     entityType: "payment",
     entityId: id,
     field: "paid",
-    oldValue: "false",
+    oldValue: String(before.paid),
     newValue: "true",
+    reasonCategory: opts.reasonCategory,
+    reasonNote: opts.reasonNote,
+    changedBy: opts.changedBy,
+  });
+  await logChange({
+    entityType: "payment",
+    entityId: id,
+    field: "fxRate",
+    oldValue: before.fxRate,
+    newValue: opts.fxRate,
+    reasonCategory: opts.reasonCategory,
+    reasonNote: opts.reasonNote,
+    changedBy: opts.changedBy,
+  });
+  await logChange({
+    entityType: "payment",
+    entityId: id,
+    field: "paidAmount",
+    oldValue: before.paidAmount,
+    newValue: opts.amount,
+    reasonCategory: opts.reasonCategory,
+    reasonNote: opts.reasonNote,
     changedBy: opts.changedBy,
   });
 
