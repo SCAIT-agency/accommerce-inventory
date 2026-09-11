@@ -108,3 +108,39 @@ export const poLineItems = mysqlTable("po_line_items", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type PoLineItem = typeof poLineItems.$inferSelect;
+
+export const SHIPMENT_STATUSES = ["planned", "departed", "in_transit", "customs", "delivered"] as const;
+export const CUSTOMS_STATUSES = ["not_declared", "declared", "held", "cleared"] as const;
+
+export const shipments = mysqlTable("shipments", {
+  id: int("id").autoincrement().primaryKey(),
+  shipmentRef: varchar("shipmentRef", { length: 64 }).notNull().unique(),
+  status: mysqlEnum("status", SHIPMENT_STATUSES).default("planned").notNull(),
+  customsStatus: mysqlEnum("customsStatus", CUSTOMS_STATUSES).default("not_declared").notNull(),
+  customsDeclarationLink: varchar("customsDeclarationLink", { length: 512 }),
+  plannedDepartDate: timestamp("plannedDepartDate"),
+  actualDepartDate: timestamp("actualDepartDate"),
+  plannedArrivalDate: timestamp("plannedArrivalDate"),
+  actualArrivalDate: timestamp("actualArrivalDate"),
+  /** Total freight/duty for the whole shipment, in `costCurrency` — allocated to
+   * individual SKU lines via each shipment_line_items row's weightShare/valueShare.
+   * Nullable: not every shipment has a real invoice yet at creation time. */
+  freightCost: varchar("freightCost", { length: 32 }),
+  dutyCost: varchar("dutyCost", { length: 32 }),
+  costCurrency: varchar("costCurrency", { length: 8 }),
+  createdBy: int("createdBy").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type Shipment = typeof shipments.$inferSelect;
+
+export const shipmentLineItems = mysqlTable("shipment_line_items", {
+  id: int("id").autoincrement().primaryKey(),
+  shipmentId: int("shipmentId").notNull(),
+  poLineItemId: int("poLineItemId").notNull(),
+  skuId: int("skuId").notNull(),
+  qty: int("qty").notNull(),
+  weightShare: varchar("weightShare", { length: 16 }).notNull(),
+  valueShare: varchar("valueShare", { length: 16 }).notNull(),
+});
+export type ShipmentLineItem = typeof shipmentLineItems.$inferSelect;
