@@ -196,3 +196,26 @@ export const inventoryLedger = mysqlTable(
 );
 export type LedgerEvent = typeof inventoryLedger.$inferSelect;
 export type InsertLedgerEvent = typeof inventoryLedger.$inferInsert;
+
+export const salesPlan = mysqlTable("sales_plan", {
+  id: int("id").autoincrement().primaryKey(),
+  skuId: int("skuId").notNull(),
+  warehouseId: int("warehouseId").notNull(),
+  periodDate: timestamp("periodDate").notNull(),
+  plannedQty: int("plannedQty").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type SalesPlanRow = typeof salesPlan.$inferSelect;
+
+export const SALES_ACTUAL_SOURCES = ["shopify_daily_pull", "manual"] as const;
+
+export const salesActuals = mysqlTable("sales_actuals", {
+  id: int("id").autoincrement().primaryKey(),
+  skuId: int("skuId").notNull(),
+  warehouseId: int("warehouseId").notNull(),
+  date: timestamp("date").notNull(),
+  qty: int("qty").notNull(),
+  source: mysqlEnum("source", SALES_ACTUAL_SOURCES).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type SalesActualRow = typeof salesActuals.$inferSelect;
