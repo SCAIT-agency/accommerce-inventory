@@ -1,7 +1,7 @@
 import express from "express";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { ENV } from "./env";
-import { router } from "./trpc";
+import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { mountAuthRoutes } from "./authRoutes";
 
@@ -11,7 +11,7 @@ mountAuthRoutes(app);
 app.use(
   "/api/trpc",
   createExpressMiddleware({
-    router: router({}),
+    router: appRouter,
     createContext,
   }),
 );
