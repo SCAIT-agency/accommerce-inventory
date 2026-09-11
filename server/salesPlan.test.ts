@@ -41,6 +41,24 @@ describe("sales plan/actuals", () => {
     expect(cv).toBeLessThan(1);
   });
 
+  it("computes volatility from the most RECENT N weeks, not the oldest N, once history exceeds the window", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    // 6 weeks of history, but weeks=4 below. Oldest 4 (07-01..07-22) are all
+    // 1000 -> CV=0. Newest 4 (07-15..08-05) are 1000,1000,3000,5000 -> CV≈0.6633.
+    // An ascending-order-then-limit bug would return the oldest 4 and yield 0.
+    for (const [date, qty] of [
+      ["2026-07-01", 1000], ["2026-07-08", 1000], ["2026-07-15", 1000],
+      ["2026-07-22", 1000], ["2026-07-29", 3000], ["2026-08-05", 5000],
+    ] as const) {
+      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: new Date(date), qty, source: "manual" });
+    }
+
+    const cv = await getSalesVolatility(sku.id, ff.id, 4);
+    expect(cv).toBeCloseTo(0.6633249580710799, 6);
+  });
+
   it("computes per-SKU plan-vs-actual deviation, not just a warehouse aggregate", async () => {
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });

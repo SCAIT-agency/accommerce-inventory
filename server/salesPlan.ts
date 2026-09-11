@@ -1,4 +1,4 @@
-import { and, between, eq } from "drizzle-orm";
+import { and, between, desc, eq } from "drizzle-orm";
 import { db } from "./dbClient";
 import { salesPlan, salesActuals, inventoryLedger } from "../drizzle/schema";
 import { recordLedgerEvent } from "./inventoryLedger";
@@ -30,7 +30,7 @@ export async function getSalesVolatility(skuId: number, warehouseId: number, wee
     .select()
     .from(salesActuals)
     .where(and(eq(salesActuals.skuId, skuId), eq(salesActuals.warehouseId, warehouseId)))
-    .orderBy(salesActuals.date)
+    .orderBy(desc(salesActuals.date))
     .limit(weeks);
 
   const qtys = rows.map((r) => r.qty);
