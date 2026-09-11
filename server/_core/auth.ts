@@ -28,3 +28,20 @@ export async function verifySessionToken(token: string): Promise<SessionPayload>
 export function verifyAppPassword(candidate: string): boolean {
   return candidate === ENV.appPassword;
 }
+
+export async function createPasswordVerifiedToken(): Promise<string> {
+  const expirationSeconds = Math.floor((Date.now() + 10 * 60 * 1000) / 1000);
+  return new SignJWT({ passwordVerified: true })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setExpirationTime(expirationSeconds)
+    .sign(getSecretKey());
+}
+
+export async function verifyPasswordVerifiedToken(token: string): Promise<boolean> {
+  try {
+    const { payload } = await jwtVerify(token, getSecretKey(), { algorithms: ["HS256"] });
+    return payload.passwordVerified === true;
+  } catch {
+    return false;
+  }
+}

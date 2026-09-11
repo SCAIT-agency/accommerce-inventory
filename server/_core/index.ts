@@ -3,9 +3,11 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { ENV } from "./env";
 import { router } from "./trpc";
 import { createContext } from "./context";
+import { mountAuthRoutes } from "./authRoutes";
 
 const app = express();
 app.use(express.json());
+mountAuthRoutes(app);
 app.use(
   "/api/trpc",
   createExpressMiddleware({
