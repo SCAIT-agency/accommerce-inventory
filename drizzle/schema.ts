@@ -80,3 +80,31 @@ export const changeLog = mysqlTable("change_log", {
   changedAt: timestamp("changedAt").defaultNow().notNull(),
 });
 export type ChangeLogEntry = typeof changeLog.$inferSelect;
+
+export const PO_STATUSES = [
+  "draft", "confirmed", "in_production", "shipped", "customs", "delivered", "closed",
+] as const;
+
+export const purchaseOrders = mysqlTable("purchase_orders", {
+  id: int("id").autoincrement().primaryKey(),
+  poNumber: varchar("poNumber", { length: 64 }).notNull().unique(),
+  vendorId: int("vendorId").notNull(),
+  status: mysqlEnum("status", PO_STATUSES).default("draft").notNull(),
+  plannedReadyDate: timestamp("plannedReadyDate"),
+  notes: text("notes"),
+  createdBy: int("createdBy").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type PurchaseOrder = typeof purchaseOrders.$inferSelect;
+
+export const poLineItems = mysqlTable("po_line_items", {
+  id: int("id").autoincrement().primaryKey(),
+  poId: int("poId").notNull(),
+  skuId: int("skuId").notNull(),
+  qty: int("qty").notNull(),
+  unitPrice: varchar("unitPrice", { length: 32 }).notNull(),
+  currency: varchar("currency", { length: 8 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type PoLineItem = typeof poLineItems.$inferSelect;
