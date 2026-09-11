@@ -1,7 +1,8 @@
 import { trpc } from "../lib/trpc";
 
 export function HomePage() {
-  const { data, isLoading } = trpc.dashboards.home.useQuery();
+  const { data, isLoading, error } = trpc.dashboards.home.useQuery();
+  if (error) return <div>Failed to load: {error.message}</div>;
   if (isLoading || !data) return <div>Loading…</div>;
   return (
     <div>

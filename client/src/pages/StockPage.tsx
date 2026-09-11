@@ -1,7 +1,8 @@
 import { trpc } from "../lib/trpc";
 
 export function StockPage() {
-  const { data, isLoading } = trpc.dashboards.stock.useQuery();
+  const { data, isLoading, error } = trpc.dashboards.stock.useQuery();
+  if (error) return <div>Failed to load: {error.message}</div>;
   if (isLoading || !data) return <div>Loading…</div>;
   return (
     <table>
