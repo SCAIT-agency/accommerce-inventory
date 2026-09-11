@@ -24,11 +24,4 @@ export function loadEnv(): Env {
   };
 }
 
-let ENV: Env | null = null;
-try {
-  ENV = loadEnv();
-} catch {
-  // Env will be loaded later if needed
-}
-
-export { ENV };
+export const ENV = loadEnv();

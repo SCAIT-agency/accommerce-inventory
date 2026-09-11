@@ -1,11 +1,8 @@
 import express from "express";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { loadEnv } from "./env";
+import { ENV } from "./env";
 import { router } from "./trpc";
 import { createContext } from "./context";
-
-// Load env vars
-const env = loadEnv();
 
 const app = express();
 app.use(express.json());
@@ -17,6 +14,6 @@ app.use(
   }),
 );
 
-app.listen(env.port, () => {
-  console.log(`accommerce-inventory listening on :${env.port}`);
+app.listen(ENV.port, () => {
+  console.log(`accommerce-inventory listening on :${ENV.port}`);
 });
