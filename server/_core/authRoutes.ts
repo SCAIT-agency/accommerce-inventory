@@ -27,8 +27,12 @@ export function mountAuthRoutes(app: Express) {
     if (!pwCookie || !(await verifyPasswordVerifiedToken(pwCookie))) {
       return res.status(401).json({ error: "password not verified" });
     }
-    const rows = await db.select({ id: users.id, email: users.email, role: users.role }).from(users);
-    res.json(rows);
+    try {
+      const rows = await db.select({ id: users.id, email: users.email, role: users.role }).from(users);
+      res.json(rows);
+    } catch {
+      res.status(500).json({ error: "failed to load users" });
+    }
   });
 
   app.post("/api/auth/select-user", async (req: Request, res: Response) => {
@@ -40,7 +44,13 @@ export function mountAuthRoutes(app: Express) {
     if (typeof userId !== "number") {
       return res.status(400).json({ error: "userId is required" });
     }
-    const [user] = await db.select().from(users).where(eq(users.id, userId));
+
+    let user: typeof users.$inferSelect | undefined;
+    try {
+      [user] = await db.select().from(users).where(eq(users.id, userId));
+    } catch {
+      return res.status(500).json({ error: "failed to look up user" });
+    }
     if (!user) return res.status(404).json({ error: "user not found" });
 
     const token = await createSessionToken(user.id, user.role);
