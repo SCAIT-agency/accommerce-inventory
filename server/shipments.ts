@@ -20,6 +20,10 @@ export async function createShipment(input: CreateShipmentInput): Promise<Shipme
   return shipment;
 }
 
+export async function listShipments() {
+  return db.select().from(shipments);
+}
+
 export async function getShipmentWithLineItems(id: number) {
   const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
   const lineItems = await db.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, id));

@@ -3,7 +3,7 @@ import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { listSkus, createSku, listVendors, createVendor, listWarehouses, createWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
-import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, getShipmentWithLineItems } from "./shipments";
+import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, getShipmentWithLineItems, listShipments } from "./shipments";
 import { REASON_CATEGORIES, PO_STATUSES } from "../drizzle/schema";
 import { listChangeLog } from "./changeLog";
 
@@ -54,6 +54,7 @@ export const appRouter = router({
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("purchase_order", input)),
   }),
   shipments: router({
+    list: protectedProcedure.query(() => listShipments()),
     getWithLineItems: protectedProcedure.input(z.number()).query(({ input }) => getShipmentWithLineItems(input)),
     create: editorProcedure
       .input(z.object({
