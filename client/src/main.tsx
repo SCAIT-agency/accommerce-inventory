@@ -8,6 +8,8 @@ import { trpc } from "./lib/trpc";
 import { AppNav } from "./components/nav/AppNav";
 import { HomePage } from "./pages/HomePage";
 import { StockPage } from "./pages/StockPage";
+import { PurchaseOrdersPage } from "./pages/PurchaseOrdersPage";
+import { ShipmentsPage } from "./pages/ShipmentsPage";
 
 const queryClient = new QueryClient();
 const trpcClient = trpc.createClient({
@@ -23,6 +25,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/stock" element={<StockPage />} />
+            <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
+            <Route path="/shipments" element={<ShipmentsPage />} />
           </Routes>
         </BrowserRouter>
       </QueryClientProvider>
