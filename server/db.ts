@@ -1,0 +1,52 @@
+import { eq } from "drizzle-orm";
+import { db } from "./dbClient";
+import { skus, vendors, warehouses, appSettings, type InsertSku, type InsertVendor, type InsertWarehouse } from "../drizzle/schema";
+
+export async function createSku(data: Omit<InsertSku, "id">) {
+  const [result] = await db.insert(skus).values(data);
+  const [row] = await db.select().from(skus).where(eq(skus.id, result.insertId));
+  return row;
+}
+
+export async function listSkus(status?: "active" | "inactive") {
+  if (status) return db.select().from(skus).where(eq(skus.status, status));
+  return db.select().from(skus);
+}
+
+export async function updateSku(id: number, data: Partial<InsertSku>) {
+  await db.update(skus).set(data).where(eq(skus.id, id));
+  const [row] = await db.select().from(skus).where(eq(skus.id, id));
+  return row;
+}
+
+export async function createVendor(data: Omit<InsertVendor, "id">) {
+  const [result] = await db.insert(vendors).values(data);
+  const [row] = await db.select().from(vendors).where(eq(vendors.id, result.insertId));
+  return row;
+}
+
+export async function listVendors() {
+  return db.select().from(vendors);
+}
+
+export async function createWarehouse(data: Omit<InsertWarehouse, "id">) {
+  const [result] = await db.insert(warehouses).values(data);
+  const [row] = await db.select().from(warehouses).where(eq(warehouses.id, result.insertId));
+  return row;
+}
+
+export async function listWarehouses() {
+  return db.select().from(warehouses);
+}
+
+export async function getAppSetting(key: string): Promise<string | null> {
+  const [row] = await db.select().from(appSettings).where(eq(appSettings.key, key));
+  return row?.value ?? null;
+}
+
+export async function setAppSetting(key: string, value: string) {
+  await db
+    .insert(appSettings)
+    .values({ key, value })
+    .onDuplicateKeyUpdate({ set: { value } });
+}
