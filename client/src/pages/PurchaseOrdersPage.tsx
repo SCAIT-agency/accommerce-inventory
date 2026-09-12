@@ -132,6 +132,7 @@ function PoPaymentsSection({ poId }: { poId: number }) {
     onSuccess: (payment) => {
       setPayments((prev) => [...prev, payment]);
       setForm((prev) => ({ ...defaultNewPaymentForm(), sequenceNo: String(Number(prev.sequenceNo) + 1) }));
+      utils.dashboards.money.invalidate();
     },
   });
   const canCreate = form.expectedAmount.trim().length > 0 && form.currency.trim().length > 0;
