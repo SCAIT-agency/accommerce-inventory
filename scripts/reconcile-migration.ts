@@ -18,6 +18,7 @@ import {
   type TransactionSheetRow,
   type SkuWarehouseTotal,
   type SkippedRow,
+  type LandedCostTotal,
 } from "./migrate-from-sheet";
 
 export interface RunMigrationInput {
@@ -27,6 +28,7 @@ export interface RunMigrationInput {
   paymentRows: PaymentSheetRow[];
   transactionRows: TransactionSheetRow[];
   sheetTotals: SkuWarehouseTotal[];
+  landedCostTotals?: LandedCostTotal[];
 }
 
 export interface RunMigrationResult {
@@ -187,13 +189,17 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
     }
 
     // 6. Reconciliation gate — inside the transaction, so a failure here rolls back everything above.
-    const soakResult = await reconcileMigration(input.sheetTotals, {
-      getMigratedSoh: async (sku, warehouseCode) => {
-        const skuId = skuByCode.get(sku)!;
-        const warehouseId = warehouseByCode.get(warehouseCode)!;
-        return getSoh(skuId, warehouseId, undefined, tx);
+    const soakResult = await reconcileMigration(
+      input.sheetTotals,
+      {
+        getMigratedSoh: async (sku, warehouseCode) => {
+          const skuId = skuByCode.get(sku)!;
+          const warehouseId = warehouseByCode.get(warehouseCode)!;
+          return getSoh(skuId, warehouseId, undefined, tx);
+        },
       },
-    });
+      input.landedCostTotals ?? [],
+    );
     if (!soakResult.passed) {
       throw new Error(`migration reconciliation failed: ${JSON.stringify(soakResult.mismatches)}`);
     }

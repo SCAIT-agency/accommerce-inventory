@@ -36,7 +36,7 @@ describe("reconcileMigration", () => {
     );
     return expect(result).resolves.toEqual({
       passed: false,
-      mismatches: [{ sku: "JELLO-CAL-500", warehouseCode: "FF-DE", expected: 150827, actual: 150000, diff: -827 }],
+      mismatches: [{ sku: "JELLO-CAL-500", warehouseCode: "FF-DE", expected: 150827, actual: 150000, diff: -827, kind: "soh" }],
     });
   });
 
@@ -59,10 +59,31 @@ describe("reconcileMigration", () => {
     return expect(result).resolves.toEqual({
       passed: false,
       mismatches: [
-        { sku: "JELLO-CAL-500", warehouseCode: "FF-DE", expected: 150827, actual: 150000, diff: -827 },
-        { sku: "JELLO-MAG-250", warehouseCode: "FF-DE", expected: 900, actual: 800, diff: -100 },
+        { sku: "JELLO-CAL-500", warehouseCode: "FF-DE", expected: 150827, actual: 150000, diff: -827, kind: "soh" },
+        { sku: "JELLO-MAG-250", warehouseCode: "FF-DE", expected: 900, actual: 800, diff: -100, kind: "soh" },
       ],
     });
+  });
+
+  it("passes a landed-cost mismatch within tolerance (0.1% or $0.01, whichever is greater)", async () => {
+    const result = await reconcileMigration(
+      [],
+      { getMigratedSoh: async () => 0 },
+      [{ sku: "JELLO-CAL-500", warehouseCode: "FF-DE", landedCostFromSheet: 1000.0 }],
+      { getMigratedLandedCost: async () => 1000.5 }, // 0.05% off — within the 0.1% tolerance
+    );
+    expect(result.passed).toBe(true);
+  });
+
+  it("fails a landed-cost mismatch beyond tolerance, tagged as a landed_cost mismatch", async () => {
+    const result = await reconcileMigration(
+      [],
+      { getMigratedSoh: async () => 0 },
+      [{ sku: "JELLO-CAL-500", warehouseCode: "FF-DE", landedCostFromSheet: 1000.0 }],
+      { getMigratedLandedCost: async () => 1010.0 }, // 1% off — beyond tolerance
+    );
+    expect(result.passed).toBe(false);
+    expect(result.mismatches[0].kind).toBe("landed_cost");
   });
 });
 

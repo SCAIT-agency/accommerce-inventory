@@ -52,11 +52,32 @@ export interface Mismatch {
   expected: number;
   actual: number;
   diff: number;
+  kind: "soh" | "landed_cost";
+}
+
+export interface LandedCostTotal {
+  sku: string;
+  warehouseCode: string;
+  landedCostFromSheet: number;
+}
+
+export interface LandedCostReconciliationDeps {
+  getMigratedLandedCost: (sku: string, warehouseCode: string) => Promise<number>;
+}
+
+const LANDED_COST_TOLERANCE_MIN = 0.01;
+const LANDED_COST_TOLERANCE_PCT = 0.001;
+
+function withinLandedCostTolerance(expected: number, actual: number): boolean {
+  const tolerance = Math.max(LANDED_COST_TOLERANCE_MIN, Math.abs(expected) * LANDED_COST_TOLERANCE_PCT);
+  return Math.abs(expected - actual) <= tolerance;
 }
 
 export async function reconcileMigration(
   sheetTotals: SkuWarehouseTotal[],
   deps: ReconciliationDeps,
+  landedCostTotals: LandedCostTotal[] = [],
+  landedCostDeps?: LandedCostReconciliationDeps,
 ): Promise<{ passed: boolean; mismatches: Mismatch[] }> {
   const mismatches: Mismatch[] = [];
   for (const total of sheetTotals) {
@@ -68,9 +89,27 @@ export async function reconcileMigration(
         expected: total.sohFromSheet,
         actual,
         diff: actual - total.sohFromSheet,
+        kind: "soh",
       });
     }
   }
+
+  if (landedCostDeps) {
+    for (const total of landedCostTotals) {
+      const actual = await landedCostDeps.getMigratedLandedCost(total.sku, total.warehouseCode);
+      if (!withinLandedCostTolerance(total.landedCostFromSheet, actual)) {
+        mismatches.push({
+          sku: total.sku,
+          warehouseCode: total.warehouseCode,
+          expected: total.landedCostFromSheet,
+          actual,
+          diff: actual - total.landedCostFromSheet,
+          kind: "landed_cost",
+        });
+      }
+    }
+  }
+
   return { passed: mismatches.length === 0, mismatches };
 }
 
