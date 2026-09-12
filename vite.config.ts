@@ -5,7 +5,9 @@ export default defineConfig({
   root: 'client',
   server: {
     proxy: {
-      '/api/trpc': {
+      // Whole /api prefix, not just /api/trpc — the login page talks to
+      // /api/auth/* directly, and the route guard polls /api/auth/status.
+      '/api': {
         target: 'http://localhost:3000',
         changeOrigin: true,
       },

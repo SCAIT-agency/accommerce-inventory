@@ -31,7 +31,22 @@ design spec's single-tenant-per-client model).
    serves both the API and the frontend. There is no separate static host and no
    Vite process in production.
 6. Run `pnpm db:push` once against the production `DATABASE_URL` to create the schema.
-7. Add a Railway Cron Job (Railway → New → Cron Job) running nightly, command:
+7. **Required one-time bootstrap — create the first user.** The login flow is
+   app password → pick an identity from `users` → session. Nothing in the app
+   creates that first `users` row, so until this runs the login screen has no
+   identity to offer and nobody can get in. Run once against the production
+   `DATABASE_URL`:
+
+   ```bash
+   SEED_USER_EMAIL=ops@accommerce.example SEED_USER_ROLE=editor \
+     pnpm exec tsx scripts/seed-first-user.ts
+   ```
+
+   `SEED_USER_ROLE` is `editor` or `viewer` (defaults to `editor`). The script
+   prints the created user's id/email/role, and refuses to run twice for the
+   same email. Add further users by re-running it with a different
+   `SEED_USER_EMAIL`.
+8. Add a Railway Cron Job (Railway → New → Cron Job) running nightly, command:
    `pnpm exec tsx scripts/run-nightly-export.mjs` (a thin wrapper around
    `runNightlyExport` — see `server/nightlyExport.ts`), writing to a Railway
    persistent volume mounted at `/data/exports`. Use `tsx`, not plain `node`
@@ -43,7 +58,7 @@ design spec's single-tenant-per-client model).
 
 - Deploys happen automatically on push to `main` — this is Accommerce's own
   instance, not shared with any other client.
-- A future second client instance (e.g. Tucann) repeats steps 1–7 on *their*
+- A future second client instance (e.g. Tucann) repeats steps 1–8 on *their*
   own infrastructure, from the same repo template — never on this instance.
 
 ## Local Development

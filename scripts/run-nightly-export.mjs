@@ -1,6 +1,6 @@
 // scripts/run-nightly-export.mjs
 //
-// Entrypoint for the Railway Cron Job (see RAILWAY.md step 7). Run with tsx,
+// Entrypoint for the Railway Cron Job (see RAILWAY.md step 8). Run with tsx,
 // not plain `node` — this repo uses extensionless relative imports
 // throughout (e.g. "./dbClient", "../drizzle/schema"), which Node's native
 // ESM resolver cannot resolve even with --experimental-strip-types. tsx is
