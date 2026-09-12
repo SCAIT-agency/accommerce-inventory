@@ -180,4 +180,11 @@ describe("transformTransactions", () => {
     expect(result.transactions).toEqual([]);
     expect(result.skipped[0].reason).toContain("date");
   });
+
+  it("quarantines a row with a garbage-suffixed amount instead of silently truncating it", () => {
+    const rows = [{ date: "2026-09-09", amount: "100abc", currency: "USD", fx_rate: "0.93", counterparty: "Test", description: "" }];
+    const result = transformTransactions(rows);
+    expect(result.transactions).toEqual([]);
+    expect(result.skipped[0].reason).toContain("amount");
+  });
 });

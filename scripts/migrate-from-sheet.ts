@@ -309,6 +309,10 @@ export function transformTransactions(rows: TransactionSheetRow[]): { transactio
       skipped.push({ rowIndex, reason: `unparseable date "${row.date}"` });
       return;
     }
+    if (!DECIMAL_PATTERN.test(row.amount)) {
+      skipped.push({ rowIndex, reason: `unparseable amount "${row.amount}"` });
+      return;
+    }
     const amount = parseFloat(row.amount);
     if (Number.isNaN(amount)) {
       skipped.push({ rowIndex, reason: `unparseable amount "${row.amount}"` });
