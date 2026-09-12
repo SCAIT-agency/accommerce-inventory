@@ -71,6 +71,13 @@
       "when": 1789228190093,
       "tag": "0009_clear_blue_blade",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1789228616939,
+      "tag": "0010_restore-sku-composite-unique-index",
+      "breakpoints": true
     }
   ]
 }
