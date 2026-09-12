@@ -22,4 +22,12 @@ describe("generateParallelRunReport", () => {
     );
     expect(report.safeToCutOver).toBe(true);
   });
+
+  it("throws when sheetSnapshot is empty to prevent false-positive safe-to-cut-over on unvalidated comparison", async () => {
+    const promise = generateParallelRunReport(
+      [],
+      { getMigratedSoh: async () => 0 },
+    );
+    await expect(promise).rejects.toThrow("sheetSnapshot is empty");
+  });
 });
