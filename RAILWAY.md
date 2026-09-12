@@ -25,6 +25,11 @@ design spec's single-tenant-per-client model).
    (`openssl rand -hex 32`), `APP_PASSWORD`, `PORT=3000`.
 5. Connect the Railway service to the `accommerce-inventory` GitHub repo for
    auto-deploy on push to `main`. Build command: `pnpm build`. Start command: `pnpm start`.
+   `pnpm build` emits the server bundle to `dist/index.js` and the Vite-built
+   client to `dist/client/`; under `NODE_ENV=production` the server serves that
+   client directory as static files with an SPA fallback, so one Railway service
+   serves both the API and the frontend. There is no separate static host and no
+   Vite process in production.
 6. Run `pnpm db:push` once against the production `DATABASE_URL` to create the schema.
 7. Add a Railway Cron Job (Railway → New → Cron Job) running nightly, command:
    `pnpm exec tsx scripts/run-nightly-export.mjs` (a thin wrapper around
@@ -64,7 +69,7 @@ pnpm test
 ## Project Structure
 
 ```
-server/_core/       — Framework plumbing (auth, context, tRPC, Vite bridge)
+server/_core/       — Framework plumbing (auth, context, tRPC, static client serving)
 server/             — Business logic (SKUs, POs, shipments, payments, ledger, nightly export)
 client/src/         — React frontend (pages, components, lib)
 drizzle/            — Database schema and migrations
