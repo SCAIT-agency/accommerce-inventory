@@ -16,6 +16,8 @@ const VALID_TRANSITIONS: Record<(typeof PO_STATUSES)[number], (typeof PO_STATUSE
 export interface CreatePoInput {
   poNumber: string;
   vendorId: number;
+  vendorReference?: string;
+  initialStatus?: (typeof PO_STATUSES)[number];
   lineItems: { skuId: number; qty: number; unitPrice: string; currency: string }[];
   createdBy: number;
 }
@@ -24,6 +26,8 @@ export async function createPurchaseOrder(input: CreatePoInput): Promise<Purchas
   const [result] = await db.insert(purchaseOrders).values({
     poNumber: input.poNumber,
     vendorId: input.vendorId,
+    vendorReference: input.vendorReference,
+    status: input.initialStatus ?? "draft",
     createdBy: input.createdBy,
   });
   if (input.lineItems.length > 0) {

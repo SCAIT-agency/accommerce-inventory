@@ -107,4 +107,16 @@ describe("shipments", () => {
     const entries = await db.select().from(changeLog);
     expect(entries[0].reasonCategory).toBe("logistics_delay");
   });
+
+  it("accepts an optional vendor reference and initial status for migration use", async () => {
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container2",
+      vendorReference: "MBS-DEBIT-SZDN26080711",
+      initialStatus: "delivered",
+      lineItems: [],
+      createdBy: 1,
+    });
+    expect(shipment.vendorReference).toBe("MBS-DEBIT-SZDN26080711");
+    expect(shipment.status).toBe("delivered");
+  });
 });

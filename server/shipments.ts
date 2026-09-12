@@ -1,16 +1,23 @@
 import { eq } from "drizzle-orm";
 import { db } from "./dbClient";
-import { shipments, shipmentLineItems, type Shipment } from "../drizzle/schema";
+import { shipments, shipmentLineItems, type Shipment, SHIPMENT_STATUSES } from "../drizzle/schema";
 import { logChange, type ReasonCategory } from "./changeLog";
 
 export interface CreateShipmentInput {
   shipmentRef: string;
+  vendorReference?: string;
+  initialStatus?: (typeof SHIPMENT_STATUSES)[number];
   lineItems: { poLineItemId: number; skuId: number; qty: number; weightShare: string; valueShare: string }[];
   createdBy: number;
 }
 
 export async function createShipment(input: CreateShipmentInput): Promise<Shipment> {
-  const [result] = await db.insert(shipments).values({ shipmentRef: input.shipmentRef, createdBy: input.createdBy });
+  const [result] = await db.insert(shipments).values({
+    shipmentRef: input.shipmentRef,
+    vendorReference: input.vendorReference,
+    status: input.initialStatus ?? "planned",
+    createdBy: input.createdBy,
+  });
   if (input.lineItems.length > 0) {
     await db.insert(shipmentLineItems).values(
       input.lineItems.map((li) => ({ ...li, shipmentId: result.insertId })),

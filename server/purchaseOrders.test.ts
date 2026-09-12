@@ -48,4 +48,25 @@ describe("purchase orders", () => {
     const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
     await expect(updatePurchaseOrderStatus(po.id, "closed", { changedBy: 1 })).rejects.toThrow(/invalid transition/);
   });
+
+  it("accepts an optional vendor reference and initial status for migration use", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO3-JELLO",
+      vendorId: vendor.id,
+      vendorReference: "LVM-INV-2026-0912",
+      initialStatus: "shipped",
+      lineItems: [],
+      createdBy: 1,
+    });
+    expect(po.vendorReference).toBe("LVM-INV-2026-0912");
+    expect(po.status).toBe("shipped");
+  });
+
+  it("defaults to draft status and a null vendor reference when neither is given", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO-2", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    expect(po.status).toBe("draft");
+    expect(po.vendorReference).toBeNull();
+  });
 });

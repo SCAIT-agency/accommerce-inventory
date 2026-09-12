@@ -109,6 +109,7 @@ export const purchaseOrders = mysqlTable("purchase_orders", {
   id: int("id").autoincrement().primaryKey(),
   poNumber: varchar("poNumber", { length: 64 }).notNull().unique(),
   vendorId: int("vendorId").notNull(),
+  vendorReference: varchar("vendorReference", { length: 128 }),
   status: mysqlEnum("status", PO_STATUSES).default("draft").notNull(),
   plannedReadyDate: timestamp("plannedReadyDate"),
   notes: text("notes"),
@@ -135,6 +136,7 @@ export const CUSTOMS_STATUSES = ["not_declared", "declared", "held", "cleared"] 
 export const shipments = mysqlTable("shipments", {
   id: int("id").autoincrement().primaryKey(),
   shipmentRef: varchar("shipmentRef", { length: 64 }).notNull().unique(),
+  vendorReference: varchar("vendorReference", { length: 128 }),
   status: mysqlEnum("status", SHIPMENT_STATUSES).default("planned").notNull(),
   customsStatus: mysqlEnum("customsStatus", CUSTOMS_STATUSES).default("not_declared").notNull(),
   customsDeclarationLink: varchar("customsDeclarationLink", { length: 512 }),

@@ -64,6 +64,13 @@
       "when": 1789227920000,
       "tag": "0008_clear_skus_and_add_not_null",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1789228190093,
+      "tag": "0009_clear_blue_blade",
+      "breakpoints": true
     }
   ]
 }
