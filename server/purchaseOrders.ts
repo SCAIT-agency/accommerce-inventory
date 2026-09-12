@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { db } from "./dbClient";
+import { db, type DbClient } from "./dbClient";
 import { purchaseOrders, poLineItems, PO_STATUSES, type PurchaseOrder } from "../drizzle/schema";
 import { logChange, type ReasonCategory } from "./changeLog";
 
@@ -22,8 +22,8 @@ export interface CreatePoInput {
   createdBy: number;
 }
 
-export async function createPurchaseOrder(input: CreatePoInput): Promise<PurchaseOrder> {
-  const [result] = await db.insert(purchaseOrders).values({
+export async function createPurchaseOrder(input: CreatePoInput, dbClient: DbClient = db): Promise<PurchaseOrder> {
+  const [result] = await dbClient.insert(purchaseOrders).values({
     poNumber: input.poNumber,
     vendorId: input.vendorId,
     vendorReference: input.vendorReference,
@@ -31,17 +31,17 @@ export async function createPurchaseOrder(input: CreatePoInput): Promise<Purchas
     createdBy: input.createdBy,
   });
   if (input.lineItems.length > 0) {
-    await db.insert(poLineItems).values(
+    await dbClient.insert(poLineItems).values(
       input.lineItems.map((li) => ({ ...li, poId: result.insertId })),
     );
   }
-  const [po] = await db.select().from(purchaseOrders).where(eq(purchaseOrders.id, result.insertId));
+  const [po] = await dbClient.select().from(purchaseOrders).where(eq(purchaseOrders.id, result.insertId));
   return po;
 }
 
-export async function getPurchaseOrderWithLineItems(id: number) {
-  const [po] = await db.select().from(purchaseOrders).where(eq(purchaseOrders.id, id));
-  const lineItems = await db.select().from(poLineItems).where(eq(poLineItems.poId, id));
+export async function getPurchaseOrderWithLineItems(id: number, dbClient: DbClient = db) {
+  const [po] = await dbClient.select().from(purchaseOrders).where(eq(purchaseOrders.id, id));
+  const lineItems = await dbClient.select().from(poLineItems).where(eq(poLineItems.poId, id));
   return { ...po, lineItems };
 }
 

@@ -1,10 +1,10 @@
 import { eq } from "drizzle-orm";
-import { db } from "./dbClient";
+import { db, type DbClient } from "./dbClient";
 import { skus, vendors, warehouses, appSettings, type InsertSku, type InsertVendor, type InsertWarehouse } from "../drizzle/schema";
 
-export async function createSku(data: Omit<InsertSku, "id">) {
-  const [result] = await db.insert(skus).values(data);
-  const [row] = await db.select().from(skus).where(eq(skus.id, result.insertId));
+export async function createSku(data: Omit<InsertSku, "id">, dbClient: DbClient = db) {
+  const [result] = await dbClient.insert(skus).values(data);
+  const [row] = await dbClient.select().from(skus).where(eq(skus.id, result.insertId));
   return row;
 }
 
@@ -19,9 +19,9 @@ export async function updateSku(id: number, data: Partial<InsertSku>) {
   return row;
 }
 
-export async function createVendor(data: Omit<InsertVendor, "id">) {
-  const [result] = await db.insert(vendors).values(data);
-  const [row] = await db.select().from(vendors).where(eq(vendors.id, result.insertId));
+export async function createVendor(data: Omit<InsertVendor, "id">, dbClient: DbClient = db) {
+  const [result] = await dbClient.insert(vendors).values(data);
+  const [row] = await dbClient.select().from(vendors).where(eq(vendors.id, result.insertId));
   return row;
 }
 
@@ -29,9 +29,9 @@ export async function listVendors() {
   return db.select().from(vendors);
 }
 
-export async function createWarehouse(data: Omit<InsertWarehouse, "id">) {
-  const [result] = await db.insert(warehouses).values(data);
-  const [row] = await db.select().from(warehouses).where(eq(warehouses.id, result.insertId));
+export async function createWarehouse(data: Omit<InsertWarehouse, "id">, dbClient: DbClient = db) {
+  const [result] = await dbClient.insert(warehouses).values(data);
+  const [row] = await dbClient.select().from(warehouses).where(eq(warehouses.id, result.insertId));
   return row;
 }
 

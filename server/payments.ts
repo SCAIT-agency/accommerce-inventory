@@ -1,5 +1,5 @@
 import { eq, isNull } from "drizzle-orm";
-import { db } from "./dbClient";
+import { db, type DbClient } from "./dbClient";
 import { payments, transactions, type Payment, type Transaction } from "../drizzle/schema";
 import { logChange, type ReasonCategory } from "./changeLog";
 
@@ -12,9 +12,9 @@ export interface CreateExpectedPaymentInput {
   currency: string;
 }
 
-export async function createExpectedPayment(input: CreateExpectedPaymentInput): Promise<Payment> {
-  const [result] = await db.insert(payments).values(input);
-  const [row] = await db.select().from(payments).where(eq(payments.id, result.insertId));
+export async function createExpectedPayment(input: CreateExpectedPaymentInput, dbClient: DbClient = db): Promise<Payment> {
+  const [result] = await dbClient.insert(payments).values(input);
+  const [row] = await dbClient.select().from(payments).where(eq(payments.id, result.insertId));
   return row;
 }
 
@@ -87,9 +87,9 @@ export interface RecordTransactionInput {
   description?: string;
 }
 
-export async function recordTransaction(input: RecordTransactionInput): Promise<Transaction> {
-  const [result] = await db.insert(transactions).values(input);
-  const [row] = await db.select().from(transactions).where(eq(transactions.id, result.insertId));
+export async function recordTransaction(input: RecordTransactionInput, dbClient: DbClient = db): Promise<Transaction> {
+  const [result] = await dbClient.insert(transactions).values(input);
+  const [row] = await dbClient.select().from(transactions).where(eq(transactions.id, result.insertId));
   return row;
 }
 

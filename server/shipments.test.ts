@@ -129,6 +129,21 @@ describe("shipments", () => {
     expect(shipment.status).toBe("delivered");
   });
 
+  it("accepts optional freight/duty cost fields at creation time for migration use", async () => {
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container2",
+      freightCost: "4200.00",
+      dutyCost: "980.00",
+      costCurrency: "EUR",
+      lineItems: [],
+      createdBy: 1,
+    });
+    const withItems = await getShipmentWithLineItems(shipment.id);
+    expect(withItems.freightCost).toBe("4200.00");
+    expect(withItems.dutyCost).toBe("980.00");
+    expect(withItems.costCurrency).toBe("EUR");
+  });
+
   it("rejects a shipment line item referencing a nonexistent PO line item", async () => {
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
     await expect(

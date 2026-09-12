@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { db } from "./dbClient";
+import { db, type DbClient } from "./dbClient";
 import { shipments, shipmentLineItems, type Shipment, SHIPMENT_STATUSES } from "../drizzle/schema";
 import { logChange, type ReasonCategory } from "./changeLog";
 
@@ -15,23 +15,32 @@ export interface CreateShipmentInput {
   shipmentRef: string;
   vendorReference?: string;
   initialStatus?: (typeof SHIPMENT_STATUSES)[number];
+  /** Migration-only initial values: no audit trail, since a creation-time value
+   * isn't a "change" with a prior value — mirrors vendorReference/initialStatus
+   * above. Use `recordShipmentCosts` for a live, audited change instead. */
+  freightCost?: string;
+  dutyCost?: string;
+  costCurrency?: string;
   lineItems: { poLineItemId: number; skuId: number; qty: number; weightShare: string; valueShare: string }[];
   createdBy: number;
 }
 
-export async function createShipment(input: CreateShipmentInput): Promise<Shipment> {
-  const [result] = await db.insert(shipments).values({
+export async function createShipment(input: CreateShipmentInput, dbClient: DbClient = db): Promise<Shipment> {
+  const [result] = await dbClient.insert(shipments).values({
     shipmentRef: input.shipmentRef,
     vendorReference: input.vendorReference,
     status: input.initialStatus ?? "planned",
+    freightCost: input.freightCost,
+    dutyCost: input.dutyCost,
+    costCurrency: input.costCurrency,
     createdBy: input.createdBy,
   });
   if (input.lineItems.length > 0) {
-    await db.insert(shipmentLineItems).values(
+    await dbClient.insert(shipmentLineItems).values(
       input.lineItems.map((li) => ({ ...li, shipmentId: result.insertId })),
     );
   }
-  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, result.insertId));
+  const [shipment] = await dbClient.select().from(shipments).where(eq(shipments.id, result.insertId));
   return shipment;
 }
 
