@@ -3,6 +3,15 @@ import { db } from "./dbClient";
 import { inventoryLedger, type InsertLedgerEvent } from "../drizzle/schema";
 
 export async function recordLedgerEvent(event: Omit<InsertLedgerEvent, "id">) {
+  if (event.qty < 0) {
+    const currentSoh = await getSoh(event.skuId, event.warehouseId, event.date);
+    if (currentSoh + event.qty < 0) {
+      throw new Error(
+        `recordLedgerEvent: this event would drive SOH negative for sku ${event.skuId}/warehouse ${event.warehouseId} ` +
+        `(current: ${currentSoh}, event qty: ${event.qty}) — refusing to write`,
+      );
+    }
+  }
   await db.insert(inventoryLedger).values(event);
 }
 

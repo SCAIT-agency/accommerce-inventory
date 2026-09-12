@@ -37,4 +37,27 @@ describe("inventory ledger", () => {
       { warehouseId: mutual.id, soh: 300 },
     ]);
   });
+
+  it("rejects a sale event that would drive SOH below zero", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 50, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await expect(
+      recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -80, unitCost: null, date: new Date("2026-09-02"), sourceRef: "shopify-2026-09-02" }),
+    ).rejects.toThrow(/negative/i);
+
+    // the rejected event must not have been written
+    expect(await getSoh(sku.id, ff.id)).toBe(50);
+  });
+
+  it("still allows a sale that exactly zeroes out SOH", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 50, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -50, unitCost: null, date: new Date("2026-09-02"), sourceRef: "shopify-2026-09-02" });
+
+    expect(await getSoh(sku.id, ff.id)).toBe(0);
+  });
 });

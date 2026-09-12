@@ -18,18 +18,20 @@ describe("sales plan/actuals", () => {
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
 
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 2000, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1" });
     await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: new Date("2026-09-09"), qty: 1162, source: "shopify_daily_pull" });
 
     const ledgerRows = await db.select().from(inventoryLedger);
-    expect(ledgerRows).toHaveLength(1);
-    expect(ledgerRows[0].qty).toBe(-1162);
-    expect(ledgerRows[0].eventType).toBe("sale");
+    expect(ledgerRows).toHaveLength(2);
+    expect(ledgerRows[1].qty).toBe(-1162);
+    expect(ledgerRows[1].eventType).toBe("sale");
   });
 
   it("computes coefficient-of-variation volatility from weekly actuals", async () => {
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
 
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 10000, unitCost: "0.42", date: new Date("2026-08-01"), sourceRef: "PO1" });
     for (const [date, qty] of [
       ["2026-08-04", 1000], ["2026-08-11", 1200], ["2026-08-18", 900], ["2026-08-25", 1100],
     ] as const) {
@@ -48,6 +50,7 @@ describe("sales plan/actuals", () => {
     // 6 weeks of history, but weeks=4 below. Oldest 4 (07-01..07-22) are all
     // 1000 -> CV=0. Newest 4 (07-15..08-05) are 1000,1000,3000,5000 -> CV≈0.6633.
     // An ascending-order-then-limit bug would return the oldest 4 and yield 0.
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 50000, unitCost: "0.42", date: new Date("2026-06-01"), sourceRef: "PO1" });
     for (const [date, qty] of [
       ["2026-07-01", 1000], ["2026-07-08", 1000], ["2026-07-15", 1000],
       ["2026-07-22", 1000], ["2026-07-29", 3000], ["2026-08-05", 5000],
@@ -63,6 +66,7 @@ describe("sales plan/actuals", () => {
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
 
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 2000, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1" });
     await db.insert(salesPlan).values({ skuId: sku.id, warehouseId: ff.id, periodDate: new Date("2026-09-09"), plannedQty: 1000 });
     await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: new Date("2026-09-09"), qty: 1162, source: "shopify_daily_pull" });
 
