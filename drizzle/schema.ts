@@ -1,4 +1,5 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index } from "drizzle-orm/mysql-core";
+import { sql, type SQL } from "drizzle-orm";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index, unique } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -17,22 +18,39 @@ export const appSettings = mysqlTable("app_settings", {
 });
 export type AppSetting = typeof appSettings.$inferSelect;
 
-export const skus = mysqlTable("skus", {
-  id: int("id").autoincrement().primaryKey(),
-  sku: varchar("sku", { length: 128 }),
-  ssku: varchar("ssku", { length: 128 }),
-  asin: varchar("asin", { length: 32 }),
-  ean: varchar("ean", { length: 32 }),
-  fnsku: varchar("fnsku", { length: 32 }),
-  name: varchar("name", { length: 256 }),
-  primaryIdentifierType: mysqlEnum("primaryIdentifierType", [
-    "sku", "ssku", "asin", "ean", "fnsku", "name",
-  ]).notNull(),
-  status: mysqlEnum("status", ["active", "inactive"]).default("active").notNull(),
-  isBundle: boolean("isBundle").default(false).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+export const skus = mysqlTable(
+  "skus",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    sku: varchar("sku", { length: 128 }),
+    ssku: varchar("ssku", { length: 128 }),
+    asin: varchar("asin", { length: 32 }),
+    ean: varchar("ean", { length: 32 }),
+    fnsku: varchar("fnsku", { length: 32 }),
+    name: varchar("name", { length: 256 }),
+    primaryIdentifierType: mysqlEnum("primaryIdentifierType", [
+      "sku", "ssku", "asin", "ean", "fnsku", "name",
+    ]).notNull(),
+    identifierValue: varchar("identifierValue", { length: 256 }).generatedAlwaysAs(
+      (): SQL => sql`case
+        when primaryIdentifierType = 'sku' then sku
+        when primaryIdentifierType = 'ssku' then ssku
+        when primaryIdentifierType = 'asin' then asin
+        when primaryIdentifierType = 'ean' then ean
+        when primaryIdentifierType = 'fnsku' then fnsku
+        else name
+      end`,
+      { mode: "stored" },
+    ),
+    status: mysqlEnum("status", ["active", "inactive"]).default("active").notNull(),
+    isBundle: boolean("isBundle").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    identifierUnique: unique("sku_identifier_unique").on(table.primaryIdentifierType, table.identifierValue),
+  }),
+);
 export type Sku = typeof skus.$inferSelect;
 export type InsertSku = typeof skus.$inferInsert;
 

@@ -34,4 +34,15 @@ describe("catalog repository", () => {
     const value = await getAppSetting("enabled_modules");
     expect(JSON.parse(value!)).toEqual(["stock", "money"]);
   });
+
+  it("rejects a second SKU with the same primary identifier value", async () => {
+    await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    await expect(createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" })).rejects.toThrow();
+  });
+
+  it("allows two SKUs with the same value in a non-primary identifier column", async () => {
+    await createSku({ sku: "JELLO-CAL-500", ean: "0000000000001", primaryIdentifierType: "sku" });
+    const second = await createSku({ sku: "JELLO-CAL-600", ean: "0000000000001", primaryIdentifierType: "sku" });
+    expect(second.id).toBeGreaterThan(0);
+  });
 });
