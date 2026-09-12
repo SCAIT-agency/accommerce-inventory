@@ -94,6 +94,12 @@ export async function recordTransaction(input: RecordTransactionInput): Promise<
 }
 
 export async function matchTransactionToPayment(transactionId: number, paymentId: number): Promise<void> {
+  const [tx] = await db.select().from(transactions).where(eq(transactions.id, transactionId));
+  if (tx.matchedPaymentId !== null && tx.matchedPaymentId !== paymentId) {
+    throw new Error(
+      `transaction ${transactionId} is already matched to payment ${tx.matchedPaymentId} — cannot re-match to payment ${paymentId}`,
+    );
+  }
   await db.update(transactions).set({ matchedPaymentId: paymentId }).where(eq(transactions.id, transactionId));
 }
 

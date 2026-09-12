@@ -114,4 +114,25 @@ describe("payments and transactions", () => {
     const tx = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test" });
     await expect(matchTransactionToPayment(tx.id, 999999)).rejects.toThrow();
   });
+
+  it("rejects matching an already-matched transaction to a different payment", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const payment1 = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date(), currency: "USD" });
+    const payment2 = await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "200.00", expectedDate: new Date(), currency: "USD" });
+    const tx = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test" });
+
+    await matchTransactionToPayment(tx.id, payment1.id);
+    await expect(matchTransactionToPayment(tx.id, payment2.id)).rejects.toThrow(/already matched/);
+  });
+
+  it("allows re-matching a transaction to the same payment it's already matched to (idempotent)", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const payment = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date(), currency: "USD" });
+    const tx = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test" });
+
+    await matchTransactionToPayment(tx.id, payment.id);
+    await expect(matchTransactionToPayment(tx.id, payment.id)).resolves.not.toThrow();
+  });
 });
