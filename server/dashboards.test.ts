@@ -18,6 +18,10 @@ beforeEach(async () => {
   await db.delete(warehouses);
 });
 
+function daysAgo(n: number): Date {
+  return new Date(Date.now() - n * 86400000);
+}
+
 describe("dashboards", () => {
   it("Home summary reports active SKU count and current SOH-based fire count", async () => {
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku", status: "active" });
@@ -62,20 +66,25 @@ describe("dashboards", () => {
     const noHistorySku = await createSku({ sku: "JELLO-NO-HISTORY", primaryIdentifierType: "sku", status: "active" });
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
 
-    // Receipt 300, sell 10/day for 10 days -> SOH remaining 200, avgDailySales 10 -> daysOfCover 20 (< 21 -> critical)
-    await recordLedgerEvent({ skuId: criticalSku.id, warehouseId: ff.id, eventType: "receipt", qty: 300, unitCost: "0.42", date: new Date("2026-08-01"), sourceRef: "PO-CRIT" });
-    for (let i = 0; i < 10; i++) {
-      await recordSalesActual({ skuId: criticalSku.id, warehouseId: ff.id, date: new Date(`2026-08-${10 + i}`), qty: 10, source: "manual" });
+    // Dates are relative to now because the averaging window is a rolling
+    // 30 calendar days — fixed calendar dates drift out of it over time.
+
+    // Receipt 500, sell 10/day across all 30 window days -> SOH 200,
+    // avgDailySales 300/30 = 10 -> daysOfCover 20 (< 21 -> critical)
+    await recordLedgerEvent({ skuId: criticalSku.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-CRIT" });
+    for (let i = 0; i < 30; i++) {
+      await recordSalesActual({ skuId: criticalSku.id, warehouseId: ff.id, date: daysAgo(i), qty: 10, source: "manual" });
     }
 
-    // Receipt 1000, sell 1/day for 10 days -> SOH remaining 990, avgDailySales 1 -> daysOfCover 990 (>= 90 -> overstock)
-    await recordLedgerEvent({ skuId: overstockSku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: new Date("2026-08-01"), sourceRef: "PO-OVER" });
-    for (let i = 0; i < 10; i++) {
-      await recordSalesActual({ skuId: overstockSku.id, warehouseId: ff.id, date: new Date(`2026-08-${10 + i}`), qty: 1, source: "manual" });
+    // Receipt 1000, sell 1/day across all 30 window days -> SOH 970,
+    // avgDailySales 30/30 = 1 -> daysOfCover 970 (>= 90 -> overstock)
+    await recordLedgerEvent({ skuId: overstockSku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-OVER" });
+    for (let i = 0; i < 30; i++) {
+      await recordSalesActual({ skuId: overstockSku.id, warehouseId: ff.id, date: daysAgo(i), qty: 1, source: "manual" });
     }
 
     // No sales history at all: SOH 500, no sales_actuals rows -> daysOfCover null, status unknown
-    await recordLedgerEvent({ skuId: noHistorySku.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "0.42", date: new Date("2026-08-01"), sourceRef: "PO-NOHIST" });
+    await recordLedgerEvent({ skuId: noHistorySku.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-NOHIST" });
 
     const stock = await getStockDashboard();
 
@@ -95,5 +104,42 @@ describe("dashboards", () => {
     expect(noHistoryWh?.avgDailySales).toBe(0);
     expect(noHistoryWh?.daysOfCover).toBeNull();
     expect(noHistoryWh?.status).toBe("unknown");
+  });
+
+  it("averages sales over the full calendar window, not only the days a SKU happened to sell", async () => {
+    const sku = await createSku({ sku: "JELLO-SPORADIC", primaryIdentifierType: "sku", status: "active" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    // 1000 received, then 10 units sold on only 3 of the last 30 calendar days.
+    // 30 units over a 30-day window is 1.0/day — NOT 30/3 = 10.0/day.
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-SPORADIC" });
+    for (const offset of [2, 9, 20]) {
+      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: daysAgo(offset), qty: 10, source: "manual" });
+    }
+
+    const stock = await getStockDashboard();
+    const wh = stock.find((r) => r.skuId === sku.id)?.byWarehouse.find((w) => w.warehouseId === ff.id);
+
+    expect(wh?.soh).toBe(970);
+    expect(wh?.avgDailySales).toBeCloseTo(1);
+    expect(wh?.daysOfCover).toBeCloseTo(970);
+    expect(wh?.status).toBe("overstock");
+  });
+
+  it("ignores sales history older than the averaging window instead of reporting a confident stale figure", async () => {
+    const sku = await createSku({ sku: "JELLO-DORMANT", primaryIdentifierType: "sku", status: "active" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "0.42", date: daysAgo(800), sourceRef: "PO-DORMANT" });
+    for (const offset of [400, 401, 402]) {
+      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: daysAgo(offset), qty: 20, source: "manual" });
+    }
+
+    const stock = await getStockDashboard();
+    const wh = stock.find((r) => r.skuId === sku.id)?.byWarehouse.find((w) => w.warehouseId === ff.id);
+
+    expect(wh?.avgDailySales).toBe(0);
+    expect(wh?.daysOfCover).toBeNull();
+    expect(wh?.status).toBe("unknown");
   });
 });

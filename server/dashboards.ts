@@ -1,4 +1,4 @@
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 import { db } from "./dbClient";
 import { salesActuals } from "../drizzle/schema";
 import { listSkus } from "./db";
@@ -27,16 +27,25 @@ const STOCK_STATUS_THRESHOLDS: { maxDays: number; label: "critical" | "low" | "o
   { maxDays: Infinity, label: "overstock" },
 ];
 
+// shopifyDailyPull only writes a sales_actuals row on days a SKU actually
+// sold, so the denominator must be calendar days in the window — not the
+// number of rows that came back, which would inflate the average (and deflate
+// days-of-cover) by the ratio of selling-days to calendar-days.
 async function getAverageDailySales(skuId: number, warehouseId: number, windowDays = 30): Promise<number> {
+  const windowStart = new Date(Date.now() - windowDays * 86400000);
   const rows = await db
     .select()
     .from(salesActuals)
-    .where(and(eq(salesActuals.skuId, skuId), eq(salesActuals.warehouseId, warehouseId)))
-    .orderBy(desc(salesActuals.date))
-    .limit(windowDays);
+    .where(
+      and(
+        eq(salesActuals.skuId, skuId),
+        eq(salesActuals.warehouseId, warehouseId),
+        gte(salesActuals.date, windowStart),
+      ),
+    );
   if (rows.length === 0) return 0;
   const totalQty = rows.reduce((sum, r) => sum + r.qty, 0);
-  return totalQty / rows.length;
+  return totalQty / windowDays;
 }
 
 function getStockStatus(daysOfCover: number | null): "critical" | "low" | "ok" | "overstock" | "unknown" {
