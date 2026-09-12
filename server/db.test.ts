@@ -45,4 +45,8 @@ describe("catalog repository", () => {
     const second = await createSku({ sku: "JELLO-CAL-600", ean: "0000000000001", primaryIdentifierType: "sku" });
     expect(second.id).toBeGreaterThan(0);
   });
+
+  it("rejects a SKU with no value in the primary identifier column", async () => {
+    await expect(createSku({ primaryIdentifierType: "sku" })).rejects.toThrow();
+  });
 });

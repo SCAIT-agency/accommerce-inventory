@@ -31,17 +31,19 @@ export const skus = mysqlTable(
     primaryIdentifierType: mysqlEnum("primaryIdentifierType", [
       "sku", "ssku", "asin", "ean", "fnsku", "name",
     ]).notNull(),
-    identifierValue: varchar("identifierValue", { length: 256 }).generatedAlwaysAs(
-      (): SQL => sql`case
-        when primaryIdentifierType = 'sku' then sku
-        when primaryIdentifierType = 'ssku' then ssku
-        when primaryIdentifierType = 'asin' then asin
-        when primaryIdentifierType = 'ean' then ean
-        when primaryIdentifierType = 'fnsku' then fnsku
-        else name
-      end`,
-      { mode: "stored" },
-    ),
+    identifierValue: varchar("identifierValue", { length: 256 })
+      .notNull()
+      .generatedAlwaysAs(
+        (): SQL => sql`case
+          when primaryIdentifierType = 'sku' then sku
+          when primaryIdentifierType = 'ssku' then ssku
+          when primaryIdentifierType = 'asin' then asin
+          when primaryIdentifierType = 'ean' then ean
+          when primaryIdentifierType = 'fnsku' then fnsku
+          else name
+        end`,
+        { mode: "stored" },
+      ),
     status: mysqlEnum("status", ["active", "inactive"]).default("active").notNull(),
     isBundle: boolean("isBundle").default(false).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
