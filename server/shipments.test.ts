@@ -1,18 +1,27 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog } from "../drizzle/schema";
+import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments } from "../drizzle/schema";
 import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts } from "./shipments";
 import { createSku, createVendor } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 
 beforeEach(async () => {
+  // Real FKs now tie these tables together, but each test file only cleans
+  // its own tables at the start of each test (no afterAll anywhere in this
+  // suite) — so a row left by another file's last test can otherwise block
+  // these deletes regardless of order. Disabling FK checks for the cleanup
+  // makes this file's reset order-independent again.
+  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
   await db.delete(changeLog);
+  await db.delete(payments);
   await db.delete(shipmentLineItems);
   await db.delete(shipments);
   await db.delete(poLineItems);
   await db.delete(purchaseOrders);
   await db.delete(skus);
   await db.delete(vendors);
+  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
 });
 
 async function seedPoWithLineItem() {
@@ -118,5 +127,16 @@ describe("shipments", () => {
     });
     expect(shipment.vendorReference).toBe("MBS-DEBIT-SZDN26080711");
     expect(shipment.status).toBe("delivered");
+  });
+
+  it("rejects a shipment line item referencing a nonexistent PO line item", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    await expect(
+      createShipment({
+        shipmentRef: "PO1-W4-Container2",
+        lineItems: [{ poLineItemId: 999999, skuId: sku.id, qty: 100, weightShare: "1.0", valueShare: "1.0" }],
+        createdBy: 1,
+      }),
+    ).rejects.toThrow();
   });
 });

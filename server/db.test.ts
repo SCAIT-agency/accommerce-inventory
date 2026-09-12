@@ -1,12 +1,20 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { skus, vendors, warehouses } from "../drizzle/schema";
 import { createSku, listSkus, createVendor, createWarehouse, setAppSetting, getAppSetting } from "./db";
 
 beforeEach(async () => {
+  // Real FKs now tie skus/warehouses to other tables, but each test file only
+  // cleans its own tables at the start of each test (no afterAll anywhere in
+  // this suite) — so a row left by another file's last test can otherwise
+  // block these deletes regardless of order. Disabling FK checks for the
+  // cleanup makes this file's reset order-independent again.
+  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
   await db.delete(skus);
   await db.delete(vendors);
   await db.delete(warehouses);
+  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
 });
 
 describe("catalog repository", () => {

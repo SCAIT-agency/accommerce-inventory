@@ -1,5 +1,6 @@
 // server/dashboards.test.ts
 import { describe, it, expect, beforeEach } from "vitest";
+import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { skus, warehouses, inventoryLedger, payments, transactions, purchaseOrders, vendors, salesActuals } from "../drizzle/schema";
 import { getHomeSummary, getStockDashboard } from "./dashboards";
@@ -10,6 +11,12 @@ import { recordLedgerEvent } from "./inventoryLedger";
 import { recordSalesActual } from "./salesPlan";
 
 beforeEach(async () => {
+  // Real FKs now tie these tables together, but each test file only cleans
+  // its own tables at the start of each test (no afterAll anywhere in this
+  // suite) — so a row left by another file's last test can otherwise block
+  // these deletes regardless of order. Disabling FK checks for the cleanup
+  // makes this file's reset order-independent again.
+  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
   await db.delete(transactions);
   await db.delete(payments);
   await db.delete(purchaseOrders);
@@ -18,6 +25,7 @@ beforeEach(async () => {
   await db.delete(inventoryLedger);
   await db.delete(skus);
   await db.delete(warehouses);
+  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
 });
 
 function daysAgo(n: number): Date {

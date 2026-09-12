@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { computeFifoCogs, getShipmentLandedUnitCost } from "./landedCost";
 import { db } from "./dbClient";
-import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors } from "../drizzle/schema";
+import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, inventoryLedger, payments } from "../drizzle/schema";
 import { createSku, createVendor } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { createShipment, recordShipmentCosts } from "./shipments";
@@ -38,12 +38,21 @@ describe("computeFifoCogs", () => {
 
 describe("getShipmentLandedUnitCost", () => {
   beforeEach(async () => {
+    // Real FKs now tie these tables together, but each test file only cleans
+    // its own tables at the start of each test (no afterAll anywhere in this
+    // suite) — so a row left by another file's last test can otherwise block
+    // these deletes regardless of order. Disabling FK checks for the cleanup
+    // makes this file's reset order-independent again.
+    await db.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
     await db.delete(shipmentLineItems);
     await db.delete(shipments);
     await db.delete(poLineItems);
     await db.delete(purchaseOrders);
+    await db.delete(payments);
+    await db.delete(inventoryLedger);
     await db.delete(skus);
     await db.delete(vendors);
+    await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
   });
 
   it("allocates shipment freight/duty to each SKU line by its weight/value share, on top of the PO unit price", async () => {

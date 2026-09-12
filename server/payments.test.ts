@@ -1,5 +1,6 @@
 // server/payments.test.ts
 import { describe, it, expect, beforeEach } from "vitest";
+import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { payments, transactions, purchaseOrders, vendors, changeLog } from "../drizzle/schema";
 import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions } from "./payments";
@@ -7,11 +8,18 @@ import { createVendor } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 
 beforeEach(async () => {
+  // Real FKs now tie these tables together, but each test file only cleans
+  // its own tables at the start of each test (no afterAll anywhere in this
+  // suite) — so a row left by another file's last test can otherwise block
+  // these deletes regardless of order. Disabling FK checks for the cleanup
+  // makes this file's reset order-independent again.
+  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
   await db.delete(changeLog);
   await db.delete(transactions);
   await db.delete(payments);
   await db.delete(purchaseOrders);
   await db.delete(vendors);
+  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
 });
 
 describe("payments and transactions", () => {
@@ -97,5 +105,10 @@ describe("payments and transactions", () => {
     await matchTransactionToPayment(tx.id, payment.id);
     unmatched = await listUnmatchedTransactions();
     expect(unmatched.map((t) => t.id)).not.toContain(tx.id);
+  });
+
+  it("rejects matching a transaction to a nonexistent payment", async () => {
+    const tx = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test" });
+    await expect(matchTransactionToPayment(tx.id, 999999)).rejects.toThrow();
   });
 });

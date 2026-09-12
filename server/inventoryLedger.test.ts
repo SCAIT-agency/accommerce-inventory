@@ -1,13 +1,21 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { inventoryLedger, skus, warehouses } from "../drizzle/schema";
 import { recordLedgerEvent, getSoh, getSohByWarehouse } from "./inventoryLedger";
 import { createSku, createWarehouse } from "./db";
 
 beforeEach(async () => {
+  // Real FKs now tie skus/warehouses to other tables, but each test file only
+  // cleans its own tables at the start of each test (no afterAll anywhere in
+  // this suite) — so a row left by another file's last test can otherwise
+  // block these deletes regardless of order. Disabling FK checks for the
+  // cleanup makes this file's reset order-independent again.
+  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
   await db.delete(inventoryLedger);
   await db.delete(skus);
   await db.delete(warehouses);
+  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
 });
 
 describe("inventory ledger", () => {
@@ -59,5 +67,19 @@ describe("inventory ledger", () => {
     await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -50, unitCost: null, date: new Date("2026-09-02"), sourceRef: "shopify-2026-09-02" });
 
     expect(await getSoh(sku.id, ff.id)).toBe(0);
+  });
+
+  it("rejects a ledger event referencing a nonexistent SKU", async () => {
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await expect(
+      recordLedgerEvent({ skuId: 999999, warehouseId: ff.id, eventType: "receipt", qty: 10, unitCost: "0.42", date: new Date(), sourceRef: "PO1" }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects a ledger event referencing a nonexistent warehouse", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    await expect(
+      recordLedgerEvent({ skuId: sku.id, warehouseId: 999999, eventType: "receipt", qty: 10, unitCost: "0.42", date: new Date(), sourceRef: "PO1" }),
+    ).rejects.toThrow();
   });
 });

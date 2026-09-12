@@ -121,8 +121,8 @@ export type PurchaseOrder = typeof purchaseOrders.$inferSelect;
 
 export const poLineItems = mysqlTable("po_line_items", {
   id: int("id").autoincrement().primaryKey(),
-  poId: int("poId").notNull(),
-  skuId: int("skuId").notNull(),
+  poId: int("poId").notNull().references(() => purchaseOrders.id),
+  skuId: int("skuId").notNull().references(() => skus.id),
   qty: int("qty").notNull(),
   unitPrice: varchar("unitPrice", { length: 32 }).notNull(),
   currency: varchar("currency", { length: 8 }).notNull(),
@@ -158,9 +158,9 @@ export type Shipment = typeof shipments.$inferSelect;
 
 export const shipmentLineItems = mysqlTable("shipment_line_items", {
   id: int("id").autoincrement().primaryKey(),
-  shipmentId: int("shipmentId").notNull(),
-  poLineItemId: int("poLineItemId").notNull(),
-  skuId: int("skuId").notNull(),
+  shipmentId: int("shipmentId").notNull().references(() => shipments.id),
+  poLineItemId: int("poLineItemId").notNull().references(() => poLineItems.id),
+  skuId: int("skuId").notNull().references(() => skus.id),
   qty: int("qty").notNull(),
   weightShare: varchar("weightShare", { length: 16 }).notNull(),
   valueShare: varchar("valueShare", { length: 16 }).notNull(),
@@ -169,8 +169,8 @@ export type ShipmentLineItem = typeof shipmentLineItems.$inferSelect;
 
 export const payments = mysqlTable("payments", {
   id: int("id").autoincrement().primaryKey(),
-  poId: int("poId"),
-  shipmentId: int("shipmentId"),
+  poId: int("poId").references(() => purchaseOrders.id),
+  shipmentId: int("shipmentId").references(() => shipments.id),
   sequenceNo: int("sequenceNo").notNull(),
   expectedAmount: varchar("expectedAmount", { length: 32 }).notNull(),
   expectedDate: timestamp("expectedDate").notNull(),
@@ -192,7 +192,7 @@ export const transactions = mysqlTable("transactions", {
   fxRate: varchar("fxRate", { length: 16 }).notNull(),
   counterparty: varchar("counterparty", { length: 256 }),
   description: text("description"),
-  matchedPaymentId: int("matchedPaymentId"),
+  matchedPaymentId: int("matchedPaymentId").references(() => payments.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type Transaction = typeof transactions.$inferSelect;
@@ -203,8 +203,8 @@ export const inventoryLedger = mysqlTable(
   "inventory_ledger",
   {
     id: int("id").autoincrement().primaryKey(),
-    skuId: int("skuId").notNull(),
-    warehouseId: int("warehouseId").notNull(),
+    skuId: int("skuId").notNull().references(() => skus.id),
+    warehouseId: int("warehouseId").notNull().references(() => warehouses.id),
     eventType: mysqlEnum("eventType", LEDGER_EVENT_TYPES).notNull(),
     qty: int("qty").notNull(),
     unitCost: varchar("unitCost", { length: 32 }),

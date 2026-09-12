@@ -1,0 +1,10 @@
+ALTER TABLE `inventory_ledger` ADD CONSTRAINT `inventory_ledger_skuId_skus_id_fk` FOREIGN KEY (`skuId`) REFERENCES `skus`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `inventory_ledger` ADD CONSTRAINT `inventory_ledger_warehouseId_warehouses_id_fk` FOREIGN KEY (`warehouseId`) REFERENCES `warehouses`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `payments` ADD CONSTRAINT `payments_poId_purchase_orders_id_fk` FOREIGN KEY (`poId`) REFERENCES `purchase_orders`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `payments` ADD CONSTRAINT `payments_shipmentId_shipments_id_fk` FOREIGN KEY (`shipmentId`) REFERENCES `shipments`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `po_line_items` ADD CONSTRAINT `po_line_items_poId_purchase_orders_id_fk` FOREIGN KEY (`poId`) REFERENCES `purchase_orders`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `po_line_items` ADD CONSTRAINT `po_line_items_skuId_skus_id_fk` FOREIGN KEY (`skuId`) REFERENCES `skus`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `shipment_line_items` ADD CONSTRAINT `shipment_line_items_shipmentId_shipments_id_fk` FOREIGN KEY (`shipmentId`) REFERENCES `shipments`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `shipment_line_items` ADD CONSTRAINT `shipment_line_items_poLineItemId_po_line_items_id_fk` FOREIGN KEY (`poLineItemId`) REFERENCES `po_line_items`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `shipment_line_items` ADD CONSTRAINT `shipment_line_items_skuId_skus_id_fk` FOREIGN KEY (`skuId`) REFERENCES `skus`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `transactions` ADD CONSTRAINT `transactions_matchedPaymentId_payments_id_fk` FOREIGN KEY (`matchedPaymentId`) REFERENCES `payments`(`id`) ON DELETE no action ON UPDATE no action;
