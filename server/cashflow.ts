@@ -14,12 +14,28 @@ export async function getCashflowForecast(from: Date, to: Date): Promise<Cashflo
   const byDate = new Map<string, CashflowDay>();
 
   // Planned: unpaid payments whose EXPECTED date falls in the window.
+  // expectedAmount is denominated in the payment's own `currency`, and no
+  // fx_rate exists yet (that is only captured at payment time), so summing
+  // across currencies would produce a materially wrong headline figure.
+  // Multi-currency planned aggregation is an unresolved design question —
+  // fail loudly rather than blend. (actualOutflow below is exempt: it sums
+  // baseCurrencyAmount, single-currency by construction.)
+  const plannedCurrencies = new Map<string, Set<string>>();
   const plannedRows = await db
     .select()
     .from(payments)
     .where(and(eq(payments.paid, false), between(payments.expectedDate, from, to)));
   for (const row of plannedRows) {
     const dateKey = row.expectedDate.toISOString().slice(0, 10);
+    const currencies = plannedCurrencies.get(dateKey) ?? new Set<string>();
+    currencies.add(row.currency);
+    if (currencies.size > 1) {
+      throw new Error(
+        `getCashflowForecast: cannot aggregate mixed currencies (${[...currencies].join(", ")}) for ${dateKey} — multi-currency planned-cashflow aggregation is an unresolved design question, see spec Open Questions`,
+      );
+    }
+    plannedCurrencies.set(dateKey, currencies);
+
     const entry = byDate.get(dateKey) ?? { date: dateKey, plannedOutflow: 0, actualOutflow: 0 };
     entry.plannedOutflow += parseFloat(row.expectedAmount);
     byDate.set(dateKey, entry);

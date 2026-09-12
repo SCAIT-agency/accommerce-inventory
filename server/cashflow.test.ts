@@ -60,4 +60,29 @@ describe("cashflow forecast", () => {
     const august = forecast.find((f) => f.date === "2026-08-15");
     expect(august).toBeUndefined();
   });
+
+  it("sums multiple same-currency planned payments landing on the same day", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+
+    await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30746.70", expectedDate: new Date("2026-09-09"), currency: "USD" });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "1253.30", expectedDate: new Date("2026-09-09"), currency: "USD" });
+
+    const forecast = await getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"));
+
+    const day9 = forecast.find((f) => f.date === "2026-09-09");
+    expect(day9?.plannedOutflow).toBeCloseTo(32000);
+  });
+
+  it("throws instead of silently blending currencies when one day's planned payments span more than one currency", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+
+    await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30000.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });
+
+    await expect(getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"))).rejects.toThrow(
+      /cannot aggregate mixed currencies \(USD, EUR\) for 2026-09-09/,
+    );
+  });
 });
