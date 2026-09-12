@@ -3,7 +3,8 @@ import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { listSkus, createSku, listVendors, createVendor, listWarehouses, createWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
-import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, getShipmentWithLineItems, listShipments } from "./shipments";
+import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, getShipmentWithLineItems, listShipments, recordShipmentCosts } from "./shipments";
+import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions } from "./payments";
 import { REASON_CATEGORIES, PO_STATUSES } from "../drizzle/schema";
 import { listChangeLog } from "./changeLog";
 
@@ -68,7 +69,68 @@ export const appRouter = router({
     markDeparted: editorProcedure
       .input(z.object({ id: z.number(), actualDate: z.date() }))
       .mutation(({ input, ctx }) => markShipmentDeparted(input.id, input.actualDate, { changedBy: ctx.user.id })),
+    recordCosts: editorProcedure
+      .input(z.object({
+        id: z.number(),
+        freightCost: z.string(),
+        dutyCost: z.string(),
+        costCurrency: z.string(),
+        reasonCategory: reasonCategorySchema,
+        reasonNote: z.string().optional(),
+      }))
+      .mutation(({ input, ctx }) =>
+        recordShipmentCosts(
+          input.id,
+          { freightCost: input.freightCost, dutyCost: input.dutyCost, costCurrency: input.costCurrency },
+          { reasonCategory: input.reasonCategory, reasonNote: input.reasonNote, changedBy: ctx.user.id },
+        ),
+      ),
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("shipment", input)),
+  }),
+  payments: router({
+    listUnmatchedTransactions: protectedProcedure.query(() => listUnmatchedTransactions()),
+    createExpectedPayment: editorProcedure
+      .input(z.object({
+        poId: z.number().optional(),
+        shipmentId: z.number().optional(),
+        sequenceNo: z.number(),
+        expectedAmount: z.string(),
+        expectedDate: z.date(),
+        currency: z.string(),
+      }))
+      .mutation(({ input }) => createExpectedPayment(input)),
+    markPaid: editorProcedure
+      .input(z.object({
+        id: z.number(),
+        amount: z.string(),
+        fxRate: z.string(),
+        paidDate: z.date(),
+        reasonCategory: reasonCategorySchema,
+        reasonNote: z.string().optional(),
+      }))
+      .mutation(({ input, ctx }) =>
+        markPaymentPaid(input.id, {
+          amount: input.amount,
+          fxRate: input.fxRate,
+          paidDate: input.paidDate,
+          reasonCategory: input.reasonCategory,
+          reasonNote: input.reasonNote,
+          changedBy: ctx.user.id,
+        }),
+      ),
+    recordTransaction: editorProcedure
+      .input(z.object({
+        date: z.date(),
+        amount: z.string(),
+        currency: z.string(),
+        fxRate: z.string(),
+        counterparty: z.string().optional(),
+        description: z.string().optional(),
+      }))
+      .mutation(({ input }) => recordTransaction(input)),
+    matchTransaction: editorProcedure
+      .input(z.object({ transactionId: z.number(), paymentId: z.number() }))
+      .mutation(({ input }) => matchTransactionToPayment(input.transactionId, input.paymentId)),
   }),
 });
 

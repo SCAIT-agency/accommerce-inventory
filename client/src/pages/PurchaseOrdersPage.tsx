@@ -1,4 +1,6 @@
 import { useState } from "react";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
 
 const REASON_CATEGORIES = [
@@ -7,6 +9,9 @@ const REASON_CATEGORIES = [
 ] as const;
 
 type ReasonCategory = (typeof REASON_CATEGORIES)[number];
+
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+type Payment = RouterOutputs["payments"]["createExpectedPayment"];
 
 interface RowState {
   reasonCategory: ReasonCategory;
@@ -21,6 +26,174 @@ function toDateInputValue(date: Date | null | undefined): string {
 
 function defaultRowState(plannedReadyDate: Date | null | undefined): RowState {
   return { reasonCategory: "production_delay", reasonNote: "", newDate: toDateInputValue(plannedReadyDate) };
+}
+
+interface NewPaymentFormState {
+  sequenceNo: string;
+  expectedAmount: string;
+  expectedDate: string;
+  currency: string;
+}
+
+function defaultNewPaymentForm(): NewPaymentFormState {
+  return { sequenceNo: "1", expectedAmount: "", expectedDate: toDateInputValue(null), currency: "USD" };
+}
+
+interface MarkPaidFormState {
+  amount: string;
+  fxRate: string;
+  paidDate: string;
+  reasonCategory: ReasonCategory;
+  reasonNote: string;
+}
+
+function defaultMarkPaidForm(expectedAmount: string): MarkPaidFormState {
+  return {
+    amount: expectedAmount,
+    fxRate: "1",
+    paidDate: toDateInputValue(null),
+    reasonCategory: "payment_timing",
+    reasonNote: "",
+  };
+}
+
+function MarkPaidRow({ payment, onPaid }: { payment: Payment; onPaid: (updated: Payment) => void }) {
+  const markPaid = trpc.payments.markPaid.useMutation({ onSuccess: onPaid });
+  const [form, setForm] = useState<MarkPaidFormState>(() => defaultMarkPaidForm(payment.expectedAmount));
+  const noteRequired = form.reasonCategory === "other";
+  const canSave = form.amount.trim().length > 0 && form.fxRate.trim().length > 0
+    && (!noteRequired || form.reasonNote.trim().length > 0);
+
+  if (payment.paid) {
+    return (
+      <li>
+        Payment #{payment.sequenceNo}: paid {payment.paidAmount} {payment.currency} on {payment.paidDate?.toString()}
+      </li>
+    );
+  }
+
+  return (
+    <li>
+      Payment #{payment.sequenceNo}: expected {payment.expectedAmount} {payment.currency} on {payment.expectedDate.toString()}
+      {" — "}
+      <input
+        placeholder="amount"
+        value={form.amount}
+        onChange={(e) => setForm((prev) => ({ ...prev, amount: e.target.value }))}
+      />
+      <input
+        placeholder="fx rate"
+        value={form.fxRate}
+        onChange={(e) => setForm((prev) => ({ ...prev, fxRate: e.target.value }))}
+      />
+      <input
+        type="date"
+        value={form.paidDate}
+        onChange={(e) => setForm((prev) => ({ ...prev, paidDate: e.target.value }))}
+      />
+      <select
+        value={form.reasonCategory}
+        onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
+      >
+        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {noteRequired && (
+        <input
+          placeholder="required note"
+          value={form.reasonNote}
+          onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
+        />
+      )}
+      <button
+        disabled={!canSave || markPaid.isPending}
+        onClick={() =>
+          markPaid.mutate({
+            id: payment.id,
+            amount: form.amount,
+            fxRate: form.fxRate,
+            paidDate: new Date(form.paidDate),
+            reasonCategory: form.reasonCategory,
+            reasonNote: noteRequired ? form.reasonNote : undefined,
+          })
+        }
+      >
+        Mark paid
+      </button>
+      {markPaid.error && <div>Failed to save: {markPaid.error.message}</div>}
+    </li>
+  );
+}
+
+function PoPaymentsSection({ poId }: { poId: number }) {
+  const utils = trpc.useUtils();
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [form, setForm] = useState<NewPaymentFormState>(() => defaultNewPaymentForm());
+  const createPayment = trpc.payments.createExpectedPayment.useMutation({
+    onSuccess: (payment) => {
+      setPayments((prev) => [...prev, payment]);
+      setForm((prev) => ({ ...defaultNewPaymentForm(), sequenceNo: String(Number(prev.sequenceNo) + 1) }));
+    },
+  });
+  const canCreate = form.expectedAmount.trim().length > 0 && form.currency.trim().length > 0;
+
+  const refreshAfterPaid = (updated: Payment) => {
+    setPayments((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    utils.dashboards.money.invalidate();
+  };
+
+  return (
+    <div>
+      <strong>Payments</strong>
+      {payments.length > 0 && (
+        <ul>
+          {payments.map((payment) => (
+            <MarkPaidRow
+              key={payment.id}
+              payment={payment}
+              onPaid={refreshAfterPaid}
+            />
+          ))}
+        </ul>
+      )}
+      <div>
+        <input
+          placeholder="sequence no"
+          value={form.sequenceNo}
+          onChange={(e) => setForm((prev) => ({ ...prev, sequenceNo: e.target.value }))}
+        />
+        <input
+          placeholder="expected amount"
+          value={form.expectedAmount}
+          onChange={(e) => setForm((prev) => ({ ...prev, expectedAmount: e.target.value }))}
+        />
+        <input
+          type="date"
+          value={form.expectedDate}
+          onChange={(e) => setForm((prev) => ({ ...prev, expectedDate: e.target.value }))}
+        />
+        <input
+          placeholder="currency"
+          value={form.currency}
+          onChange={(e) => setForm((prev) => ({ ...prev, currency: e.target.value }))}
+        />
+        <button
+          disabled={!canCreate || createPayment.isPending}
+          onClick={() =>
+            createPayment.mutate({
+              poId,
+              sequenceNo: Number(form.sequenceNo) || 1,
+              expectedAmount: form.expectedAmount,
+              expectedDate: new Date(form.expectedDate),
+              currency: form.currency,
+            })
+          }
+        >
+          Add expected payment
+        </button>
+        {createPayment.error && <div>Failed to save: {createPayment.error.message}</div>}
+      </div>
+    </div>
+  );
 }
 
 export function PurchaseOrdersPage() {
@@ -38,7 +211,7 @@ export function PurchaseOrdersPage() {
     <div>
       <h1>Purchase Orders</h1>
       <table>
-        <thead><tr><th>PO</th><th>Status</th><th>Planned Ready</th><th>Change date</th></tr></thead>
+        <thead><tr><th>PO</th><th>Status</th><th>Planned Ready</th><th>Change date</th><th>Payments</th></tr></thead>
         <tbody>
           {pos.map((po) => {
             const row = rowState[po.id] ?? defaultRowState(po.plannedReadyDate);
@@ -83,6 +256,9 @@ export function PurchaseOrdersPage() {
                   >
                     Save
                   </button>
+                </td>
+                <td>
+                  <PoPaymentsSection poId={po.id} />
                 </td>
               </tr>
             );
