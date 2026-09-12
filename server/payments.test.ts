@@ -135,4 +135,12 @@ describe("payments and transactions", () => {
     await matchTransactionToPayment(tx.id, payment.id);
     await expect(matchTransactionToPayment(tx.id, payment.id)).resolves.not.toThrow();
   });
+
+  it("rejects matching a nonexistent transaction with a clear error message", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const payment = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date(), currency: "USD" });
+
+    await expect(matchTransactionToPayment(999999, payment.id)).rejects.toThrow(/no transaction found/);
+  });
 });
