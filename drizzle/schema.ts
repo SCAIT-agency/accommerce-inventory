@@ -208,7 +208,12 @@ export const inventoryLedger = mysqlTable(
     eventType: mysqlEnum("eventType", LEDGER_EVENT_TYPES).notNull(),
     qty: int("qty").notNull(),
     unitCost: varchar("unitCost", { length: 32 }),
-    date: timestamp("date").notNull(),
+    // fsp: 3 (millisecond precision) matches what JS Date actually carries.
+    // Default second-level precision rounds (not truncates) on insert, which
+    // can flip the ordering of two events timestamped milliseconds apart
+    // within the same wall-clock second relative to an unrounded query
+    // parameter in getSoh's lte() comparison — silently miscomputing SOH.
+    date: timestamp("date", { fsp: 3 }).notNull(),
     sourceRef: varchar("sourceRef", { length: 128 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
