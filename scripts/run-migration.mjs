@@ -1,0 +1,33 @@
+#!/usr/bin/env tsx
+// scripts/run-migration.mjs
+//
+// CLI entrypoint for the migration. Reads a JSON export file and calls runMigration,
+// exiting with 0 on success (quarantined rows logged) or 1 on reconciliation failure
+// (full rollback, no partial data left behind).
+//
+// Usage:
+//   pnpm exec tsx scripts/run-migration.mjs <path-to-exported-sheet-data.json>
+
+import { readFile } from "node:fs/promises";
+import { runMigration } from "./reconcile-migration.ts";
+
+const inputPath = process.argv[2];
+if (!inputPath) {
+  console.error("Usage: pnpm exec tsx scripts/run-migration.mjs <path-to-exported-sheet-data.json>");
+  process.exit(1);
+}
+
+try {
+  const input = JSON.parse(await readFile(inputPath, "utf-8"));
+  const result = await runMigration(input);
+
+  const totalQuarantined = Object.values(result.quarantined).reduce((sum, arr) => sum + arr.length, 0);
+  console.log(`Migration complete. Quarantined rows: ${totalQuarantined}`);
+  if (totalQuarantined > 0) {
+    console.log(JSON.stringify(result.quarantined, null, 2));
+  }
+  process.exit(0);
+} catch (err) {
+  console.error("Migration failed and rolled back:", err.message);
+  process.exit(1);
+}

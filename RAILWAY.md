@@ -54,6 +54,37 @@ design spec's single-tenant-per-client model).
    `../drizzle/schema`, etc.) don't resolve under Node's native ESM loader,
    even with `--experimental-strip-types`.
 
+## One-time migration (when a real Control Tower export is ready)
+
+```bash
+pnpm exec tsx scripts/run-migration.mjs <path-to-exported-sheet-data.json>
+```
+
+Reads a JSON export file (with `ledgerRows`, `poRows`, `shipmentRows`, `paymentRows`, `transactionRows`, `sheetTotals`, and optional `landedCostTotals`) and runs the migration inside a single transaction. Exits 0 with a quarantine summary on success. Exits 1 and rolls back entirely if the reconciliation gate fails (no partial data left behind). Never run against production without first running the parallel-run check below for the agreed comparison period.
+
+JSON shape:
+```json
+{
+  "ledgerRows": [],
+  "poRows": [],
+  "shipmentRows": [],
+  "paymentRows": [],
+  "transactionRows": [],
+  "sheetTotals": [
+    { "sku": "...", "warehouseCode": "...", "sohFromSheet": 100 }
+  ],
+  "landedCostTotals": []
+}
+```
+
+## Daily parallel-run check (during the comparison period, before cutover)
+
+```bash
+pnpm exec tsx scripts/run-parallel-check.mjs <path-to-todays-sheet-snapshot.json>
+```
+
+Reads today's sheet snapshot (array of `{ sku, warehouseCode, sohFromSheet }`) and verifies that Control Tower's current balances match exactly for every SKU/warehouse pair. Exits 0 (safeToCutOver: true) only when all balances match. Exits 1 if any mismatch is found, printing the detailed report. Control Tower stays the live source of truth until this has passed for the agreed comparison period.
+
 ## Ongoing
 
 - Deploys happen automatically on push to `main` — this is Accommerce's own
