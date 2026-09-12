@@ -27,9 +27,12 @@ design spec's single-tenant-per-client model).
    auto-deploy on push to `main`. Build command: `pnpm build`. Start command: `pnpm start`.
 6. Run `pnpm db:push` once against the production `DATABASE_URL` to create the schema.
 7. Add a Railway Cron Job (Railway → New → Cron Job) running nightly, command:
-   `node --experimental-strip-types scripts/run-nightly-export.mjs` (a thin wrapper
-   around `runNightlyExport` — see `server/nightlyExport.ts`), writing to a
-   Railway persistent volume mounted at `/data/exports`.
+   `pnpm exec tsx scripts/run-nightly-export.mjs` (a thin wrapper around
+   `runNightlyExport` — see `server/nightlyExport.ts`), writing to a Railway
+   persistent volume mounted at `/data/exports`. Use `tsx`, not plain `node`
+   — this repo's extensionless relative imports (`./dbClient`,
+   `../drizzle/schema`, etc.) don't resolve under Node's native ESM loader,
+   even with `--experimental-strip-types`.
 
 ## Ongoing
 

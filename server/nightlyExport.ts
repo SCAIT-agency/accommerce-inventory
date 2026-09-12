@@ -23,7 +23,9 @@ export function generateCsvExport(rows: Record<string, unknown>[]): string {
   const headers = Object.keys(rows[0]);
   const escape = (value: unknown): string => {
     const str = value === null || value === undefined ? "" : String(value);
-    return str.includes(",") || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
+    return str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")
+      ? `"${str.replace(/"/g, '""')}"`
+      : str;
   };
   const lines = [headers.join(",")];
   for (const row of rows) {

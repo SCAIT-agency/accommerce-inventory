@@ -22,4 +22,9 @@ describe("generateCsvExport", () => {
   it("returns just a header-less empty string for an empty table", () => {
     expect(generateCsvExport([])).toBe("");
   });
+
+  it("quotes a field that contains an embedded newline", () => {
+    const csv = generateCsvExport([{ id: 1, notes: "line one\nline two" }]);
+    expect(csv).toBe('id,notes\n1,"line one\nline two"');
+  });
 });
