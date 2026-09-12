@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { sql } from "drizzle-orm";
+import { sql, eq } from "drizzle-orm";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments } from "../drizzle/schema";
 import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus } from "./shipments";
@@ -160,5 +160,18 @@ describe("shipments", () => {
   it("markShipmentDeparted still rejects a shipment with no planned depart date, via the same transition table", async () => {
     const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
     await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: 1 })).rejects.toThrow(/planned depart date/);
+  });
+
+  it("markShipmentDeparted rejects an invalid status transition via VALID_SHIPMENT_TRANSITIONS", async () => {
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container2",
+      initialStatus: "in_transit",
+      lineItems: [],
+      createdBy: 1,
+    });
+    // Set plannedDepartDate so the pre-existing guard passes, but status is in_transit where departed is not allowed
+    await db.update(shipments).set({ plannedDepartDate: new Date() }).where(eq(shipments.id, shipment.id));
+
+    await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: 1 })).rejects.toThrow(/invalid transition/);
   });
 });
