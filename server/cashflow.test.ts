@@ -82,7 +82,34 @@ describe("cashflow forecast", () => {
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });
 
     await expect(getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"))).rejects.toThrow(
-      /cannot aggregate mixed currencies \(USD, EUR\) for 2026-09-09/,
+      /cannot aggregate mixed currencies \(USD, EUR\) across 2026-09-01 to 2026-09-30/,
+    );
+  });
+
+  it("sums same-currency planned payments spread across multiple different days in the range", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+
+    await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30746.70", expectedDate: new Date("2026-09-09"), currency: "USD" });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "1253.30", expectedDate: new Date("2026-09-15"), currency: "USD" });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 3, expectedAmount: "5000.00", expectedDate: new Date("2026-09-20"), currency: "USD" });
+
+    const forecast = await getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"));
+
+    expect(forecast.find((f) => f.date === "2026-09-09")?.plannedOutflow).toBeCloseTo(30746.7);
+    expect(forecast.find((f) => f.date === "2026-09-15")?.plannedOutflow).toBeCloseTo(1253.3);
+    expect(forecast.find((f) => f.date === "2026-09-20")?.plannedOutflow).toBeCloseTo(5000);
+  });
+
+  it("throws instead of silently blending currencies when unpaid payments on DIFFERENT days within the same range span more than one currency", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+
+    await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30000.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: new Date("2026-09-15"), currency: "EUR" });
+
+    await expect(getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"))).rejects.toThrow(
+      /cannot aggregate mixed currencies \(USD, EUR\) across 2026-09-01 to 2026-09-30/,
     );
   });
 });

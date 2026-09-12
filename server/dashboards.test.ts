@@ -3,7 +3,9 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { db } from "./dbClient";
 import { skus, warehouses, inventoryLedger, payments, transactions, purchaseOrders, vendors, salesActuals } from "../drizzle/schema";
 import { getHomeSummary, getStockDashboard } from "./dashboards";
-import { createSku, createWarehouse } from "./db";
+import { createSku, createWarehouse, createVendor } from "./db";
+import { createPurchaseOrder } from "./purchaseOrders";
+import { createExpectedPayment } from "./payments";
 import { recordLedgerEvent } from "./inventoryLedger";
 import { recordSalesActual } from "./salesPlan";
 
@@ -22,6 +24,10 @@ function daysAgo(n: number): Date {
   return new Date(Date.now() - n * 86400000);
 }
 
+function daysFromNow(n: number): Date {
+  return new Date(Date.now() + n * 86400000);
+}
+
 describe("dashboards", () => {
   it("Home summary reports active SKU count and current SOH-based fire count", async () => {
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku", status: "active" });
@@ -32,6 +38,16 @@ describe("dashboards", () => {
     expect(summary.activeSkuCount).toBe(1);
     expect(summary).toHaveProperty("stockoutRiskSkuCount");
     expect(summary).toHaveProperty("nearTermCashNeeds");
+  });
+
+  it("throws instead of silently returning a blended nearTermCashNeeds when unpaid payments on different days within the 14-day window span more than one currency", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+
+    await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30000.00", expectedDate: daysFromNow(2), currency: "USD" });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: daysFromNow(9), currency: "EUR" });
+
+    await expect(getHomeSummary()).rejects.toThrow(/cannot aggregate mixed currencies \(USD, EUR\)/);
   });
 
   it("Stock dashboard reports SOH per warehouse, never blended", async () => {
