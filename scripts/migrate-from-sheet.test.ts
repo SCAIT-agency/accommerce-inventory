@@ -102,6 +102,15 @@ describe("transformPurchaseOrders", () => {
     expect(result.purchaseOrders).toEqual([]);
     expect(result.skipped).toEqual([{ rowIndex: 0, reason: expect.stringContaining("status") }]);
   });
+
+  it("quarantines a row with a garbage-suffixed qty instead of silently truncating it", () => {
+    const rows = [
+      { po_number: "PO3-JELLO", vendor_name: "Lvmengkang", vendor_reference: "", status: "draft", sku: "JELLO-CAL-500", qty: "200000xyz", unit_price: "0.15", currency: "USD" },
+    ];
+    const result = transformPurchaseOrders(rows);
+    expect(result.purchaseOrders).toEqual([]);
+    expect(result.skipped).toEqual([{ rowIndex: 0, reason: expect.stringContaining("qty") }]);
+  });
 });
 
 describe("transformShipments", () => {
@@ -144,6 +153,13 @@ describe("transformPayments", () => {
     const result = transformPayments(rows);
     expect(result.payments).toEqual([]);
     expect(result.skipped[0].reason).toContain("expected_amount");
+  });
+
+  it("quarantines a row with a non-numeric sequence_no instead of writing NaN", () => {
+    const rows = [{ po_number: "PO3-JELLO", sequence_no: "abc", expected_amount: "30746.70", expected_date: "2026-09-09", currency: "USD" }];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped[0].reason).toContain("sequence_no");
   });
 });
 

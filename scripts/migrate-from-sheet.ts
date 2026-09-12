@@ -79,6 +79,13 @@ export interface SkippedRow {
   reason: string;
 }
 
+// Strict numeric patterns: parseInt/parseFloat accept leading-numeric garbage
+// (e.g. parseFloat("200000xyz") === 200000), so every numeric field parsed
+// from a Sheet row must match one of these before parsing, not just pass a
+// post-hoc Number.isNaN check.
+const INTEGER_PATTERN = /^-?\d+$/;
+const DECIMAL_PATTERN = /^-?\d+(\.\d+)?$/;
+
 // --- Purchase Orders ---
 
 export interface PoSheetRow {
@@ -113,6 +120,10 @@ export function transformPurchaseOrders(rows: PoSheetRow[]): { purchaseOrders: T
     }
     if (!VALID_PO_STATUSES.includes(row.status)) {
       skipped.push({ rowIndex, reason: `unrecognized status "${row.status}"` });
+      return;
+    }
+    if (!INTEGER_PATTERN.test(row.qty)) {
+      skipped.push({ rowIndex, reason: `unparseable qty "${row.qty}"` });
       return;
     }
     const qty = parseInt(row.qty, 10);
@@ -180,6 +191,10 @@ export function transformShipments(rows: ShipmentSheetRow[]): { shipments: Trans
       skipped.push({ rowIndex, reason: `unrecognized status "${row.status}"` });
       return;
     }
+    if (!INTEGER_PATTERN.test(row.qty)) {
+      skipped.push({ rowIndex, reason: `unparseable qty "${row.qty}"` });
+      return;
+    }
     const qty = parseInt(row.qty, 10);
     if (Number.isNaN(qty)) {
       skipped.push({ rowIndex, reason: `unparseable qty "${row.qty}"` });
@@ -229,6 +244,10 @@ export function transformPayments(rows: PaymentSheetRow[]): { payments: Transfor
   const payments: TransformedPayment[] = [];
 
   rows.forEach((row, rowIndex) => {
+    if (!DECIMAL_PATTERN.test(row.expected_amount)) {
+      skipped.push({ rowIndex, reason: `unparseable expected_amount "${row.expected_amount}"` });
+      return;
+    }
     const amount = parseFloat(row.expected_amount);
     if (Number.isNaN(amount)) {
       skipped.push({ rowIndex, reason: `unparseable expected_amount "${row.expected_amount}"` });
@@ -239,9 +258,18 @@ export function transformPayments(rows: PaymentSheetRow[]): { payments: Transfor
       skipped.push({ rowIndex, reason: `unparseable expected_date "${row.expected_date}"` });
       return;
     }
+    if (!INTEGER_PATTERN.test(row.sequence_no)) {
+      skipped.push({ rowIndex, reason: `unparseable sequence_no "${row.sequence_no}"` });
+      return;
+    }
+    const sequenceNo = parseInt(row.sequence_no, 10);
+    if (Number.isNaN(sequenceNo)) {
+      skipped.push({ rowIndex, reason: `unparseable sequence_no "${row.sequence_no}"` });
+      return;
+    }
     payments.push({
       poNumber: row.po_number,
-      sequenceNo: parseInt(row.sequence_no, 10),
+      sequenceNo,
       expectedAmount: row.expected_amount,
       expectedDate: date,
       currency: row.currency,
