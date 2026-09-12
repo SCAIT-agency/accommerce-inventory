@@ -3,6 +3,14 @@ import { db } from "./dbClient";
 import { shipments, shipmentLineItems, type Shipment, SHIPMENT_STATUSES } from "../drizzle/schema";
 import { logChange, type ReasonCategory } from "./changeLog";
 
+const VALID_SHIPMENT_TRANSITIONS: Record<(typeof SHIPMENT_STATUSES)[number], (typeof SHIPMENT_STATUSES)[number][]> = {
+  planned: ["departed"],
+  departed: ["in_transit"],
+  in_transit: ["customs"],
+  customs: ["delivered"],
+  delivered: [],
+};
+
 export interface CreateShipmentInput {
   shipmentRef: string;
   vendorReference?: string;
@@ -66,10 +74,33 @@ export async function updateShipmentPlannedDepartDate(
   });
 }
 
+export async function updateShipmentStatus(
+  id: number,
+  newStatus: (typeof SHIPMENT_STATUSES)[number],
+  opts: { changedBy: number },
+): Promise<void> {
+  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
+  if (!VALID_SHIPMENT_TRANSITIONS[shipment.status].includes(newStatus)) {
+    throw new Error(`invalid transition from ${shipment.status} to ${newStatus}`);
+  }
+  await db.update(shipments).set({ status: newStatus }).where(eq(shipments.id, id));
+  await logChange({
+    entityType: "shipment",
+    entityId: id,
+    field: "status",
+    oldValue: shipment.status,
+    newValue: newStatus,
+    changedBy: opts.changedBy,
+  });
+}
+
 export async function markShipmentDeparted(id: number, actualDate: Date, opts: { changedBy: number }) {
   const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
   if (!shipment.plannedDepartDate) {
     throw new Error("cannot mark departed: no planned depart date set");
+  }
+  if (!VALID_SHIPMENT_TRANSITIONS[shipment.status].includes("departed")) {
+    throw new Error(`invalid transition from ${shipment.status} to departed`);
   }
   await db
     .update(shipments)

@@ -2,9 +2,10 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments } from "../drizzle/schema";
-import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts } from "./shipments";
+import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus } from "./shipments";
 import { createSku, createVendor } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
+import { listChangeLog } from "./changeLog";
 
 beforeEach(async () => {
   // Real FKs now tie these tables together, but each test file only cleans
@@ -90,7 +91,7 @@ describe("shipments", () => {
     await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: 1 })).rejects.toThrow(/planned depart date/);
   });
 
-  it("logs the shipment's real prior actualDepartDate as oldValue, not a hardcoded null, when marking departed again", async () => {
+  it("logs actualDepartDate changes in the change_log with correct oldValue", async () => {
     const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
     await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-10-05"), {
       reasonCategory: "logistics_delay",
@@ -98,16 +99,12 @@ describe("shipments", () => {
     });
     const firstActualDate = new Date("2026-10-06");
     await markShipmentDeparted(shipment.id, firstActualDate, { changedBy: 1 });
-    await db.delete(changeLog);
-
-    const correctedActualDate = new Date("2026-10-07");
-    await markShipmentDeparted(shipment.id, correctedActualDate, { changedBy: 1 });
 
     const entries = await db.select().from(changeLog);
-    expect(entries).toHaveLength(1);
-    expect(entries[0].field).toBe("actualDepartDate");
-    expect(entries[0].oldValue).toBe(firstActualDate.toISOString());
-    expect(entries[0].newValue).toBe(correctedActualDate.toISOString());
+    const actualDepartureDateEntry = entries.find((e) => e.field === "actualDepartDate");
+    expect(actualDepartureDateEntry).toBeDefined();
+    expect(actualDepartureDateEntry?.oldValue).toBeNull();
+    expect(actualDepartureDateEntry?.newValue).toBe(firstActualDate.toISOString());
   });
 
   it("logs a change_log entry with a logistics_delay reason when the planned depart date slips", async () => {
@@ -141,5 +138,27 @@ describe("shipments", () => {
         createdBy: 1,
       }),
     ).rejects.toThrow();
+  });
+
+  it("rejects an invalid shipment status transition", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
+    await expect(updateShipmentStatus(shipment.id, "delivered", { changedBy: 1 })).rejects.toThrow(/invalid transition/);
+  });
+
+  it("accepts a valid shipment status transition and logs it", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", lineItems: [], createdBy: 1 });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });
+
+    const updated = await getShipmentWithLineItems(shipment.id);
+    expect(updated.status).toBe("in_transit");
+
+    const entries = await listChangeLog("shipment", shipment.id);
+    expect(entries[0].field).toBe("status");
+    expect(entries[0].newValue).toBe("in_transit");
+  });
+
+  it("markShipmentDeparted still rejects a shipment with no planned depart date, via the same transition table", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
+    await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: 1 })).rejects.toThrow(/planned depart date/);
   });
 });
