@@ -12,12 +12,15 @@ beforeEach(async () => {
   // these deletes regardless of order. Disabling FK checks for the cleanup
   // makes this file's reset order-independent again.
   await db.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
-  await db.delete(changeLog);
-  await db.delete(poLineItems);
-  await db.delete(purchaseOrders);
-  await db.delete(skus);
-  await db.delete(vendors);
-  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
+  try {
+    await db.delete(changeLog);
+    await db.delete(poLineItems);
+    await db.delete(purchaseOrders);
+    await db.delete(skus);
+    await db.delete(vendors);
+  } finally {
+    await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
+  }
 });
 
 describe("purchase orders", () => {

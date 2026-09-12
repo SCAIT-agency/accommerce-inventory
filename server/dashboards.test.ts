@@ -17,15 +17,18 @@ beforeEach(async () => {
   // these deletes regardless of order. Disabling FK checks for the cleanup
   // makes this file's reset order-independent again.
   await db.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
-  await db.delete(transactions);
-  await db.delete(payments);
-  await db.delete(purchaseOrders);
-  await db.delete(vendors);
-  await db.delete(salesActuals);
-  await db.delete(inventoryLedger);
-  await db.delete(skus);
-  await db.delete(warehouses);
-  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
+  try {
+    await db.delete(transactions);
+    await db.delete(payments);
+    await db.delete(purchaseOrders);
+    await db.delete(vendors);
+    await db.delete(salesActuals);
+    await db.delete(inventoryLedger);
+    await db.delete(skus);
+    await db.delete(warehouses);
+  } finally {
+    await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
+  }
 });
 
 function daysAgo(n: number): Date {
