@@ -13,15 +13,24 @@ export interface RecordSalesActualInput {
 }
 
 export async function recordSalesActual(input: RecordSalesActualInput): Promise<void> {
-  await db.insert(salesActuals).values(input);
-  await recordLedgerEvent({
-    skuId: input.skuId,
-    warehouseId: input.warehouseId,
-    eventType: "sale",
-    qty: -input.qty,
-    unitCost: null,
-    date: input.date,
-    sourceRef: `sales_actual:${input.source}`,
+  // Both writes must land or neither does — recordLedgerEvent can now throw
+  // (negative-stock guard), and an unguarded sequential write would leave a
+  // sales_actuals row with no matching ledger event, breaking the
+  // ledger-as-single-source-of-truth invariant silently.
+  await db.transaction(async (tx) => {
+    await tx.insert(salesActuals).values(input);
+    await recordLedgerEvent(
+      {
+        skuId: input.skuId,
+        warehouseId: input.warehouseId,
+        eventType: "sale",
+        qty: -input.qty,
+        unitCost: null,
+        date: input.date,
+        sourceRef: `sales_actual:${input.source}`,
+      },
+      tx,
+    );
   });
 }
 

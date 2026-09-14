@@ -12,16 +12,23 @@ beforeEach(async () => {
   // this suite) — so a row left by another file's last test can otherwise
   // block these deletes regardless of order. Disabling FK checks for the
   // cleanup makes this file's reset order-independent again.
-  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
-  try {
-    await db.delete(salesActuals);
-    await db.delete(salesPlan);
-    await db.delete(inventoryLedger);
-    await db.delete(skus);
-    await db.delete(warehouses);
-  } finally {
-    await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
-  }
+  //
+  // SET is session-scoped in MySQL — there's no guarantee the toggle-off, the
+  // deletes, and the toggle-on all land on the same pooled connection from
+  // `db` (mysql.createPool). A real db.transaction pins one connection for
+  // its whole duration, which is exactly the guarantee this needs.
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
+    try {
+      await tx.delete(salesActuals);
+      await tx.delete(salesPlan);
+      await tx.delete(inventoryLedger);
+      await tx.delete(skus);
+      await tx.delete(warehouses);
+    } finally {
+      await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
+    }
+  });
 });
 
 describe("sales plan/actuals", () => {
@@ -36,6 +43,19 @@ describe("sales plan/actuals", () => {
     expect(ledgerRows).toHaveLength(2);
     expect(ledgerRows[1].qty).toBe(-1162);
     expect(ledgerRows[1].eventType).toBe("sale");
+  });
+
+  it("leaves no sales_actuals row behind if the matching ledger event is rejected (atomicity)", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    // No prior receipt — any sale drives SOH negative, so recordLedgerEvent throws.
+    await expect(
+      recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: new Date("2026-09-09"), qty: 1, source: "manual" }),
+    ).rejects.toThrow(/negative/i);
+
+    const rows = await db.select().from(salesActuals);
+    expect(rows).toEqual([]);
   });
 
   it("computes coefficient-of-variation volatility from weekly actuals", async () => {
