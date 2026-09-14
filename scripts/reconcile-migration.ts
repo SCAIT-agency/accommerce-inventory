@@ -42,11 +42,33 @@ export interface RunMigrationResult {
 }
 
 export async function runMigration(input: RunMigrationInput): Promise<RunMigrationResult> {
-  const { ledgerEvents } = transformSheetExport(input.ledgerRows);
+  // Finding 1: landed-cost reconciliation isn't wired to a real data source yet
+  // (real Control Tower Sheet column names are unknown — see spec Open Questions).
+  // Silently accepting landedCostTotals and running zero comparisons would look
+  // like "Migration complete" while the check did nothing — fail loudly instead.
+  if (input.landedCostTotals && input.landedCostTotals.length > 0) {
+    throw new Error(
+      "runMigration: landedCostTotals was provided but landed-cost reconciliation is not yet wired to a real " +
+      "data source (real Control Tower Sheet column names are unknown — see spec Open Questions). Pass an empty " +
+      "array or omit landedCostTotals until this is implemented.",
+    );
+  }
+
+  const { ledgerEvents, skipped: skippedLedger } = transformSheetExport(input.ledgerRows);
+  // Finding 4: sort ledger events chronologically before replay — the negative-stock
+  // guard checks SOH "as of" each event's own date, so a receipt appearing after its
+  // corresponding sale in source row order (but dated earlier) must still be applied
+  // to the ledger before that sale is checked.
+  ledgerEvents.sort((a, b) => a.date.getTime() - b.date.getTime());
   const { purchaseOrders: transformedPos, skipped: skippedPos } = transformPurchaseOrders(input.poRows);
   const { shipments: transformedShipments, skipped: skippedShipments } = transformShipments(input.shipmentRows);
   const { payments: transformedPayments, skipped: skippedPayments } = transformPayments(input.paymentRows);
   const { transactions: transformedTransactions, skipped: skippedTransactions } = transformTransactions(input.transactionRows);
+  // Finding 5: runtime (not row-parse-time) quarantines — resolved only once
+  // cross-entity references (PO line items, PO numbers) are known, inside the
+  // transaction below.
+  const runtimeSkippedShipments: SkippedRow[] = [];
+  const runtimeSkippedPayments: SkippedRow[] = [];
 
   // Everything below runs on the transaction's own connection (`tx`, threaded
   // into every helper call) rather than the pool-backed `db` — the pool would
@@ -108,14 +130,34 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
         tx,
       );
       poIdByNumber.set(po.poNumber, created.id);
+      // Finding 6: ordered explicitly by id so this zip-by-index against
+      // po.lineItems (original transform order) is guaranteed correct rather
+      // than relying on MySQL returning rows in insertion order by convention.
       const withItems = await getPurchaseOrderWithLineItems(created.id, tx);
       withItems.lineItems.forEach((li, idx) => {
+        // Known limitation: this key collides if one PO has two line items for
+        // the same SKU (e.g. two price tranches) — the second silently overwrites
+        // the first in this map. Not fixed speculatively: the real Control Tower
+        // Sheet's actual po_line_item_ref format is unknown (open question in the
+        // spec), and inventing a new key scheme now could mismatch whatever the
+        // real data actually provides.
         poLineItemIdByRef.set(`${po.poNumber}::${po.lineItems[idx].sku}`, li.id);
       });
     }
 
     // 2. Shipments + shipment line items
-    for (const shipment of transformedShipments) {
+    // Finding 5: a shipment referencing a PO line item that wasn't migrated
+    // (e.g. its parent PO was quarantined) is quarantined whole rather than
+    // crashing the entire migration on a non-null assertion.
+    for (const [shipmentIdx, shipment] of transformedShipments.entries()) {
+      const unresolvedRef = shipment.lineItems.find((li) => !poLineItemIdByRef.has(li.poLineItemRef));
+      if (unresolvedRef) {
+        runtimeSkippedShipments.push({
+          rowIndex: shipmentIdx,
+          reason: `unresolved po_line_item_ref "${unresolvedRef.poLineItemRef}" — referenced PO or PO line item was not migrated (likely quarantined)`,
+        });
+        continue;
+      }
       const lineItems: { poLineItemId: number; skuId: number; qty: number; weightShare: string; valueShare: string }[] = [];
       for (const li of shipment.lineItems) {
         lineItems.push({
@@ -142,10 +184,20 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
     }
 
     // 3. Payments
-    for (const payment of transformedPayments) {
+    // Finding 5: a payment referencing a PO number that wasn't migrated is
+    // quarantined instead of silently inserting with poId: NULL, orphaned.
+    for (const [paymentIdx, payment] of transformedPayments.entries()) {
+      const poId = poIdByNumber.get(payment.poNumber);
+      if (poId === undefined) {
+        runtimeSkippedPayments.push({
+          rowIndex: paymentIdx,
+          reason: `unresolved po_number "${payment.poNumber}" — referenced PO was not migrated (likely quarantined)`,
+        });
+        continue;
+      }
       await createExpectedPayment(
         {
-          poId: poIdByNumber.get(payment.poNumber),
+          poId,
           sequenceNo: payment.sequenceNo,
           expectedAmount: payment.expectedAmount,
           expectedDate: payment.expectedDate,
@@ -189,6 +241,7 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
     }
 
     // 6. Reconciliation gate — inside the transaction, so a failure here rolls back everything above.
+    // landedCostTotals is guaranteed empty here (guarded and thrown on above if non-empty).
     const soakResult = await reconcileMigration(
       input.sheetTotals,
       {
@@ -198,7 +251,7 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
           return getSoh(skuId, warehouseId, undefined, tx);
         },
       },
-      input.landedCostTotals ?? [],
+      [],
     );
     if (!soakResult.passed) {
       throw new Error(`migration reconciliation failed: ${JSON.stringify(soakResult.mismatches)}`);
@@ -207,10 +260,10 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
 
   return {
     quarantined: {
-      ledger: [],
+      ledger: skippedLedger,
       purchaseOrders: skippedPos,
-      shipments: skippedShipments,
-      payments: skippedPayments,
+      shipments: [...skippedShipments, ...runtimeSkippedShipments],
+      payments: [...skippedPayments, ...runtimeSkippedPayments],
       transactions: skippedTransactions,
     },
   };

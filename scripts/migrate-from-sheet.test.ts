@@ -14,9 +14,37 @@ describe("transformSheetExport", () => {
       { sku: "JELLO-CAL-500", warehouse: "FF-DE", event_type: "receipt", qty: "1000", unit_cost: "0.42", date: "2026-06-16", source_ref: "PO1-W1" },
     ];
     const result = transformSheetExport(rows);
+    expect(result.skipped).toEqual([]);
     expect(result.ledgerEvents).toEqual([
       { sku: "JELLO-CAL-500", warehouseCode: "FF-DE", eventType: "receipt", qty: 1000, unitCost: 0.42, date: new Date("2026-06-16"), sourceRef: "PO1-W1" },
     ]);
+  });
+
+  it("maps a sale row with a blank unit_cost (unitCost defaults to 0, not NaN)", () => {
+    const rows = [
+      { sku: "JELLO-CAL-500", warehouse: "FF-DE", event_type: "sale", qty: "-30", unit_cost: "", date: "2026-09-02", source_ref: "shopify-2026-09-02" },
+    ];
+    const result = transformSheetExport(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.ledgerEvents[0].unitCost).toBe(0);
+  });
+
+  it("quarantines a row with a garbage-suffixed qty instead of silently truncating it", () => {
+    const rows = [
+      { sku: "JELLO-CAL-500", warehouse: "FF-DE", event_type: "receipt", qty: "1000xyz", unit_cost: "0.42", date: "2026-06-16", source_ref: "PO1-W1" },
+    ];
+    const result = transformSheetExport(rows);
+    expect(result.ledgerEvents).toEqual([]);
+    expect(result.skipped).toEqual([{ rowIndex: 0, reason: expect.stringContaining("qty") }]);
+  });
+
+  it("quarantines a row with an invalid event_type instead of blindly casting it", () => {
+    const rows = [
+      { sku: "JELLO-CAL-500", warehouse: "FF-DE", event_type: "not_a_real_event_type", qty: "1000", unit_cost: "0.42", date: "2026-06-16", source_ref: "PO1-W1" },
+    ];
+    const result = transformSheetExport(rows);
+    expect(result.ledgerEvents).toEqual([]);
+    expect(result.skipped).toEqual([{ rowIndex: 0, reason: expect.stringContaining("event_type") }]);
   });
 });
 

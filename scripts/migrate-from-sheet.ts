@@ -1,3 +1,5 @@
+import { LEDGER_EVENT_TYPES } from "../drizzle/schema";
+
 export interface SheetExportRow {
   sku: string;
   warehouse: string;
@@ -20,20 +22,58 @@ export interface TransformedLedgerEvent {
 
 export interface TransformedMigrationData {
   ledgerEvents: TransformedLedgerEvent[];
+  skipped: SkippedRow[];
 }
 
 export function transformSheetExport(rows: SheetExportRow[]): TransformedMigrationData {
-  return {
-    ledgerEvents: rows.map((r) => ({
+  const skipped: SkippedRow[] = [];
+  const ledgerEvents: TransformedLedgerEvent[] = [];
+
+  rows.forEach((r, rowIndex) => {
+    if (!(LEDGER_EVENT_TYPES as readonly string[]).includes(r.event_type)) {
+      skipped.push({ rowIndex, reason: `unrecognized event_type "${r.event_type}"` });
+      return;
+    }
+    if (!DECIMAL_PATTERN.test(r.qty)) {
+      skipped.push({ rowIndex, reason: `unparseable qty "${r.qty}"` });
+      return;
+    }
+    const qty = parseFloat(r.qty);
+    if (Number.isNaN(qty)) {
+      skipped.push({ rowIndex, reason: `unparseable qty "${r.qty}"` });
+      return;
+    }
+    // unit_cost is only meaningful for receipts (sale/adjustment rows commonly
+    // leave it blank, matching runMigration's own eventType === "receipt" check
+    // before persisting it) — blank is not garbage, but anything present must
+    // still pass the strict pattern.
+    if (r.unit_cost !== "" && !DECIMAL_PATTERN.test(r.unit_cost)) {
+      skipped.push({ rowIndex, reason: `unparseable unit_cost "${r.unit_cost}"` });
+      return;
+    }
+    const unitCost = r.unit_cost === "" ? 0 : parseFloat(r.unit_cost);
+    if (Number.isNaN(unitCost)) {
+      skipped.push({ rowIndex, reason: `unparseable unit_cost "${r.unit_cost}"` });
+      return;
+    }
+    const date = new Date(r.date);
+    if (Number.isNaN(date.getTime())) {
+      skipped.push({ rowIndex, reason: `unparseable date "${r.date}"` });
+      return;
+    }
+
+    ledgerEvents.push({
       sku: r.sku,
       warehouseCode: r.warehouse,
       eventType: r.event_type as "receipt" | "sale" | "adjustment",
-      qty: parseFloat(r.qty),
-      unitCost: parseFloat(r.unit_cost),
-      date: new Date(r.date),
+      qty,
+      unitCost,
+      date,
       sourceRef: r.source_ref,
-    })),
-  };
+    });
+  });
+
+  return { ledgerEvents, skipped };
 }
 
 export interface SkuWarehouseTotal {

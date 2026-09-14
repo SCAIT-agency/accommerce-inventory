@@ -62,6 +62,8 @@ pnpm exec tsx scripts/run-migration.mjs <path-to-exported-sheet-data.json>
 
 Reads a JSON export file (with `ledgerRows`, `poRows`, `shipmentRows`, `paymentRows`, `transactionRows`, `sheetTotals`, and optional `landedCostTotals`) and runs the migration inside a single transaction. Exits 0 with a quarantine summary on success. Exits 1 and rolls back entirely if the reconciliation gate fails (no partial data left behind). Never run against production without first running the parallel-run check below for the agreed comparison period.
 
+**`landedCostTotals` is accepted by the type but not yet functionally wired.** Real Control Tower Sheet landed-cost column names are still unknown (an open question — see the migration-cutover-readiness design doc), so there is no real `getMigratedLandedCost` implementation to compare against yet. Passing a non-empty `landedCostTotals` array makes `runMigration` throw immediately rather than silently completing with zero landed-cost comparisons run. **Omit this field or pass `[]`** until real Sheet column names are known and the comparison is implemented.
+
 JSON shape:
 ```json
 {
