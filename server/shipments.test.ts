@@ -13,19 +13,26 @@ beforeEach(async () => {
   // suite) — so a row left by another file's last test can otherwise block
   // these deletes regardless of order. Disabling FK checks for the cleanup
   // makes this file's reset order-independent again.
-  await db.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
-  try {
-    await db.delete(changeLog);
-    await db.delete(payments);
-    await db.delete(shipmentLineItems);
-    await db.delete(shipments);
-    await db.delete(poLineItems);
-    await db.delete(purchaseOrders);
-    await db.delete(skus);
-    await db.delete(vendors);
-  } finally {
-    await db.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
-  }
+  //
+  // SET is session-scoped in MySQL — there's no guarantee the toggle-off, the
+  // deletes, and the toggle-on all land on the same pooled connection from
+  // `db` (mysql.createPool). A real db.transaction pins one connection for
+  // its whole duration, which is exactly the guarantee this needs.
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
+    try {
+      await tx.delete(changeLog);
+      await tx.delete(payments);
+      await tx.delete(shipmentLineItems);
+      await tx.delete(shipments);
+      await tx.delete(poLineItems);
+      await tx.delete(purchaseOrders);
+      await tx.delete(skus);
+      await tx.delete(vendors);
+    } finally {
+      await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
+    }
+  });
 });
 
 async function seedPoWithLineItem() {
