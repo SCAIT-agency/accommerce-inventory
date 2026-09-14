@@ -1,1 +1,0 @@
-ALTER TABLE `inventory_ledger` MODIFY COLUMN `date` timestamp(3) NOT NULL;
