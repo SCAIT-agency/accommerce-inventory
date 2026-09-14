@@ -2,7 +2,7 @@
 
 Source: the final whole-branch review after V1's 20 tasks (see [`BUILD-HISTORY.md`](./BUILD-HISTORY.md)), plus the deferred-minor triage that review ran against everything parked during the build. Every item here is a real finding, not a guess — each was independently verified against the actual code, not just asserted.
 
-Grouped into six work streams (A–F). Recommended order: **B → A → E → C → D**, with F riding along with whichever other stream touches the same files. Reasoning: B and A are what make the system honestly comparable against Control Tower during the parallel run; C and D matter most once real client staff and real data volume show up, which comes after that.
+Grouped into six work streams (A–F). Recommended order: **B → A → E → C → D**, with F riding along with whichever other stream touches the same files. Reasoning: B and A are what make the system honestly comparable against Control Tower during the parallel run; C and D matter most once real client staff and real data volume show up, which comes after that. **B is done (2026-09-14)** — A is next.
 
 Status legend: ✅ done · ⬜ open
 
@@ -13,23 +13,33 @@ Status legend: ✅ done · ⬜ open
 Backend logic exists and is tested; no router procedure or UI exposes it. Recommended as **one single task**, not nine — the review explicitly called this out as a checklist item, not nine separate features.
 
 - ⬜ `sales_plan` row creation — no insert path anywhere. Without it, `getPlanActualDeviation` can never return a non-zero result and the spec's "Daily COGS/Sales (actual vs plan)" tab structurally cannot work.
-- ⬜ Shipment progression past `departed` — no way to reach `customs`/`delivered`, set `customsStatus`, or record `actualArrivalDate` through the app. The spec's Shipments dashboard ("freight/customs/ETA") is half-built without this.
+- ⬜ Shipment progression past `departed` — no way to reach `customs`/`delivered`, set `customsStatus`, or record `actualArrivalDate` through the app. The spec's Shipments dashboard ("freight/customs/ETA") is half-built without this. **Also build a way to correct an already-recorded actual depart date**: Stream B's shipment state machine (`VALID_SHIPMENT_TRANSITIONS`) now makes `markShipmentDeparted` reject being called a second time on the same shipment — closing a real gap (no transition check existed before) but also permanently removing the only way ops had to fix a wrongly-entered date, with no replacement built (deliberately out of Stream B's hardening-only scope). Whoever wires up this stream's router/UI needs to build that correction path alongside exposure, not just the forward-progression happy path.
 - ⬜ `payments.history` — `markPaymentPaid` writes real `change_log` rows, but there's no router procedure to read them back. The spec's "show history on any PO/Shipment/**Payment** record" is unreachable for payments specifically.
 - ⬜ `listPaymentsForPo` — the Task 16b payments UI is session-local: a user who reloads the Purchase Orders page loses sight of payments they already created (they're safely in the DB, just not re-listed).
 - ⬜ `getSalesVolatility` / `getPlanActualDeviation` — computed, tested, never surfaced on any dashboard.
 - ⬜ `listShipmentsForPo` — exists, unused by any router/UI (the PO↔Shipment many-to-many link the spec calls for isn't visible anywhere yet).
 - ⬜ `matchTransaction` — router procedure exists (Task 16b), but no UI calls it; Money's Cashflow tab shows only an unmatched-transaction *count*, not a list with a match action, so the procedure is currently dead from the UI's perspective.
 
-## B. Migration & cutover readiness
+## B. Migration & cutover readiness — ✅ DONE (2026-09-14, see [`BUILD-HISTORY.md`](./BUILD-HISTORY.md) for the full build/review narrative)
 
-Do this before the real parallel run against Control Tower starts — cheap now, expensive once real financial data is loaded.
+Preparatory hardening only — **not** a real migration against real Jello/Accommerce data, which remains a separate, later, explicitly-gated decision.
 
-- ⬜ **Migration scope**: `scripts/migrate-from-sheet.ts` only migrates `inventory_ledger`. The spec's Migration Plan step 1 requires PO/Shipment/**Ledger**/Payment/Transaction; step 2 requires reconciling landed-cost totals, not just SOH. Currently the "cutover gate" would greenlight a migration that moved no POs, shipments, payments, or transactions.
-- ⬜ **CLI entrypoints**: neither `runMigration` nor `generateParallelRunReport` has one — both are library functions today, callable only from a REPL. Needs an actual script a human runs.
-- ⬜ **Referential integrity**: zero foreign keys anywhere in the schema (confirmed: `grep` across every migration returns 0 `FOREIGN KEY`/`REFERENCES`). Worst concrete case: `matchTransactionToPayment` writes `matchedPaymentId` with no check that either row exists or that the transaction isn't already matched — a typo silently orphans a transaction. `recordLedgerEvent` accepting a nonexistent `skuId`/`warehouseId` is the more consequential version: it undermines the ledger-is-the-source-of-truth invariant, and such orphaned rows would slip past migration reconciliation entirely (they sum into no SKU's total). Fix: FKs on the ownership edges, or at minimum explicit existence checks in these two functions.
-- ⬜ **Unique constraint on SKU identifiers** — `(primary_identifier_type, identifier_value)` was parked during the build "before real end-user SKU data entry begins." `runMigration` auto-creates SKUs from Sheet rows, which is exactly that trigger — do this before running a real migration, not after.
-- ⬜ **No negative-stock validation** — the spec names this explicitly ("Validation failures (negative stock, invalid state transitions) block save with an explicit message — never silently allowed through"). `recordSalesActual`/`recordLedgerEvent` currently accept any quantity; `computeFifoCogs` only throws on insufficient stock when someone happens to *ask* for COGS, long after a bad row already landed.
-- ⬜ **Shipments have no state machine** — unlike Purchase Orders (`VALID_TRANSITIONS` lookup table), `markShipmentDeparted` hard-sets `status: "departed"` with no transition check at all. Same class of gap the spec's "invalid state transitions" requirement is meant to close.
+- ✅ **Migration scope** widened from ledger-only to full PO/Shipment/Payment/Transaction, with per-entity quarantine (malformed rows skipped and reported, never silently dropped, never abort the whole run) — including retrofitting the same quarantine treatment onto the original V1 ledger transform, which had none.
+- ✅ **CLI entrypoints**: `scripts/run-migration.mjs` and `scripts/run-parallel-check.mjs`, documented in `RAILWAY.md`.
+- ✅ **Referential integrity**: real foreign keys on all 10 core ownership edges (PO/shipment line items, payments, transactions, inventory ledger), plus an app-level guard against re-matching an already-matched transaction.
+- ✅ **Unique constraint on SKU identifiers** — composite `(primaryIdentifierType, identifierValue)` via a generated column, enforced NOT NULL.
+- ✅ **Negative-stock validation** — `recordLedgerEvent` throws before writing an event that would drive SOH negative; applies during migration too, not bypassed for historical data. `recordSalesActual` (the other write path) is now atomic with its own ledger write, so a rejected event can't leave an orphaned `sales_actuals` row.
+- ✅ **Shipments have a state machine** — `VALID_SHIPMENT_TRANSITIONS`, mirroring the existing PO pattern. Not yet exposed via any router/UI (that's Stream A's job, see below).
+- ✅ Migration atomicity: `runMigration` wraps the whole write set in one DB transaction, correctly threaded end-to-end (verified during the final whole-branch review, which caught that a naive "wrap in `db.transaction`" attempt would have silently NOT been atomic without threading the transaction's own client through every helper call).
+- ✅ Tolerance-based landed-cost reconciliation alongside the existing exact-match SOH check — machinery is built and tested, but genuinely NOT wired to a live data source yet (real Control Tower Sheet landed-cost column names are still unknown); `runMigration` throws loudly if you try to use it rather than silently no-op'ing.
+- ✅ Squashed the local-only migration history before it ever reached a real deployment — an earlier fix-loop incident had left a `DELETE FROM skus` baked into the committed migration chain (harmless on the empty DB every real deployment starts from, but a landmine for any future non-empty one). Regenerated as one clean migration from the final schema.
+
+**New, smaller items surfaced by Stream B's own build — genuinely deferred, not silently dropped:**
+- ⬜ Duplicate-SKU-per-PO collision in the migration's line-item reference key (`${poNumber}::${sku}`) — two line items for the same SKU on one PO (e.g. two price tranches) will collide. Not fixed deliberately: the real Control Tower Sheet's actual line-item reference column format is unknown, and guessing at a new key scheme risks mismatching real data. Revisit once the real Sheet format is known (see `scripts/reconcile-migration.ts`'s comment at the map-building call site).
+- ⬜ `recordLedgerEvent`'s negative-stock check-then-insert isn't wrapped in its own transaction — a theoretical TOCTOU race under concurrent calls for the same SKU/warehouse. Low risk for a single-operator system; worth a code comment if not a fix.
+- ⬜ `updateShipmentStatus`/`markShipmentDeparted` destructure a possibly-missing row with no existence check (`Cannot read properties of undefined` on a bad id) — Task 6 in this same stream established the better convention (a named, clear error) in the same plan; these two should match it.
+- ⬜ `run-migration.mjs` doesn't validate the input JSON's shape before use (a missing key produces a raw `Cannot read properties of undefined` reported as a generic failure).
+- ⬜ `run-parallel-check.mjs`'s `getMigratedSoh` returns `0` for a completely unknown SKU/warehouse, which reads as "clean match" for a sheet row that also expects 0 rather than as "this SKU doesn't exist in the migrated DB at all" — a real gap vs. an empty one look the same.
 
 ## C. Security hardening
 
@@ -65,8 +75,8 @@ Not urgent today because no real production data has flowed through yet — will
 - ⬜ `?t=${Date.now()}` query-string dynamic imports in `env.test.ts`/`auth.test.ts` are redundant now that `vi.resetModules()` handles cache-busting, and emit a harmless but noisy Vite warning on every test run — drop the query string.
 - ⬜ `routers.ts`'s `createSku` procedure: `primaryIdentifierType: z.string()` + `createSku(input as any)` — should be `z.enum([...])`, removing the only `as any` in the router.
 - ⬜ No index on `change_log (entity_type, entity_id)` — `listChangeLog` full-scans a table that grows with every cost/date edit. Add once history queries get slow, not urgent today.
-- ⬜ `migrate-from-sheet.ts`: `event_type as "receipt"|"sale"|"adjustment"` with no runtime validation, and unguarded `parseFloat`/`new Date` — worth tightening given this script's whole job is being a trustworthy gate.
 - ⬜ `@vitejs/plugin-react` is a devDependency but never registered in `vite.config.ts` — `pnpm dev` has no Fast Refresh without it (one line to fix).
+- ⬜ Three trivial cosmetic nits in Stream B's CLI scripts: an unused `db` import in `run-parallel-check.mjs`; `run-migration.mjs`'s "Migration failed and rolled back" wording is imprecise for failures that happen before any transaction opens (bad path, missing file, malformed JSON — still fails loudly with a clear reason and correct exit code, just misleading phrasing); a shebang-line inconsistency between the two new scripts and the pre-existing `run-nightly-export.mjs` pattern.
 
 ---
 

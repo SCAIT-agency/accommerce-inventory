@@ -69,9 +69,68 @@ The scoped re-review of that fix wave found one residual: the per-bucket currenc
 
 All other Important and Minor findings were deliberately **not** fixed in this round — not silently dropped, tracked in [`BACKLOG.md`](./BACKLOG.md).
 
-## Final State
+## Final State (V1)
 
 - 20 tasks complete (19 from the original plan + Task 16b), each individually reviewed.
 - Test suite: 65 tests, 16 files, passing on the plain documented `pnpm test` command (this was itself one of the fixes — the suite silently required a `--no-file-parallelism` flag for the entire build before that was fixed).
 - Repository: [github.com/Artem-SCM-AI/accommerce-inventory](https://github.com/Artem-SCM-AI/accommerce-inventory) (private).
 - No known open Critical or Important defect in what shipped. A substantial, explicitly-scoped backlog remains for making V1 production-ready against real client data — see `BACKLOG.md`.
+
+---
+
+# Build History — Backlog Stream B: Migration & Cutover Readiness
+
+Built 2026-09-12 to 2026-09-14, directly on `main` (this repo has no branch/worktree workflow — same convention as V1). Design spec: [`2026-09-12-migration-cutover-readiness-design.md`](./2026-09-12-migration-cutover-readiness-design.md). Plan: [`superpowers/plans/2026-09-12-migration-cutover-readiness.md`](./superpowers/plans/2026-09-12-migration-cutover-readiness.md). This is preparatory hardening — **not** a real migration against real Jello/Accommerce data, which remains a separate, later, explicitly-gated decision.
+
+## Method
+
+Same subagent-driven-development process as V1: a fresh implementer subagent per task, a dedicated reviewer subagent after each task, a fix-and-re-review loop for any Important/Critical finding, then one whole-branch review at the end. Baseline before Task 1: 65/65 tests green.
+
+## Task-by-Task
+
+**Task 1 — SKU identifier uniqueness.** Composite unique constraint on `skus(primaryIdentifierType, identifierValue)` via a generated column. Fix round: the migration files `db:push` generated weren't committed (a repo convention this task's own review had to catch); the constraint as first written was bypassable by two rows with the same `primaryIdentifierType` and no value in the corresponding column (both generate `identifierValue = NULL`, and MySQL treats NULLs in a unique index as distinct) — closed by marking the generated column `NOT NULL`.
+
+**Task 2 — Vendor reference + migration-only initial status.** Nullable `vendorReference` on Purchase Orders/Shipments, plus an `initialStatus` escape hatch (used only by migration, never exposed via any router) letting the eventual migration set a real historical status directly instead of always starting at `draft`/`planned`. **Real bug found mid-task, not by trusting the implementer's own report:** the implementer's `db:push` run silently dropped Task 1's composite unique constraint down to a broken single-column one — a MySQL/drizzle-kit quirk where regenerating a STORED generated column drops a dependent constraint without drizzle-kit re-emitting it. The implementer's own report mischaracterized the resulting test failures as "2 pre-existing unrelated" — caught by independently running `SHOW CREATE TABLE` rather than trusting that claim, fixed with a corrective migration.
+
+**Task 3 — Negative-stock validation.** `recordLedgerEvent` throws before writing an event that would drive SOH negative. Implementer hit a session rate limit mid-task; resumed the same agent from its real partial work (correct failing tests already written) once the window passed, rather than restarting. Review: Approved, one Important plan-mandated finding (the date-scoped check only correctly handles chronologically-ordered inserts) carried forward as a binding requirement for the later migration tasks.
+
+**Task 4 — Referential integrity (real foreign keys).** 10 FKs on core ownership edges (PO/shipment line items, payments, transactions, inventory ledger) — previously zero existed anywhere. Required a clean local dev DB reset first. **A second real bug found during this task**, again by not trusting an implementer's "pre-existing, unrelated flake" characterization: `inventory_ledger.date` was a MySQL `TIMESTAMP(0)` (second-precision) column that *rounds* a fractional-second value on insert, compared via `lte()` against a raw, unrounded query parameter — so a receipt and a same-second sale could land on opposite sides of a rounding boundary, silently excluding the receipt from its own SOH-as-of check and (combined with Task 3's new guard) rejecting a legitimate write. Root-caused via a live DB inspection and a standalone reproduction script, confirmed present at the pre-Task-4 commit too (via a temporary git worktree) — fixed with `timestamp(3)` (millisecond precision). One further fix round: the FK-safe test cleanup pattern (`SET FOREIGN_KEY_CHECKS = 0/1` across 10 test files) had no `try/finally`, so one failing delete would leave FK enforcement silently disabled for the rest of that connection's life.
+
+**Task 5 — Shipment status state machine.** `VALID_SHIPMENT_TRANSITIONS`, mirroring the existing PO pattern; `markShipmentDeparted` now validated through it instead of hard-setting status. Not exposed via any router in this task. Fix round: a real test-coverage gap (no test exercised the new transition-table branch specifically, both existing tests hit an older guard first). One finding ruled out of scope rather than fixed: the new transition table permanently closes the "call `markShipmentDeparted` twice to fix a wrong date" path with no replacement built — a deliberate scope boundary for hardening-only work, flagged forward to Backlog Stream A.
+
+**Task 6 — Already-matched-transaction guard.** App-level check in `matchTransactionToPayment` (the FK from Task 4 only catches a reference to a payment that doesn't exist at all, not "already matched to a different payment"). Fix round: a nonexistent transaction ID crashed with an opaque `TypeError` instead of a clear error — closed with an explicit existence check.
+
+**Task 7 — Migration transform functions.** Pure transforms (`transformPurchaseOrders`/`transformShipments`/`transformPayments`/`transformTransactions`) converting raw Sheet-row shapes into typed objects Task 8 consumes by exact field name — reviewed with extra scrutiny on field-name fidelity since Task 8 was already written against these exact names. Two fix rounds: `parseFloat`/`parseInt` accepted leading-numeric garbage (`"123abc"` → `123`) instead of quarantining across all four transforms (plus a second round after the fix initially missed `transformTransactions`, caught by the implementer itself flagging the scope gap rather than silently leaving it).
+
+**Task 8 — Widen `runMigration`.** The biggest task: full PO/Shipment/Payment/Transaction scope, wrapped in one atomic DB transaction. Resolved a placeholder the plan had deliberately left open (how to migrate a shipment's historical freight/duty costs without `recordShipmentCosts`'s audit-trail requirement) before dispatch, rather than leaving it for the implementer to invent. Implementer self-reported and the reviewer independently verified a genuinely necessary architectural finding: Drizzle's `db.transaction()` provides a scoped client, and any write going through the outer pool-backed client instead doesn't participate in the transaction at all — required threading an optional `dbClient` parameter through 9 functions across 5 files to make the atomicity guarantee real rather than illusory. Approved clean, no fix round.
+
+**Task 9 — Landed-cost tolerance reconciliation.** Tolerance-based check (greater of $0.01 or 0.1%) alongside the existing exact-match SOH check. Deliberately built the machinery without wiring it to real data (real Sheet landed-cost columns are unknown) — approved clean.
+
+**Task 10 — CLI entrypoints (final planned task).** `scripts/run-migration.mjs`/`run-parallel-check.mjs`. Implementer caught that the plan's own sample code for the parallel-check script was stale (assumed `deps`, a function-containing object, could be read from JSON) and correctly built it from live DB queries instead — verified by the reviewer against the actual pre-existing code, not taken on faith.
+
+## Final Whole-Branch Review
+
+One broad review pass, dispatched on the most capable available model, looked across all 10 tasks' combined diff for cross-cutting issues no single task's reviewer could see. Result: **2 Critical, 6 Important findings** — every one a genuine interaction between tasks built independently:
+
+- Landed-cost reconciliation (Task 9) was built and tested but never actually reachable from `runMigration` (Task 8) — only 3 of the function's 4 arguments were passed, so the check silently ran zero comparisons while reporting success.
+- The committed migration history contained an unconditional `DELETE FROM skus` (the fossil record of Task 2's mid-build fix), harmless on the empty database every real deployment starts from but a landmine for any future non-empty one.
+- Task 8's transaction-atomicity fix didn't reach `recordSalesActual` (untouched V1 code) — Task 3's new guard could now throw there too, leaving an orphaned `sales_actuals` row with no matching ledger event.
+- `runMigration` didn't sort ledger events by date before replay, exposing exactly the ordering sensitivity Task 3's own review had flagged and deferred.
+- Dangling cross-entity references (a shipment pointing at a quarantined PO's line item, a payment pointing at a quarantined PO) were handled two different wrong ways — one crashed the whole migration, one silently orphaned data.
+- A PO line-item lookup relied on unordered `SELECT` row order plus a key that collides on duplicate SKUs within one PO.
+- The FK-safe test cleanup pattern (Task 4) was connection-pool-based, not connection-pinned — worked only by the accident of sequential test execution.
+- The original V1 ledger transform was never given the same quarantine treatment Task 7 gave its four newer siblings — the direct cause of `quarantined.ledger` being permanently empty.
+
+## Fix Wave + Residual
+
+One fix wave addressed all 8 findings — dispatched as a single subagent with every resolution pre-decided by the controller (not left for the implementer to improvise architecture under time pressure), given the scope and design judgment several of them required (especially the migration-history squash and the atomicity/ordering/quarantine fixes). First dispatch attempt hit a model rate limit before any work began; redispatched cleanly with no lost work. Result: 4 focused commits, 111/111 tests, clean typecheck.
+
+Independently verified by the controller before the scoped re-review — not just the test suite, but the actual squashed migration SQL (confirmed zero destructive statements) and live `SHOW CREATE TABLE` output for the affected tables — a direct application of the lesson learned during Task 2's own incident earlier in this same build. Scoped re-review confirmed all 8 findings addressed with no new breakage; two of them (an `ORDER BY` fix and a connection-pinning fix) were accepted without dedicated new regression tests, on the reasoning that a meaningful isolated test for either would require inducing undefined database row-ordering or mocking connection-pool internals — disproportionate to fixes that size, and both are exercised indirectly by the full suite on every run.
+
+## Final State (Stream B)
+
+- 10 tasks complete, each individually reviewed; one whole-branch review found and fixed 2 Critical + 6 Important cross-task issues.
+- Test suite: 111 tests, 17 files, passing on the plain documented `pnpm test` command.
+- No known open Critical or Important defect. Five smaller items surfaced by this stream's own build are tracked, not silently dropped — see `BACKLOG.md` section B.
+- Landed-cost reconciliation machinery exists and is tested but is deliberately not wired to a real data source (unknown real Sheet columns) — it fails loudly rather than silently if asked to run, per the spec's "fail loudly, never silently" principle.
+- Migration history was squashed to one clean, non-destructive migration before this repo was ever deployed anywhere — the right and only safe moment to do it.
