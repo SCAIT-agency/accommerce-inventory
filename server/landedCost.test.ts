@@ -165,4 +165,26 @@ describe("getShipmentLandedUnitCost", () => {
     const results = await getShipmentLandedUnitCost(shipment.id);
     expect(results[0].landedUnitCost).toBeCloseTo(0.15 + 100 * 1.0 / 1000 + 20 * 1.0 / 1000);
   });
+
+  it("computes EXW-only landed cost when shipment costCurrency is null (costs not yet recorded)", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
+      createdBy: 1,
+    });
+    const withItems = await getPurchaseOrderWithLineItems(po.id);
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container1",
+      lineItems: [{ poLineItemId: withItems.lineItems[0].id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: 1,
+    });
+    // Note: no recordShipmentCosts call — costCurrency remains null
+
+    const results = await getShipmentLandedUnitCost(shipment.id);
+    // With no freight/duty recorded, landed cost = EXW price only (0.15 per unit)
+    expect(results[0].landedUnitCost).toBeCloseTo(0.15);
+  });
 });

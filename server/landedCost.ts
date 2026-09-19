@@ -75,7 +75,7 @@ export async function getShipmentLandedUnitCost(
       throw new Error(`shipment line item ${line.id} has invalid qty ${line.qty}, cannot compute landed unit cost`);
     }
     const [poLine] = await db.select().from(poLineItems).where(eq(poLineItems.id, line.poLineItemId));
-    if (poLine.currency !== shipment.costCurrency) {
+    if (shipment.costCurrency != null && poLine.currency !== shipment.costCurrency) {
       throw new Error(
         `getShipmentLandedUnitCost: currency mismatch on shipment ${shipmentId}, line item ${line.id} — ` +
         `PO line currency is "${poLine.currency}" but shipment cost currency is "${shipment.costCurrency}"; ` +
