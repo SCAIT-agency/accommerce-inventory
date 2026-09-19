@@ -87,6 +87,14 @@ pnpm exec tsx scripts/run-parallel-check.mjs <path-to-todays-sheet-snapshot.json
 
 Reads today's sheet snapshot (array of `{ sku, warehouseCode, sohFromSheet }`) and verifies that Control Tower's current balances match exactly for every SKU/warehouse pair. Exits 0 (safeToCutOver: true) only when all balances match. Exits 1 if any mismatch is found, printing the detailed report. Control Tower stays the live source of truth until this has passed for the agreed comparison period.
 
+## Daily Shopify sales import
+
+```bash
+pnpm exec tsx scripts/run-daily-shopify-pull.mjs <path-to-shopify-export.json>
+```
+
+Idempotent — re-running for a day/SKU/warehouse combination already imported reports it as skipped (duplicate) rather than double-counting SOH depletion or COGS. Exits 0 even when rows are skipped (skipping is expected, not a failure); exits 1 only on a hard failure (missing file, malformed input, or an unexpected error).
+
 ## Ongoing
 
 - Deploys happen automatically on push to `main` — this is Accommerce's own
