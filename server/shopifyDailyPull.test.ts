@@ -91,4 +91,25 @@ describe("daily Shopify pull", () => {
     const ledgerRows = await db.select().from(inventoryLedger).where(eq(inventoryLedger.eventType, "sale"));
     expect(ledgerRows).toHaveLength(1);
   });
+
+  it("quarantines a row that fails downstream instead of aborting the whole batch", async () => {
+    const skuOk = await createSku({ sku: "JELLO-OK", primaryIdentifierType: "sku" });
+    const skuBad = await createSku({ sku: "JELLO-BAD", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await recordLedgerEvent({ skuId: skuOk.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    // skuBad has no stock at all — its row will fail the negative-SOH guard downstream.
+
+    const rows: ShopifyExportRow[] = [
+      { sku: "JELLO-OK", warehouse_code: "FF-DE", order_date: "2026-09-19", qty: "10" },
+      { sku: "JELLO-BAD", warehouse_code: "FF-DE", order_date: "2026-09-19", qty: "5" },
+    ];
+    const skuLookup = { "JELLO-OK": skuOk.id, "JELLO-BAD": skuBad.id };
+    const warehouseLookup = { "FF-DE": ff.id };
+
+    const result = await runDailyShopifyPull(rows, skuLookup, warehouseLookup);
+    expect(result.imported).toBe(1);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0].sku).toBe("JELLO-BAD");
+    expect(result.skipped[0].reason).toMatch(/failed to import/i);
+  });
 });

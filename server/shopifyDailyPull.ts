@@ -57,30 +57,34 @@ export async function runDailyShopifyPull(
       continue;
     }
 
-    const [existing] = await db
-      .select()
-      .from(salesActuals)
-      .where(
-        and(
-          eq(salesActuals.skuId, skuId),
-          eq(salesActuals.warehouseId, warehouseId),
-          eq(salesActuals.date, sale.date),
-          eq(salesActuals.source, "shopify_daily_pull"),
-        ),
-      );
-    if (existing) {
-      skipped.push({ sku: sale.sku, reason: "duplicate: already imported for this SKU/warehouse/date" });
-      continue;
-    }
+    try {
+      const [existing] = await db
+        .select()
+        .from(salesActuals)
+        .where(
+          and(
+            eq(salesActuals.skuId, skuId),
+            eq(salesActuals.warehouseId, warehouseId),
+            eq(salesActuals.date, sale.date),
+            eq(salesActuals.source, "shopify_daily_pull"),
+          ),
+        );
+      if (existing) {
+        skipped.push({ sku: sale.sku, reason: "duplicate: already imported for this SKU/warehouse/date" });
+        continue;
+      }
 
-    await recordSalesActual({
-      skuId,
-      warehouseId,
-      date: sale.date,
-      qty: sale.qty,
-      source: "shopify_daily_pull",
-    });
-    imported++;
+      await recordSalesActual({
+        skuId,
+        warehouseId,
+        date: sale.date,
+        qty: sale.qty,
+        source: "shopify_daily_pull",
+      });
+      imported++;
+    } catch (err) {
+      skipped.push({ sku: sale.sku, reason: `failed to import: ${err instanceof Error ? err.message : String(err)}` });
+    }
   }
 
   return { imported, skipped };
