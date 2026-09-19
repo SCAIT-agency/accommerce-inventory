@@ -224,6 +224,25 @@ function PoPaymentsSection({ poId }: { poId: number }) {
   );
 }
 
+function PoShipmentsSection({ poId }: { poId: number }) {
+  const shipmentsQuery = trpc.shipments.listForPo.useQuery(poId);
+
+  if (shipmentsQuery.error) return <div>Failed to load shipments: {shipmentsQuery.error.message}</div>;
+  if (shipmentsQuery.isLoading || !shipmentsQuery.data) return <div>Loading shipments…</div>;
+  if (shipmentsQuery.data.length === 0) return null;
+
+  return (
+    <div>
+      <strong>Shipments</strong>
+      <ul>
+        {shipmentsQuery.data.map((shipment) => (
+          <li key={shipment.id}>{shipment.shipmentRef} — {shipment.status}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function PurchaseOrdersPage() {
   const { data: pos, isLoading, error, refetch } = trpc.purchaseOrders.list.useQuery();
   const updateDate = trpc.purchaseOrders.updatePlannedReadyDate.useMutation({ onSuccess: () => refetch() });
@@ -239,7 +258,7 @@ export function PurchaseOrdersPage() {
     <div>
       <h1>Purchase Orders</h1>
       <table>
-        <thead><tr><th>PO</th><th>Status</th><th>Planned Ready</th><th>Change date</th><th>Payments</th></tr></thead>
+        <thead><tr><th>PO</th><th>Status</th><th>Planned Ready</th><th>Change date</th><th>Payments</th><th>Shipments</th></tr></thead>
         <tbody>
           {pos.map((po) => {
             const row = rowState[po.id] ?? defaultRowState(po.plannedReadyDate);
@@ -287,6 +306,9 @@ export function PurchaseOrdersPage() {
                 </td>
                 <td>
                   <PoPaymentsSection poId={po.id} />
+                </td>
+                <td>
+                  <PoShipmentsSection poId={po.id} />
                 </td>
               </tr>
             );

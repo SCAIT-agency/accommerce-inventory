@@ -3,7 +3,7 @@ import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { listSkus, createSku, listVendors, createVendor, listWarehouses, createWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
-import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, getShipmentWithLineItems, listShipments, recordShipmentCosts } from "./shipments";
+import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation } from "./salesPlan";
 import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES } from "../drizzle/schema";
@@ -57,6 +57,10 @@ export const appRouter = router({
   }),
   shipments: router({
     list: protectedProcedure.query(() => listShipments()),
+    listForPo: protectedProcedure.input(z.number()).query(async ({ input }) => {
+      const po = await getPurchaseOrderWithLineItems(input);
+      return listShipmentsForPo(po.lineItems.map((li) => li.id));
+    }),
     getWithLineItems: protectedProcedure.input(z.number()).query(({ input }) => getShipmentWithLineItems(input)),
     create: editorProcedure
       .input(z.object({
