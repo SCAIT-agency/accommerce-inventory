@@ -143,6 +143,17 @@ describe("payments and transactions", () => {
     await expect(matchTransactionToPayment(tx.id, payment.id)).resolves.not.toThrow();
   });
 
+  it("rejects matching a payment that's already matched to a different transaction — no silent double-match", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const payment = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date(), currency: "USD" });
+    const txA = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test A" });
+    const txB = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test B" });
+
+    await matchTransactionToPayment(txA.id, payment.id);
+    await expect(matchTransactionToPayment(txB.id, payment.id)).rejects.toThrow(/already matched to a different transaction/);
+  });
+
   it("rejects matching a nonexistent transaction with a clear error message", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
     const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
@@ -172,5 +183,26 @@ describe("payments and transactions", () => {
 
     const result = await listUnpaidPayments();
     expect(result.map((p) => p.id)).toEqual([unpaid.id]);
+  });
+
+  it("excludes an unpaid payment that's already matched to a transaction from the matching picker", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const matched = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
+    const unmatched = await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "200.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
+    const tx = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test" });
+    await matchTransactionToPayment(tx.id, matched.id);
+
+    const result = await listUnpaidPayments();
+    expect(result.map((p) => p.id)).toEqual([unmatched.id]);
+  });
+
+  it("includes the PO number on each unpaid payment, to disambiguate the matching picker", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
+
+    const result = await listUnpaidPayments();
+    expect(result[0].poNumber).toBe("PO3-JELLO");
   });
 });

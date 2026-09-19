@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { trpc } from "../lib/trpc";
 
-function MatchTransactionRow({ transaction, unpaidPayments, onMatched }: { transaction: { id: number; amount: string; currency: string; date: Date; counterparty?: string | null }; unpaidPayments: Array<{ id: number; sequenceNo: number; expectedAmount: string; currency: string }>; onMatched: () => void }) {
+function MatchTransactionRow({ transaction, unpaidPayments, onMatched }: { transaction: { id: number; amount: string; currency: string; date: Date; counterparty?: string | null }; unpaidPayments: Array<{ id: number; sequenceNo: number; expectedAmount: string; currency: string; poNumber: string | null }>; onMatched: () => void }) {
   const [selectedPaymentId, setSelectedPaymentId] = useState<string>("");
   const matchTransaction = trpc.payments.matchTransaction.useMutation({ onSuccess: onMatched });
 
@@ -14,7 +14,7 @@ function MatchTransactionRow({ transaction, unpaidPayments, onMatched }: { trans
         <select value={selectedPaymentId} onChange={(e) => setSelectedPaymentId(e.target.value)}>
           <option value="">Match to payment…</option>
           {unpaidPayments.map((p) => (
-            <option key={p.id} value={p.id}>#{p.sequenceNo} — {p.expectedAmount} {p.currency}</option>
+            <option key={p.id} value={p.id}>{p.poNumber ?? "no PO"} — #{p.sequenceNo} — {p.expectedAmount} {p.currency}</option>
           ))}
         </select>
         <button
