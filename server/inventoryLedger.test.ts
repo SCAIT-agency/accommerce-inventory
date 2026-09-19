@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { sql } from "drizzle-orm";
+import { sql, eq } from "drizzle-orm";
 import { db } from "./dbClient";
 import { inventoryLedger, skus, warehouses } from "../drizzle/schema";
 import { recordLedgerEvent, getSoh, getSohByWarehouse } from "./inventoryLedger";
@@ -91,5 +91,16 @@ describe("inventory ledger", () => {
     await expect(
       recordLedgerEvent({ skuId: sku.id, warehouseId: 999999, eventType: "receipt", qty: 10, unitCost: "0.42", date: new Date(), sourceRef: "PO1" }),
     ).rejects.toThrow();
+  });
+
+  it("stores and reads back inventory_ledger timestamps in UTC regardless of the test runner's local timezone", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const eventDate = new Date("2026-09-19T23:30:00.000Z"); // 23:30 UTC — close to a local-timezone day boundary in most timezones
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "0.42", date: eventDate, sourceRef: "PO1" });
+
+    const [row] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+    expect(row.date.toISOString()).toBe(eventDate.toISOString());
   });
 });
