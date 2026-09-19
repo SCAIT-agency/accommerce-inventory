@@ -1,8 +1,7 @@
 import { useMemo, useState } from "react";
 import { trpc } from "../lib/trpc";
 
-function MatchTransactionRow({ transaction, onMatched }: { transaction: { id: number; amount: string; currency: string; date: Date; counterparty?: string | null }; onMatched: () => void }) {
-  const unpaidQuery = trpc.payments.listUnpaid.useQuery();
+function MatchTransactionRow({ transaction, unpaidPayments, onMatched }: { transaction: { id: number; amount: string; currency: string; date: Date; counterparty?: string | null }; unpaidPayments: Array<{ id: number; sequenceNo: number; expectedAmount: string; currency: string }>; onMatched: () => void }) {
   const [selectedPaymentId, setSelectedPaymentId] = useState<string>("");
   const matchTransaction = trpc.payments.matchTransaction.useMutation({ onSuccess: onMatched });
 
@@ -14,7 +13,7 @@ function MatchTransactionRow({ transaction, onMatched }: { transaction: { id: nu
       <td>
         <select value={selectedPaymentId} onChange={(e) => setSelectedPaymentId(e.target.value)}>
           <option value="">Match to payment…</option>
-          {(unpaidQuery.data ?? []).map((p) => (
+          {unpaidPayments.map((p) => (
             <option key={p.id} value={p.id}>#{p.sequenceNo} — {p.expectedAmount} {p.currency}</option>
           ))}
         </select>
@@ -41,6 +40,7 @@ export function MoneyPage() {
   const skusQuery = trpc.catalog.listSkus.useQuery();
   const warehousesQuery = trpc.catalog.listWarehouses.useQuery();
   const shipmentsQuery = trpc.shipments.list.useQuery();
+  const unpaidQuery = trpc.payments.listUnpaid.useQuery();
 
   const selectedSkuId = skusQuery.data?.[0]?.id;
   const selectedWarehouseId = warehousesQuery.data?.[0]?.id;
@@ -63,10 +63,10 @@ export function MoneyPage() {
     shipmentId: selectedShipmentId,
   });
 
-  const error = skusQuery.error ?? warehousesQuery.error ?? shipmentsQuery.error ?? moneyQuery.error;
+  const error = skusQuery.error ?? warehousesQuery.error ?? shipmentsQuery.error ?? unpaidQuery.error ?? moneyQuery.error;
   if (error) return <div>Failed to load: {error.message}</div>;
 
-  const isLoading = skusQuery.isLoading || warehousesQuery.isLoading || shipmentsQuery.isLoading || moneyQuery.isLoading;
+  const isLoading = skusQuery.isLoading || warehousesQuery.isLoading || shipmentsQuery.isLoading || unpaidQuery.isLoading || moneyQuery.isLoading;
   const data = moneyQuery.data;
   if (isLoading || !data) return <div>Loading…</div>;
 
@@ -100,7 +100,7 @@ export function MoneyPage() {
                 <thead><tr><th>Date</th><th>Amount</th><th>Counterparty</th><th>Action</th></tr></thead>
                 <tbody>
                   {data.unmatchedTransactions.map((tx) => (
-                    <MatchTransactionRow key={tx.id} transaction={tx} onMatched={onMatched} />
+                    <MatchTransactionRow key={tx.id} transaction={tx} unpaidPayments={unpaidQuery.data ?? []} onMatched={onMatched} />
                   ))}
                 </tbody>
               </table>
