@@ -119,14 +119,18 @@ export function MoneyPage() {
         </table>
       )}
       {tab === "landed_cost" && (
-        <table>
-          <thead><tr><th>SKU</th><th>Landed unit cost</th></tr></thead>
-          <tbody>
-            {data.landedCost.map((row) => (
-              <tr key={row.skuId}><td>{row.skuId}</td><td>{row.landedUnitCost.toFixed(4)}</td></tr>
-            ))}
-          </tbody>
-        </table>
+        data.landedCostError ? (
+          <div>Failed to compute landed cost: {data.landedCostError}</div>
+        ) : (
+          <table>
+            <thead><tr><th>SKU</th><th>Landed unit cost</th></tr></thead>
+            <tbody>
+              {data.landedCost.map((row) => (
+                <tr key={row.skuId}><td>{row.skuId}</td><td>{row.landedUnitCost.toFixed(4)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        )
       )}
     </div>
   );

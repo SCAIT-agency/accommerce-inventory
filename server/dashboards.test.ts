@@ -2,13 +2,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { skus, warehouses, inventoryLedger, payments, transactions, purchaseOrders, vendors, salesActuals } from "../drizzle/schema";
+import { skus, warehouses, inventoryLedger, payments, transactions, purchaseOrders, vendors, salesActuals, poLineItems, shipments, shipmentLineItems } from "../drizzle/schema";
 import { getHomeSummary, getStockDashboard } from "./dashboards";
 import { createSku, createWarehouse, createVendor } from "./db";
-import { createPurchaseOrder } from "./purchaseOrders";
+import { createPurchaseOrder, getPurchaseOrderWithLineItems } from "./purchaseOrders";
 import { createExpectedPayment } from "./payments";
 import { recordLedgerEvent } from "./inventoryLedger";
 import { recordSalesActual } from "./salesPlan";
+import { createShipment, recordShipmentCosts } from "./shipments";
 
 beforeEach(async () => {
   // Real FKs now tie these tables together, but each test file only cleans
@@ -26,6 +27,9 @@ beforeEach(async () => {
     try {
       await tx.delete(transactions);
       await tx.delete(payments);
+      await tx.delete(shipmentLineItems);
+      await tx.delete(shipments);
+      await tx.delete(poLineItems);
       await tx.delete(purchaseOrders);
       await tx.delete(vendors);
       await tx.delete(salesActuals);
@@ -96,6 +100,37 @@ describe("dashboards", () => {
     expect(unscoped.dailyCogs).toEqual([]);
     expect(unscoped.landedCost).toEqual([]);
     expect(unscoped).toHaveProperty("cashflow");
+  });
+
+  it("getMoneyDashboard degrades landedCost to an error field instead of throwing on a currency mismatch, leaving other sections intact", async () => {
+    const { getMoneyDashboard } = await import("./dashboards");
+
+    // Same currency-mismatch reproduction as landedCost.test.ts: a PO line
+    // priced in USD, shipped with costs recorded in EUR.
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
+      createdBy: 1,
+    });
+    const withItems = await getPurchaseOrderWithLineItems(po.id);
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container1",
+      lineItems: [{ poLineItemId: withItems.lineItems[0].id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: 1,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "100.00", dutyCost: "20.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+
+    const result = await getMoneyDashboard(new Date("2026-09-01"), new Date("2026-09-30"), { shipmentId: shipment.id });
+    expect(result.landedCost).toEqual([]);
+    expect(result.landedCostError).toMatch(/currency/i);
+    expect(result.cashflow).toBeDefined();
   });
 
   it("Stock dashboard computes days-of-cover and status buckets from recent sales history, without dividing by zero", async () => {

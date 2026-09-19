@@ -97,14 +97,13 @@ export async function getPlanActualDeviation(skuId: number, warehouseId: number,
  * Jello buildDailyCogs() clamp had (it didn't gate on whether a batch had actually
  * landed by the date being evaluated).
  */
-export async function getDailyCogs(skuId: number, warehouseId: number, date: Date): Promise<number> {
+export async function getDailyCogs(skuId: number, warehouseId: number, dateKey: string): Promise<number> {
   const events = await db
     .select()
     .from(inventoryLedger)
     .where(and(eq(inventoryLedger.skuId, skuId), eq(inventoryLedger.warehouseId, warehouseId)))
     .orderBy(inventoryLedger.date);
 
-  const dateKey = date.toISOString().slice(0, 10);
   // Calendar-day comparison, not a raw timestamp <=: sale-derived ledger events
   // are now anchored at end-of-day (23:59:59.999), so a same-day sale would
   // fail a naive `e.date <= date` check against a midnight-anchored `date` arg.

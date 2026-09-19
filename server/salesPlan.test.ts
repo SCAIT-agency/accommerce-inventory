@@ -115,11 +115,11 @@ describe("sales plan/actuals", () => {
     await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-10", qty: 40, source: "manual" });
 
     // Sept 3 sale (80 units) is fully covered by the first batch (@2.00) — the second batch hasn't landed yet.
-    const cogsSept3 = await getDailyCogs(sku.id, ff.id, new Date("2026-09-03"));
+    const cogsSept3 = await getDailyCogs(sku.id, ff.id, "2026-09-03");
     expect(cogsSept3).toBeCloseTo(80 * 2.0, 2);
 
     // Sept 10 sale (40 units) drains the remaining 20 units of batch 1 (@2.00), then 20 units of batch 2 (@2.50).
-    const cogsSept10 = await getDailyCogs(sku.id, ff.id, new Date("2026-09-10"));
+    const cogsSept10 = await getDailyCogs(sku.id, ff.id, "2026-09-10");
     expect(cogsSept10).toBeCloseTo(20 * 2.0 + 20 * 2.5, 2);
   });
 

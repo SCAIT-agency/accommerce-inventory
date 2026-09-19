@@ -8,12 +8,13 @@ import { getCashflowForecast } from "./cashflow";
 import { getDailyCogs } from "./salesPlan";
 import { getShipmentLandedUnitCost } from "./landedCost";
 
-function enumerateDates(from: Date, to: Date): Date[] {
-  const dates: Date[] = [];
-  const cursor = new Date(from);
-  while (cursor <= to) {
-    dates.push(new Date(cursor));
-    cursor.setDate(cursor.getDate() + 1);
+function enumerateDateStrings(from: Date, to: Date): string[] {
+  const dates: string[] = [];
+  const cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
+  const end = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()));
+  while (cursor <= end) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return dates;
 }
@@ -110,19 +111,24 @@ export async function getMoneyDashboard(
 
   let dailyCogs: { date: string; cogs: number }[] = [];
   if (opts?.skuId && opts?.warehouseId) {
-    const days = enumerateDates(from, to);
+    const dateKeys = enumerateDateStrings(from, to);
     dailyCogs = await Promise.all(
-      days.map(async (date) => ({
-        date: date.toISOString().slice(0, 10),
-        cogs: await getDailyCogs(opts.skuId!, opts.warehouseId!, date),
+      dateKeys.map(async (dateKey) => ({
+        date: dateKey,
+        cogs: await getDailyCogs(opts.skuId!, opts.warehouseId!, dateKey),
       })),
     );
   }
 
   let landedCost: { skuId: number; landedUnitCost: number }[] = [];
+  let landedCostError: string | null = null;
   if (opts?.shipmentId) {
-    landedCost = await getShipmentLandedUnitCost(opts.shipmentId);
+    try {
+      landedCost = await getShipmentLandedUnitCost(opts.shipmentId);
+    } catch (err) {
+      landedCostError = err instanceof Error ? err.message : String(err);
+    }
   }
 
-  return { cashflow, unmatchedTransactions: unmatched, dailyCogs, landedCost };
+  return { cashflow, unmatchedTransactions: unmatched, dailyCogs, landedCost, landedCostError };
 }
