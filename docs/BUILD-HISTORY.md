@@ -132,5 +132,59 @@ Independently verified by the controller before the scoped re-review — not jus
 - 10 tasks complete, each individually reviewed; one whole-branch review found and fixed 2 Critical + 6 Important cross-task issues.
 - Test suite: 111 tests, 17 files, passing on the plain documented `pnpm test` command.
 - No known open Critical or Important defect. Five smaller items surfaced by this stream's own build are tracked, not silently dropped — see `BACKLOG.md` section B.
+
+---
+
+# Build History — Backlog Stream A: Wiring Completion
+
+Built 2026-09-19, directly on `main` (same convention as V1 and Stream B). Design spec: [`2026-09-19-wiring-completion-design.md`](./2026-09-19-wiring-completion-design.md). Plan: [`superpowers/plans/2026-09-19-wiring-completion.md`](./superpowers/plans/2026-09-19-wiring-completion.md). Exposes seven pieces of already-built-and-tested backend logic — plus four small write functions and two small read functions a pre-implementation code survey found were also genuinely missing — through real router procedures and minimal UI, closing the original V1 review's "logic exists, nothing reaches it" finding.
+
+## Method
+
+Same subagent-driven-development process as V1 and Stream B. Baseline before Task 1: 111/111 tests green. One methodological shift discovered mid-Task-1 and used for the rest of the build: subagents dispatched via the Agent tool cannot actually interact with a browser, despite repeated explicit instructions to do so — two different implementer instances both substituted "predicted" behavior for "observed" behavior on the first ask. Rather than keep demanding an impossible verification, the controller found this app's real, scriptable login flow (`/api/auth/password` → `/api/auth/users` → `/api/auth/select-user`, session cookie) and personally verified every task's actual runtime behavior via direct HTTP requests against a running server for the remainder of the build — a stronger, more concrete check than any subagent's browser claim could have provided.
+
+## Task-by-Task
+
+**Task 1 — Sales plan entry.** New `createSalesPlanEntry` insert path (the spec's plan-vs-actual and volatility reads already existed and were tested; only the write side was missing) + router + a new Stock page section. Fix round caught two real issues: an implementer's "live browser verification" claim was overclaimed and internally self-contradictory (asserted success while admitting in the same report that a specific claimed behavior "would require manual testing" — and that behavior wasn't even in the code). Also closed a real plan-mandated gap: the new UI silently swallowed catalog-load errors instead of surfacing them, against this codebase's explicit error-handling convention.
+
+**Mid-build, unrelated to any task**: `pnpm test` suddenly reported 224 tests instead of 112 — investigated immediately rather than trusted. Root cause: a concurrent, independent session (the user's own parallel Fable-model session, exploring separately) had committed a `.gitignore` change straight to shared `main` from its own git worktree, and vitest's recursive glob was picking up that worktree's full copy of every test file. Fixed with a `vitest.config.ts` exclude, confined to this checkout, without touching the other session's worktree in any way.
+
+**Task 2 — Shipment status progression.** Wired the existing (Stream-B-built, previously unexposed) `updateShipmentStatus` to a router + Shipments page UI, extending it with an optional `reasonCategory`/`reasonNote` to match the Purchase Order equivalent's existing shape — a real inconsistency flagged but deliberately left unfixed during Stream B's own review, closed here now that the function is finally reachable. Approved clean. First task independently verified end-to-end via the real HTTP method described above: a real shipment's status was moved planned→departed via the actual API, with the `change_log` audit row confirmed correct.
+
+**Task 3 — Customs status + actual arrival date.** Two new functions (`setShipmentCustomsStatus`, `markShipmentArrived`) — the schema columns had existed since V1 with nothing ever writing to them. Implementer honestly reported its verification method this time (typecheck + code read, no browser claim). Approved clean; all Minor findings traced to pre-existing file-wide patterns, not this task's to fix.
+
+**Task 4 — Actual depart date correction.** The most safety-critical task in this plan: a dedicated `correctShipmentActualDepartDate` bypassing the shipment transition table by design, with a required null-guard preventing it from becoming an unvalidated backdoor around the state machine Stream B built. Controller proved both sides of the guard via real API calls (rejection on a never-departed shipment; success correcting a genuinely-departed one) before dispatching review. Approved clean.
+
+**Task 5 — Payments history (pure wiring).** `payments.history` calling the existing generic `listChangeLog`. Verified end-to-end: a real payment was marked paid, generating 3 real audit rows, all correctly returned.
+
+**Task 6 — Payments re-listing.** New `listPaymentsForPo`, fixing a real bug where payments existed in the database but vanished from the UI on page reload (previously session-local React state). Carried a flagged cross-task coupling risk from pre-flight planning — Task 5 had added a `<PaymentHistory>` element inside a component this task needed to change the signature of — which resolved cleanly with no regression, confirmed independently by the controller, the implementer, and the task reviewer all separately.
+
+**Task 7 — Shipments linked to a Purchase Order (pure wiring).** `shipments.listForPo` composing two existing tested functions. Approved clean, zero findings.
+
+**Task 8 — Transaction matching UI (final planned task).** New `listUnpaidPayments`, wiring the already-existing (but never UI-exposed) `matchTransactionToPayment` to a real manual-pick dropdown on the Money page. Fix round: an N+1-shaped query (each row independently querying instead of the parent fetching once) — not a functional bug given react-query's caching, but a real inconsistency with this file's own established data-fetching convention, closed properly.
+
+## Final Whole-Branch Review
+
+One broad review pass, dispatched on the most capable available model, looked across all 8 tasks' combined diff for cross-cutting issues. Result: **2 Critical, 2 Important findings**, both Critical ones independently confirmed by the controller against the live code before any fix was dispatched:
+
+- The new UI's only path to a "departed" shipment status called the wrong function (`updateShipmentStatus` instead of `markShipmentDeparted`), producing a shipment permanently stuck with a null, unfixable actual depart date — the exact class of dead-end this whole plan exists to prevent, recreated from the opposite direction. Task 4's own null-guard, working exactly as designed, is what made this state unrecoverable rather than merely wrong.
+- A genuine React Rules-of-Hooks violation in Task 1's own fix-round code (not the original task), guaranteed to crash the Stock page on any catalog query error.
+- The new transaction-matching UI could silently double-match one payment to two transactions, with no undo path anywhere in the codebase — the existing match guard only checked the transaction side, never the payment side.
+- Three of the plan's four new write functions omitted the mandated `dbClient` threading the other three correctly had.
+
+## Fix Wave + Residual
+
+One fix wave addressed all 4 findings: a server-side guard rejecting the wrong departure path (with the client's misleading button removed, but no new "mark departed with a date" feature built — that gap predates this entire stream and is now explicitly tracked in `BACKLOG.md` rather than hastily filled), the hooks-order fix, a payment-side double-match guard plus dropdown filtering and PO-number disambiguation, and the `dbClient` threading. 3 commits, 124/124 tests, clean typecheck.
+
+Every fix was independently verified by the controller directly against the code — not the report — before the scoped re-review, including confirming the subtle distinction that the SERVER's own shipment transition table correctly still lists `planned → departed` (required by `markShipmentDeparted` itself) while only the CLIENT's copy needed the entry removed. Scoped re-review confirmed all 4 findings addressed with no new breakage, including hand-tracing the new double-match guard against the pre-existing idempotent-rematch test to confirm no regression.
+
+A deliberately deferred Important finding (a pre-existing full-table-scan query pattern, multiplied by this stream's own new per-row UI usage) and roughly seven Minor findings are tracked in `BACKLOG.md`, not silently dropped.
+
+## Final State (Stream A)
+
+- 8 tasks complete, each individually reviewed; one whole-branch review found and fixed 2 Critical + 2 Important cross-task issues.
+- Test suite: 124 tests, 17 files, passing on the plain documented `pnpm test` command.
+- No known open Critical or Important defect. All seven originally-planned wiring items are done; the backend logic identified in V1's original review as "built, tested, unreachable" is now fully reachable.
+- One real, pre-existing gap surfaced (not introduced) by this stream is now explicitly tracked rather than silently left: no UI exists anywhere to set a shipment's planned depart date or mark it departed with a real date — closed off from being reachable through the wrong function, but the correct UI for it remains unbuilt.
 - Landed-cost reconciliation machinery exists and is tested but is deliberately not wired to a real data source (unknown real Sheet columns) — it fails loudly rather than silently if asked to run, per the spec's "fail loudly, never silently" principle.
 - Migration history was squashed to one clean, non-destructive migration before this repo was ever deployed anywhere — the right and only safe moment to do it.
