@@ -13,6 +13,23 @@ const REASON_CATEGORIES = [
 
 type ReasonCategory = (typeof REASON_CATEGORIES)[number];
 
+const VALID_SHIPMENT_TRANSITIONS: Record<string, string[]> = {
+  planned: ["departed"],
+  departed: ["in_transit"],
+  in_transit: ["customs"],
+  customs: ["delivered"],
+  delivered: [],
+};
+
+interface StatusTransitionFormState {
+  reasonCategory: ReasonCategory;
+  reasonNote: string;
+}
+
+function defaultStatusTransitionForm(): StatusTransitionFormState {
+  return { reasonCategory: "logistics_delay", reasonNote: "" };
+}
+
 interface CostsFormState {
   freightCost: string;
   dutyCost: string;
@@ -29,6 +46,51 @@ function defaultCostsForm(shipment: ShipmentListItem): CostsFormState {
     reasonCategory: "freight_rate_change",
     reasonNote: "",
   };
+}
+
+function StatusTransitionControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
+  const updateStatus = trpc.shipments.updateStatus.useMutation({ onSuccess: onUpdated });
+  const [form, setForm] = useState<StatusTransitionFormState>(() => defaultStatusTransitionForm());
+  const nextStatuses = VALID_SHIPMENT_TRANSITIONS[shipment.status] ?? [];
+  const noteRequired = form.reasonCategory === "other";
+  const canSave = !noteRequired || form.reasonNote.trim().length > 0;
+
+  if (nextStatuses.length === 0) return null;
+
+  return (
+    <div>
+      <select
+        value={form.reasonCategory}
+        onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
+      >
+        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {noteRequired && (
+        <input
+          placeholder="required note"
+          value={form.reasonNote}
+          onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
+        />
+      )}
+      {nextStatuses.map((next) => (
+        <button
+          key={next}
+          disabled={!canSave || updateStatus.isPending}
+          onClick={() =>
+            updateStatus.mutate({
+              id: shipment.id,
+              newStatus: next as ShipmentListItem["status"],
+              reasonCategory: form.reasonCategory,
+              reasonNote: noteRequired ? form.reasonNote : undefined,
+            })
+          }
+        >
+          Mark {next}
+        </button>
+      ))}
+      {updateStatus.error && <div>Failed to update status: {updateStatus.error.message}</div>}
+    </div>
+  );
 }
 
 function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
@@ -53,7 +115,12 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
   return (
     <tr>
       <td>{shipment.shipmentRef}</td>
-      <td>{shipment.status}</td>
+      <td>
+        {shipment.status}
+        <div style={{ marginTop: "8px" }}>
+          <StatusTransitionControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+        </div>
+      </td>
       <td>
         <ul>
           {data.lineItems.map((li) => (

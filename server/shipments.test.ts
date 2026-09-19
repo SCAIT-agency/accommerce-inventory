@@ -196,4 +196,21 @@ describe("shipments", () => {
 
     await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: 1 })).rejects.toThrow(/invalid transition/);
   });
+
+  it("accepts an optional reason category on a status transition and logs it", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", lineItems: [], createdBy: 1 });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1, reasonCategory: "logistics_delay", reasonNote: undefined });
+
+    const entries = await listChangeLog("shipment", shipment.id);
+    expect(entries[0].field).toBe("status");
+    expect(entries[0].reasonCategory).toBe("logistics_delay");
+  });
+
+  it("still allows a status transition with no reason category (optional)", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", lineItems: [], createdBy: 1 });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });
+
+    const entries = await listChangeLog("shipment", shipment.id);
+    expect(entries[0].reasonCategory).toBeNull();
+  });
 });

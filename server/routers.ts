@@ -3,10 +3,10 @@ import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { listSkus, createSku, listVendors, createVendor, listWarehouses, createWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
-import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, getShipmentWithLineItems, listShipments, recordShipmentCosts } from "./shipments";
+import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, getShipmentWithLineItems, listShipments, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation } from "./salesPlan";
-import { REASON_CATEGORIES, PO_STATUSES } from "../drizzle/schema";
+import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES } from "../drizzle/schema";
 import { listChangeLog } from "./changeLog";
 
 const reasonCategorySchema = z.enum(REASON_CATEGORIES);
@@ -70,6 +70,20 @@ export const appRouter = router({
     markDeparted: editorProcedure
       .input(z.object({ id: z.number(), actualDate: z.date() }))
       .mutation(({ input, ctx }) => markShipmentDeparted(input.id, input.actualDate, { changedBy: ctx.user.id })),
+    updateStatus: editorProcedure
+      .input(z.object({
+        id: z.number(),
+        newStatus: z.enum(SHIPMENT_STATUSES),
+        reasonCategory: reasonCategorySchema.optional(),
+        reasonNote: z.string().optional(),
+      }))
+      .mutation(({ input, ctx }) =>
+        updateShipmentStatus(input.id, input.newStatus, {
+          changedBy: ctx.user.id,
+          reasonCategory: input.reasonCategory,
+          reasonNote: input.reasonNote,
+        }),
+      ),
     recordCosts: editorProcedure
       .input(z.object({
         id: z.number(),

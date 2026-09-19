@@ -86,7 +86,7 @@ export async function updateShipmentPlannedDepartDate(
 export async function updateShipmentStatus(
   id: number,
   newStatus: (typeof SHIPMENT_STATUSES)[number],
-  opts: { changedBy: number },
+  opts: { changedBy: number; reasonCategory?: ReasonCategory; reasonNote?: string },
 ): Promise<void> {
   const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
   if (!VALID_SHIPMENT_TRANSITIONS[shipment.status].includes(newStatus)) {
@@ -99,6 +99,8 @@ export async function updateShipmentStatus(
     field: "status",
     oldValue: shipment.status,
     newValue: newStatus,
+    reasonCategory: opts.reasonCategory,
+    reasonNote: opts.reasonNote,
     changedBy: opts.changedBy,
   });
 }
