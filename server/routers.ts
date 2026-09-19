@@ -188,6 +188,7 @@ export const appRouter = router({
     matchTransaction: editorProcedure
       .input(z.object({ transactionId: z.number(), paymentId: z.number() }))
       .mutation(({ input }) => matchTransactionToPayment(input.transactionId, input.paymentId)),
+    history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("payment", input)),
   }),
   salesPlan: router({
     create: editorProcedure

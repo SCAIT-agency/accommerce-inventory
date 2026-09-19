@@ -68,6 +68,7 @@ function MarkPaidRow({ payment, onPaid }: { payment: Payment; onPaid: (updated: 
     return (
       <li>
         Payment #{payment.sequenceNo}: paid {payment.paidAmount} {payment.currency} on {payment.paidDate?.toString()}
+        <PaymentHistory paymentId={payment.id} />
       </li>
     );
   }
@@ -120,7 +121,30 @@ function MarkPaidRow({ payment, onPaid }: { payment: Payment; onPaid: (updated: 
         Mark paid
       </button>
       {markPaid.error && <div>Failed to save: {markPaid.error.message}</div>}
+      <PaymentHistory paymentId={payment.id} />
     </li>
+  );
+}
+
+function PaymentHistory({ paymentId }: { paymentId: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const historyQuery = trpc.payments.history.useQuery(paymentId, { enabled: expanded });
+
+  return (
+    <span>
+      {" "}
+      <button onClick={() => setExpanded((prev) => !prev)}>{expanded ? "Hide history" : "History"}</button>
+      {expanded && historyQuery.data && (
+        <ul>
+          {historyQuery.data.map((entry) => (
+            <li key={entry.id}>
+              {entry.field}: {entry.oldValue ?? "—"} → {entry.newValue ?? "—"}
+              {entry.reasonCategory && ` (${entry.reasonCategory}${entry.reasonNote ? `: ${entry.reasonNote}` : ""})`}
+            </li>
+          ))}
+        </ul>
+      )}
+    </span>
   );
 }
 
