@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { salesPlan, salesActuals, inventoryLedger, skus, warehouses } from "../drizzle/schema";
-import { recordSalesActual, getSalesVolatility, getPlanActualDeviation, getDailyCogs } from "./salesPlan";
+import { recordSalesActual, getSalesVolatility, getPlanActualDeviation, getDailyCogs, createSalesPlanEntry } from "./salesPlan";
 import { createSku, createWarehouse } from "./db";
 import { recordLedgerEvent } from "./inventoryLedger";
 
@@ -121,5 +121,23 @@ describe("sales plan/actuals", () => {
     // Sept 10 sale (40 units) drains the remaining 20 units of batch 1 (@2.00), then 20 units of batch 2 (@2.50).
     const cogsSept10 = await getDailyCogs(sku.id, ff.id, new Date("2026-09-10"));
     expect(cogsSept10).toBeCloseTo(20 * 2.0 + 20 * 2.5, 2);
+  });
+
+  it("creates a sales plan entry with a direct insert, no audit trail", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    const entry = await createSalesPlanEntry({
+      skuId: sku.id,
+      warehouseId: ff.id,
+      periodDate: new Date("2026-10-01"),
+      plannedQty: 500,
+    });
+
+    expect(entry.plannedQty).toBe(500);
+    expect(entry.skuId).toBe(sku.id);
+
+    const rows = await db.select().from(salesPlan);
+    expect(rows).toHaveLength(1);
   });
 });

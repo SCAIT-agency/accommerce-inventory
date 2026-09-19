@@ -1,8 +1,15 @@
 import { and, between, desc, eq } from "drizzle-orm";
-import { db } from "./dbClient";
+import { db, type DbClient } from "./dbClient";
 import { salesPlan, salesActuals, inventoryLedger } from "../drizzle/schema";
 import { recordLedgerEvent } from "./inventoryLedger";
 import { computeFifoCogs, type LandedBatch, type SaleEvent } from "./landedCost";
+
+export interface CreateSalesPlanEntryInput {
+  skuId: number;
+  warehouseId: number;
+  periodDate: Date;
+  plannedQty: number;
+}
 
 export interface RecordSalesActualInput {
   skuId: number;
@@ -10,6 +17,15 @@ export interface RecordSalesActualInput {
   date: Date;
   qty: number;
   source: "shopify_daily_pull" | "manual";
+}
+
+export async function createSalesPlanEntry(
+  input: CreateSalesPlanEntryInput,
+  dbClient: DbClient = db,
+): Promise<typeof salesPlan.$inferSelect> {
+  const [result] = await dbClient.insert(salesPlan).values(input);
+  const [row] = await dbClient.select().from(salesPlan).where(eq(salesPlan.id, result.insertId));
+  return row;
 }
 
 export async function recordSalesActual(input: RecordSalesActualInput): Promise<void> {

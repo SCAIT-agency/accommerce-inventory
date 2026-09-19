@@ -5,6 +5,7 @@ import { listSkus, createSku, listVendors, createVendor, listWarehouses, createW
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, getShipmentWithLineItems, listShipments, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions } from "./payments";
+import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation } from "./salesPlan";
 import { REASON_CATEGORIES, PO_STATUSES } from "../drizzle/schema";
 import { listChangeLog } from "./changeLog";
 
@@ -131,6 +132,17 @@ export const appRouter = router({
     matchTransaction: editorProcedure
       .input(z.object({ transactionId: z.number(), paymentId: z.number() }))
       .mutation(({ input }) => matchTransactionToPayment(input.transactionId, input.paymentId)),
+  }),
+  salesPlan: router({
+    create: editorProcedure
+      .input(z.object({ skuId: z.number(), warehouseId: z.number(), periodDate: z.date(), plannedQty: z.number() }))
+      .mutation(({ input }) => createSalesPlanEntry(input)),
+    volatility: protectedProcedure
+      .input(z.object({ skuId: z.number(), warehouseId: z.number(), weeks: z.number() }))
+      .query(({ input }) => getSalesVolatility(input.skuId, input.warehouseId, input.weeks)),
+    planActualDeviation: protectedProcedure
+      .input(z.object({ skuId: z.number(), warehouseId: z.number(), from: z.date(), to: z.date() }))
+      .query(({ input }) => getPlanActualDeviation(input.skuId, input.warehouseId, input.from, input.to)),
   }),
 });
 
