@@ -4,7 +4,7 @@ import { computeFifoCogs, getShipmentLandedUnitCost } from "./landedCost";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, inventoryLedger, payments } from "../drizzle/schema";
 import { createSku, createVendor } from "./db";
-import { createPurchaseOrder } from "./purchaseOrders";
+import { createPurchaseOrder, getPurchaseOrderWithLineItems } from "./purchaseOrders";
 import { createShipment, recordShipmentCosts } from "./shipments";
 
 describe("computeFifoCogs", () => {
@@ -115,5 +115,54 @@ describe("getShipmentLandedUnitCost", () => {
     );
 
     await expect(getShipmentLandedUnitCost(shipment.id)).rejects.toThrow(/invalid qty/);
+  });
+
+  it("rejects computing landed cost when the PO line's currency doesn't match the shipment's cost currency", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
+      createdBy: 1,
+    });
+    const withItems = await getPurchaseOrderWithLineItems(po.id);
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container1",
+      lineItems: [{ poLineItemId: withItems.lineItems[0].id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: 1,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "100.00", dutyCost: "20.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+
+    await expect(getShipmentLandedUnitCost(shipment.id)).rejects.toThrow(/currency/i);
+  });
+
+  it("still computes landed cost correctly when currencies match (no regression)", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
+      createdBy: 1,
+    });
+    const withItems = await getPurchaseOrderWithLineItems(po.id);
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container1",
+      lineItems: [{ poLineItemId: withItems.lineItems[0].id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: 1,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "100.00", dutyCost: "20.00", costCurrency: "USD" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+
+    const results = await getShipmentLandedUnitCost(shipment.id);
+    expect(results[0].landedUnitCost).toBeCloseTo(0.15 + 100 * 1.0 / 1000 + 20 * 1.0 / 1000);
   });
 });
