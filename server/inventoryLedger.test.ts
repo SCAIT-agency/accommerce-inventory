@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { inventoryLedger, skus, warehouses } from "../drizzle/schema";
 import { recordLedgerEvent, getSoh, getSohByWarehouse } from "./inventoryLedger";
@@ -97,9 +97,41 @@ describe("inventory ledger", () => {
     // Directly verify that the pool's connection event handler has set the session
     // timezone to UTC. This test proves the SET time_zone command was executed,
     // independent of whether the server's *default* timezone also happens to be UTC.
-    const result = await db.execute(sql`SELECT @@session.time_zone as tz`);
+    const [rows] = await db.execute(sql`SELECT @@session.time_zone as tz`);
     // MySQL returns the timezone as either '+00:00' (if set explicitly) or the
     // server's default (e.g. 'UTC', 'SYSTEM'). We explicitly set '+00:00', so expect that.
-    expect(result[0][0].tz).toBe("+00:00");
+    // drizzle's mysql2 execute() always types its result as the raw driver
+    // tuple [ResultSetHeader, FieldPacket[]] regardless of the query shape, so
+    // the actual row array must be cast through `unknown` first.
+    expect((rows as unknown as { tz: string }[])[0].tz).toBe("+00:00");
+  });
+
+  it("round-trips an inventory_ledger timestamp through the pinned-UTC session without drift", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const written = new Date("2026-09-10T23:59:59.999Z");
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 10, unitCost: "0.42", date: written, sourceRef: "PO1" });
+
+    const [row] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+    expect(row.date.toISOString()).toBe(written.toISOString());
+  });
+
+  it("negative-SOH guard sees same-day events regardless of insertion order or anchor time", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "0.42", date: new Date("2026-09-10T14:00:00.000Z"), sourceRef: "PO1" });
+    // A whole-day sales aggregate, anchored at end-of-day per recordSalesActual's convention.
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -80, unitCost: null, date: new Date("2026-09-10T23:59:59.999Z"), sourceRef: "sales_actual:manual" });
+
+    // A same-day correction with an earlier real timestamp than the day-close
+    // sale above — must still see that sale in its own solvency check.
+    await expect(
+      recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "adjustment", qty: -30, unitCost: null, date: new Date("2026-09-10T15:00:00.000Z"), sourceRef: "manual-correction" }),
+    ).rejects.toThrow(/negative/i);
+
+    const soh = await getSoh(sku.id, ff.id);
+    expect(soh).toBe(20); // 100 - 80; the rejected adjustment never landed
   });
 });
