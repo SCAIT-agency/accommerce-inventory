@@ -109,21 +109,14 @@ describe("dashboards", () => {
 
     // Receipt 500, sell 10/day across all 30 window days -> SOH 200,
     // avgDailySales 300/30 = 10 -> daysOfCover 20 (< 21 -> critical)
-    // Receipt is pinned to midnight of day 29, not the real wall-clock test-run
-    // time daysAgo(29) would give — the day-29 sale below now lands at midnight
-    // of its calendar day too (sales dates are calendar-day strings as of this
-    // task), so an un-normalized receipt timestamped later in that same day
-    // would sort AFTER the sale and make getSoh's `lte` as-of-date check miss
-    // it, spuriously tripping the negative-SOH guard.
-    await recordLedgerEvent({ skuId: criticalSku.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "0.42", date: new Date(daysAgoStr(29)), sourceRef: "PO-CRIT" });
+    await recordLedgerEvent({ skuId: criticalSku.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-CRIT" });
     for (let i = 0; i < 30; i++) {
       await recordSalesActual({ skuId: criticalSku.id, warehouseId: ff.id, date: daysAgoStr(i), qty: 10, source: "manual" });
     }
 
     // Receipt 1000, sell 1/day across all 30 window days -> SOH 970,
     // avgDailySales 30/30 = 1 -> daysOfCover 970 (>= 90 -> overstock)
-    // Same day-29 midnight-normalization reasoning as the critical-SKU receipt above.
-    await recordLedgerEvent({ skuId: overstockSku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: new Date(daysAgoStr(29)), sourceRef: "PO-OVER" });
+    await recordLedgerEvent({ skuId: overstockSku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-OVER" });
     for (let i = 0; i < 30; i++) {
       await recordSalesActual({ skuId: overstockSku.id, warehouseId: ff.id, date: daysAgoStr(i), qty: 1, source: "manual" });
     }

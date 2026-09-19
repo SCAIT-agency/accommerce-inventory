@@ -42,7 +42,10 @@ export async function recordSalesActual(input: RecordSalesActualInput): Promise<
         eventType: "sale",
         qty: -input.qty,
         unitCost: null,
-        date: new Date(input.date),
+        // Anchored at end-of-day, not midnight: sales_actuals rows are whole-day
+        // aggregates, and must sort after any real-timestamped event (e.g. a
+        // same-day receipt) for the negative-SOH guard's same-day ordering to hold.
+        date: new Date(`${input.date}T23:59:59.999Z`),
         sourceRef: `sales_actual:${input.source}`,
       },
       tx,
@@ -102,12 +105,15 @@ export async function getDailyCogs(skuId: number, warehouseId: number, date: Dat
     .orderBy(inventoryLedger.date);
 
   const dateKey = date.toISOString().slice(0, 10);
+  // Calendar-day comparison, not a raw timestamp <=: sale-derived ledger events
+  // are now anchored at end-of-day (23:59:59.999), so a same-day sale would
+  // fail a naive `e.date <= date` check against a midnight-anchored `date` arg.
   const receipts: LandedBatch[] = events
-    .filter((e) => e.eventType === "receipt" && e.date <= date)
+    .filter((e) => e.eventType === "receipt" && e.date.toISOString().slice(0, 10) <= dateKey)
     .map((e) => ({ qty: e.qty, unitCost: parseFloat(e.unitCost ?? "0"), date: e.date }));
 
   const salesUpToAndIncluding: SaleEvent[] = events
-    .filter((e) => e.eventType === "sale" && e.date <= date)
+    .filter((e) => e.eventType === "sale" && e.date.toISOString().slice(0, 10) <= dateKey)
     .map((e) => ({ qty: Math.abs(e.qty), date: e.date }));
   const salesBeforeDate: SaleEvent[] = salesUpToAndIncluding.filter(
     (s) => s.date.toISOString().slice(0, 10) !== dateKey,
