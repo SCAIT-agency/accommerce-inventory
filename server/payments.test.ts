@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { payments, transactions, purchaseOrders, vendors, changeLog } from "../drizzle/schema";
-import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions } from "./payments";
+import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listUnpaidPayments } from "./payments";
 import { createVendor } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 
@@ -161,5 +161,16 @@ describe("payments and transactions", () => {
     const result = await listPaymentsForPo(po.id);
     expect(result).toHaveLength(2);
     expect(result.map((p) => p.sequenceNo).sort()).toEqual([1, 2]);
+  });
+
+  it("lists only unpaid expected payments, for the transaction-matching picker", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const unpaid = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
+    const toBePaid = await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "200.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
+    await markPaymentPaid(toBePaid.id, { amount: "200.00", fxRate: "1", paidDate: new Date("2026-09-10"), reasonCategory: "payment_timing", changedBy: 1 });
+
+    const result = await listUnpaidPayments();
+    expect(result.map((p) => p.id)).toEqual([unpaid.id]);
   });
 });

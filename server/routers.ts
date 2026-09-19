@@ -4,7 +4,7 @@ import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboar
 import { listSkus, createSku, listVendors, createVendor, listWarehouses, createWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
-import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo } from "./payments";
+import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation } from "./salesPlan";
 import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES } from "../drizzle/schema";
 import { listChangeLog } from "./changeLog";
@@ -151,6 +151,7 @@ export const appRouter = router({
   payments: router({
     listForPo: protectedProcedure.input(z.number()).query(({ input }) => listPaymentsForPo(input)),
     listUnmatchedTransactions: protectedProcedure.query(() => listUnmatchedTransactions()),
+    listUnpaid: protectedProcedure.query(() => listUnpaidPayments()),
     createExpectedPayment: editorProcedure
       .input(z.object({
         poId: z.number().optional(),
