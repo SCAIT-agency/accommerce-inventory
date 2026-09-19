@@ -52,7 +52,9 @@ export const appRouter = router({
       .mutation(({ input, ctx }) => updatePurchaseOrderStatus(input.id, input.newStatus, { ...input, changedBy: ctx.user.id })),
     updatePlannedReadyDate: editorProcedure
       .input(z.object({ id: z.number(), newDate: z.date(), reasonCategory: reasonCategorySchema, reasonNote: z.string().optional() }))
-      .mutation(({ input, ctx }) => updatePurchaseOrderPlannedReadyDate(input.id, input.newDate, { ...input, changedBy: ctx.user.id })),
+      .mutation(({ input, ctx }) =>
+        updatePurchaseOrderPlannedReadyDate(input.id, input.newDate.toISOString().slice(0, 10), { ...input, changedBy: ctx.user.id }),
+      ),
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("purchase_order", input)),
   }),
   shipments: router({

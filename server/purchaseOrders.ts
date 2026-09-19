@@ -76,7 +76,7 @@ export async function updatePurchaseOrderStatus(
 
 export async function updatePurchaseOrderPlannedReadyDate(
   id: number,
-  newDate: Date,
+  newDate: string,
   opts: { reasonCategory: ReasonCategory; reasonNote?: string; changedBy: number },
 ) {
   const [po] = await db.select().from(purchaseOrders).where(eq(purchaseOrders.id, id));
@@ -85,8 +85,8 @@ export async function updatePurchaseOrderPlannedReadyDate(
     entityType: "purchase_order",
     entityId: id,
     field: "plannedReadyDate",
-    oldValue: po.plannedReadyDate?.toISOString() ?? null,
-    newValue: newDate.toISOString(),
+    oldValue: po.plannedReadyDate ?? null,
+    newValue: newDate,
     reasonCategory: opts.reasonCategory,
     reasonNote: opts.reasonNote,
     changedBy: opts.changedBy,

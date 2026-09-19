@@ -19,12 +19,13 @@ interface RowState {
   newDate: string;
 }
 
-function toDateInputValue(date: Date | null | undefined): string {
+function toDateInputValue(date: string | Date | null | undefined): string {
+  if (typeof date === "string") return date;
   const base = date ?? new Date();
   return base.toISOString().slice(0, 10);
 }
 
-function defaultRowState(plannedReadyDate: Date | null | undefined): RowState {
+function defaultRowState(plannedReadyDate: string | Date | null | undefined): RowState {
   return { reasonCategory: "production_delay", reasonNote: "", newDate: toDateInputValue(plannedReadyDate) };
 }
 
@@ -251,7 +252,7 @@ export function PurchaseOrdersPage() {
   if (error) return <div>Failed to load: {error.message}</div>;
   if (isLoading || !pos) return <div>Loading…</div>;
 
-  const setRow = (id: number, plannedReadyDate: Date | null | undefined, patch: Partial<RowState>) =>
+  const setRow = (id: number, plannedReadyDate: string | Date | null | undefined, patch: Partial<RowState>) =>
     setRowState((prev) => ({ ...prev, [id]: { ...(prev[id] ?? defaultRowState(plannedReadyDate)), ...patch } }));
 
   return (

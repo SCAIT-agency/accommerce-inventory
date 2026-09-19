@@ -1,5 +1,5 @@
 import { sql, type SQL } from "drizzle-orm";
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index, unique } from "drizzle-orm/mysql-core";
+import { date, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index, unique } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -111,7 +111,7 @@ export const purchaseOrders = mysqlTable("purchase_orders", {
   vendorId: int("vendorId").notNull(),
   vendorReference: varchar("vendorReference", { length: 128 }),
   status: mysqlEnum("status", PO_STATUSES).default("draft").notNull(),
-  plannedReadyDate: timestamp("plannedReadyDate"),
+  plannedReadyDate: date("plannedReadyDate", { mode: "string" }),
   notes: text("notes"),
   createdBy: int("createdBy").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),

@@ -51,7 +51,7 @@ describe("purchase orders", () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
     const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
 
-    await updatePurchaseOrderPlannedReadyDate(po.id, new Date("2026-10-08"), {
+    await updatePurchaseOrderPlannedReadyDate(po.id, "2026-10-08", {
       reasonCategory: "artwork_delay",
       changedBy: 1,
     });
@@ -59,6 +59,16 @@ describe("purchase orders", () => {
     const entries = await db.select().from(changeLog);
     expect(entries).toHaveLength(1);
     expect(entries[0].reasonCategory).toBe("artwork_delay");
+  });
+
+  it("stores and reads back a planned ready date as an exact calendar day, no time-of-day drift", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+
+    await updatePurchaseOrderPlannedReadyDate(po.id, "2026-12-31", { reasonCategory: "artwork_delay", changedBy: 1 });
+
+    const updated = await getPurchaseOrderWithLineItems(po.id);
+    expect(updated.plannedReadyDate).toBe("2026-12-31");
   });
 
   it("rejects an invalid status transition", async () => {
