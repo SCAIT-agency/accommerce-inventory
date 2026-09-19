@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { sql, eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { inventoryLedger, skus, warehouses } from "../drizzle/schema";
 import { recordLedgerEvent, getSoh, getSohByWarehouse } from "./inventoryLedger";

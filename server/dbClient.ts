@@ -16,7 +16,9 @@ const pool = mysql.createPool(ENV.databaseUrl);
 // TIMESTAMP reads are always interpreted as UTC, regardless of the server's
 // default configuration.
 pool.pool.on("connection", (connection) => {
-  connection.query("SET time_zone = '+00:00'");
+  connection.query("SET time_zone = '+00:00'", (err) => {
+    if (err) console.error("Failed to set session timezone to UTC on a new pool connection:", err);
+  });
 });
 
 export const db = drizzle(pool, { schema, mode: "default" });
