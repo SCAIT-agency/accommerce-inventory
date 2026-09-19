@@ -3,13 +3,22 @@ import mysql from "mysql2/promise";
 import { ENV } from "./_core/env";
 import * as schema from "../drizzle/schema";
 
-// Pinned to UTC regardless of the MySQL server's own configured session
-// timezone: every consumer of a TIMESTAMP column in this codebase computes
-// calendar-day boundaries via `.toISOString().slice(0, 10)`, which is only
-// correct if the value MySQL hands back is already UTC — an unpinned
-// connection inherits whatever timezone the server happens to be configured
-// with, silently shifting day-boundary calculations on any non-UTC server.
-const pool = mysql.createPool({ uri: ENV.databaseUrl, timezone: "Z" });
+const pool = mysql.createPool(ENV.databaseUrl);
+
+// Pin every connection's session timezone to UTC.
+//
+// MySQL stores TIMESTAMP columns as UTC internally, but converts them to the
+// session's configured timezone when reading back — if the server's session
+// timezone is not UTC, the raw string MySQL returns is already shifted, and
+// Drizzle's `new Date(value + "+0000")` then misinterprets it as a different
+// absolute time. This event handler issues `SET time_zone = '+00:00'` on every
+// new physical connection (before the pool hands it to any consumer), ensuring
+// TIMESTAMP reads are always interpreted as UTC, regardless of the server's
+// default configuration.
+pool.pool.on("connection", (connection) => {
+  connection.query("SET time_zone = '+00:00'");
+});
+
 export const db = drizzle(pool, { schema, mode: "default" });
 
 // Lets functions accept either the pool-backed `db` or a `db.transaction(...)`

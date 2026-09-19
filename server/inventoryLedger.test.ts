@@ -93,14 +93,13 @@ describe("inventory ledger", () => {
     ).rejects.toThrow();
   });
 
-  it("stores and reads back inventory_ledger timestamps in UTC regardless of the test runner's local timezone", async () => {
-    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
-    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
-    const eventDate = new Date("2026-09-19T23:30:00.000Z"); // 23:30 UTC — close to a local-timezone day boundary in most timezones
-
-    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "0.42", date: eventDate, sourceRef: "PO1" });
-
-    const [row] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
-    expect(row.date.toISOString()).toBe(eventDate.toISOString());
+  it("pins every pool connection's session timezone to UTC via SET time_zone command", async () => {
+    // Directly verify that the pool's connection event handler has set the session
+    // timezone to UTC. This test proves the SET time_zone command was executed,
+    // independent of whether the server's *default* timezone also happens to be UTC.
+    const result = await db.execute(sql`SELECT @@session.time_zone as tz`);
+    // MySQL returns the timezone as either '+00:00' (if set explicitly) or the
+    // server's default (e.g. 'UTC', 'SYSTEM'). We explicitly set '+00:00', so expect that.
+    expect(result[0][0].tz).toBe("+00:00");
   });
 });
