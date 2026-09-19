@@ -150,4 +150,16 @@ describe("payments and transactions", () => {
 
     await expect(matchTransactionToPayment(999999, payment.id)).rejects.toThrow(/no transaction found/);
   });
+
+  it("lists payments for a PO, so they survive a reload instead of only existing in session state", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "200.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
+
+    const { listPaymentsForPo } = await import("./payments");
+    const result = await listPaymentsForPo(po.id);
+    expect(result).toHaveLength(2);
+    expect(result.map((p) => p.sequenceNo).sort()).toEqual([1, 2]);
+  });
 });

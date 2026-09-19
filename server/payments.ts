@@ -109,3 +109,7 @@ export async function matchTransactionToPayment(transactionId: number, paymentId
 export async function listUnmatchedTransactions(): Promise<Transaction[]> {
   return db.select().from(transactions).where(isNull(transactions.matchedPaymentId));
 }
+
+export async function listPaymentsForPo(poId: number, dbClient: DbClient = db): Promise<Payment[]> {
+  return dbClient.select().from(payments).where(eq(payments.poId, poId));
+}

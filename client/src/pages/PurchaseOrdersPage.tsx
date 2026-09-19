@@ -57,8 +57,8 @@ function defaultMarkPaidForm(expectedAmount: string): MarkPaidFormState {
   };
 }
 
-function MarkPaidRow({ payment, onPaid }: { payment: Payment; onPaid: (updated: Payment) => void }) {
-  const markPaid = trpc.payments.markPaid.useMutation({ onSuccess: onPaid });
+function MarkPaidRow({ payment, onPaid }: { payment: Payment; onPaid: () => void }) {
+  const markPaid = trpc.payments.markPaid.useMutation({ onSuccess: () => onPaid() });
   const [form, setForm] = useState<MarkPaidFormState>(() => defaultMarkPaidForm(payment.expectedAmount));
   const noteRequired = form.reasonCategory === "other";
   const canSave = form.amount.trim().length > 0 && form.fxRate.trim().length > 0
@@ -150,28 +150,31 @@ function PaymentHistory({ paymentId }: { paymentId: number }) {
 
 function PoPaymentsSection({ poId }: { poId: number }) {
   const utils = trpc.useUtils();
-  const [payments, setPayments] = useState<Payment[]>([]);
+  const paymentsQuery = trpc.payments.listForPo.useQuery(poId);
   const [form, setForm] = useState<NewPaymentFormState>(() => defaultNewPaymentForm());
   const createPayment = trpc.payments.createExpectedPayment.useMutation({
-    onSuccess: (payment) => {
-      setPayments((prev) => [...prev, payment]);
+    onSuccess: () => {
+      utils.payments.listForPo.invalidate(poId);
       setForm((prev) => ({ ...defaultNewPaymentForm(), sequenceNo: String(Number(prev.sequenceNo) + 1) }));
       utils.dashboards.money.invalidate();
     },
   });
   const canCreate = form.expectedAmount.trim().length > 0 && form.currency.trim().length > 0;
 
-  const refreshAfterPaid = (updated: Payment) => {
-    setPayments((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+  const refreshAfterPaid = () => {
+    utils.payments.listForPo.invalidate(poId);
     utils.dashboards.money.invalidate();
   };
+
+  if (paymentsQuery.error) return <div>Failed to load payments: {paymentsQuery.error.message}</div>;
 
   return (
     <div>
       <strong>Payments</strong>
-      {payments.length > 0 && (
+      {paymentsQuery.isLoading && <div>Loading payments…</div>}
+      {paymentsQuery.data && paymentsQuery.data.length > 0 && (
         <ul>
-          {payments.map((payment) => (
+          {paymentsQuery.data.map((payment) => (
             <MarkPaidRow
               key={payment.id}
               payment={payment}
