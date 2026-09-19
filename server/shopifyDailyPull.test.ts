@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { skus, warehouses, salesActuals, inventoryLedger } from "../drizzle/schema";
-import { parseShopifyExport, runDailyShopifyPull } from "./shopifyDailyPull";
+import { parseShopifyExport, runDailyShopifyPull, type ShopifyExportRow } from "./shopifyDailyPull";
 import { createSku, createWarehouse } from "./db";
 import { recordLedgerEvent } from "./inventoryLedger";
 
@@ -65,5 +65,30 @@ describe("daily Shopify pull", () => {
     const result = await runDailyShopifyPull([], {}, {});
     expect(result.imported).toBe(0);
     expect(result.skipped).toEqual([]);
+  });
+
+  it("skips a row that duplicates an already-imported SKU/warehouse/date/source, without double-counting SOH or COGS", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1" });
+
+    const rows: ShopifyExportRow[] = [
+      { sku: "JELLO-CAL-500", warehouse_code: "FF-DE", order_date: "2026-09-19", qty: "10" },
+    ];
+    const skuLookup = { "JELLO-CAL-500": sku.id };
+    const warehouseLookup = { "FF-DE": ff.id };
+
+    const firstRun = await runDailyShopifyPull(rows, skuLookup, warehouseLookup);
+    expect(firstRun.imported).toBe(1);
+    expect(firstRun.skipped).toEqual([]);
+
+    const secondRun = await runDailyShopifyPull(rows, skuLookup, warehouseLookup);
+    expect(secondRun.imported).toBe(0);
+    expect(secondRun.skipped).toEqual([{ sku: "JELLO-CAL-500", reason: expect.stringContaining("duplicate") }]);
+
+    const actualRows = await db.select().from(salesActuals);
+    expect(actualRows).toHaveLength(1);
+    const ledgerRows = await db.select().from(inventoryLedger).where(eq(inventoryLedger.eventType, "sale"));
+    expect(ledgerRows).toHaveLength(1);
   });
 });

@@ -1,3 +1,6 @@
+import { and, eq } from "drizzle-orm";
+import { db } from "./dbClient";
+import { salesActuals } from "../drizzle/schema";
 import { recordSalesActual } from "./salesPlan";
 
 export interface ShopifyExportRow {
@@ -53,6 +56,23 @@ export async function runDailyShopifyPull(
       skipped.push({ sku: sale.sku, reason: "unknown warehouse" });
       continue;
     }
+
+    const [existing] = await db
+      .select()
+      .from(salesActuals)
+      .where(
+        and(
+          eq(salesActuals.skuId, skuId),
+          eq(salesActuals.warehouseId, warehouseId),
+          eq(salesActuals.date, sale.date),
+          eq(salesActuals.source, "shopify_daily_pull"),
+        ),
+      );
+    if (existing) {
+      skipped.push({ sku: sale.sku, reason: "duplicate: already imported for this SKU/warehouse/date" });
+      continue;
+    }
+
     await recordSalesActual({
       skuId,
       warehouseId,

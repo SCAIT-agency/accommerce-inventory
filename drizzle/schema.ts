@@ -236,13 +236,21 @@ export type SalesPlanRow = typeof salesPlan.$inferSelect;
 
 export const SALES_ACTUAL_SOURCES = ["shopify_daily_pull", "manual"] as const;
 
-export const salesActuals = mysqlTable("sales_actuals", {
-  id: int("id").autoincrement().primaryKey(),
-  skuId: int("skuId").notNull(),
-  warehouseId: int("warehouseId").notNull(),
-  date: date("date", { mode: "string" }).notNull(),
-  qty: int("qty").notNull(),
-  source: mysqlEnum("source", SALES_ACTUAL_SOURCES).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+export const salesActuals = mysqlTable(
+  "sales_actuals",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    skuId: int("skuId").notNull(),
+    warehouseId: int("warehouseId").notNull(),
+    date: date("date", { mode: "string" }).notNull(),
+    qty: int("qty").notNull(),
+    source: mysqlEnum("source", SALES_ACTUAL_SOURCES).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    skuWarehouseDateSourceUnique: unique("sales_actuals_sku_warehouse_date_source_unique").on(
+      table.skuId, table.warehouseId, table.date, table.source,
+    ),
+  }),
+);
 export type SalesActualRow = typeof salesActuals.$inferSelect;

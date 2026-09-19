@@ -22,6 +22,13 @@
       "when": 1789838493825,
       "tag": "0002_sparkling_star_brand",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1789839857571,
+      "tag": "0003_aspiring_slayback",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,1 @@
+ALTER TABLE `sales_actuals` ADD CONSTRAINT `sales_actuals_sku_warehouse_date_source_unique` UNIQUE(`skuId`,`warehouseId`,`date`,`source`);
