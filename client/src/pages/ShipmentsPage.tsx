@@ -66,6 +66,16 @@ function defaultCustomsArrivalForm(shipment: ShipmentListItem): CustomsArrivalFo
   };
 }
 
+interface DepartDateCorrectionFormState {
+  newDate: string;
+  reasonCategory: ReasonCategory;
+  reasonNote: string;
+}
+
+function defaultDepartDateCorrectionForm(): DepartDateCorrectionFormState {
+  return { newDate: new Date().toISOString().slice(0, 10), reasonCategory: "logistics_delay", reasonNote: "" };
+}
+
 function StatusTransitionControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
   const updateStatus = trpc.shipments.updateStatus.useMutation({ onSuccess: onUpdated });
   const [form, setForm] = useState<StatusTransitionFormState>(() => defaultStatusTransitionForm());
@@ -176,6 +186,55 @@ function CustomsArrivalControl({ shipment, onUpdated }: { shipment: ShipmentList
   );
 }
 
+function DepartDateCorrectionControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
+  const correctDate = trpc.shipments.correctActualDepartDate.useMutation({ onSuccess: onUpdated });
+  const [form, setForm] = useState<DepartDateCorrectionFormState>(() => defaultDepartDateCorrectionForm());
+  const noteRequired = form.reasonCategory === "other";
+  const canSave = !noteRequired || form.reasonNote.trim().length > 0;
+
+  // markShipmentDeparted hasn't set an actual depart date yet on this shipment —
+  // nothing to correct, so don't render the control at all.
+  if (!shipment.actualDepartDate) return null;
+
+  return (
+    <div>
+      <span>Actual depart: {new Date(shipment.actualDepartDate).toISOString().slice(0, 10)}</span>
+      <input
+        type="date"
+        value={form.newDate}
+        onChange={(e) => setForm((prev) => ({ ...prev, newDate: e.target.value }))}
+      />
+      <select
+        value={form.reasonCategory}
+        onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
+      >
+        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {noteRequired && (
+        <input
+          placeholder="required note"
+          value={form.reasonNote}
+          onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
+        />
+      )}
+      <button
+        disabled={!canSave || correctDate.isPending}
+        onClick={() =>
+          correctDate.mutate({
+            id: shipment.id,
+            newDate: new Date(form.newDate),
+            reasonCategory: form.reasonCategory,
+            reasonNote: noteRequired ? form.reasonNote : undefined,
+          })
+        }
+      >
+        Correct depart date
+      </button>
+      {correctDate.error && <div>Failed to correct: {correctDate.error.message}</div>}
+    </div>
+  );
+}
+
 function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
   const { data, error, isLoading, refetch } = trpc.shipments.getWithLineItems.useQuery(shipment.id);
   const utils = trpc.useUtils();
@@ -205,6 +264,9 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
         </div>
         <div style={{ marginTop: "8px" }}>
           <CustomsArrivalControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+        </div>
+        <div style={{ marginTop: "8px" }}>
+          <DepartDateCorrectionControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
         </div>
       </td>
       <td>

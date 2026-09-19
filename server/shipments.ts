@@ -197,3 +197,28 @@ export async function markShipmentArrived(
     changedBy: opts.changedBy,
   });
 }
+
+export async function correctShipmentActualDepartDate(
+  id: number,
+  newDate: Date,
+  opts: { changedBy: number; reasonCategory: ReasonCategory; reasonNote?: string },
+): Promise<void> {
+  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
+  if (!shipment.actualDepartDate) {
+    throw new Error(
+      "correctShipmentActualDepartDate: no actual depart date is set yet on this shipment — " +
+      "use the normal departure flow to set it for the first time, this function only corrects an existing value",
+    );
+  }
+  await db.update(shipments).set({ actualDepartDate: newDate }).where(eq(shipments.id, id));
+  await logChange({
+    entityType: "shipment",
+    entityId: id,
+    field: "actualDepartDate",
+    oldValue: shipment.actualDepartDate.toISOString(),
+    newValue: newDate.toISOString(),
+    reasonCategory: opts.reasonCategory,
+    reasonNote: opts.reasonNote,
+    changedBy: opts.changedBy,
+  });
+}

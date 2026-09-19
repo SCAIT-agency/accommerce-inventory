@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql, eq } from "drizzle-orm";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments } from "../drizzle/schema";
-import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived } from "./shipments";
+import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate } from "./shipments";
 import { createSku, createVendor } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { listChangeLog } from "./changeLog";
@@ -239,5 +239,27 @@ describe("shipments", () => {
     const entries = await listChangeLog("shipment", shipment.id);
     expect(entries[0].field).toBe("actualArrivalDate");
     expect(entries[0].oldValue).toBeNull();
+  });
+
+  it("corrects an already-recorded actual depart date with a required reason category", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", lineItems: [], createdBy: 1 });
+    await db.update(shipments).set({ actualDepartDate: new Date("2026-09-01") }).where(eq(shipments.id, shipment.id));
+
+    const correctedDate = new Date("2026-09-03");
+    await correctShipmentActualDepartDate(shipment.id, correctedDate, { changedBy: 1, reasonCategory: "logistics_delay" });
+
+    const [updated] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(updated.actualDepartDate?.toISOString()).toBe(correctedDate.toISOString());
+
+    const entries = await listChangeLog("shipment", shipment.id);
+    expect(entries[0].field).toBe("actualDepartDate");
+    expect(entries[0].oldValue).toBe(new Date("2026-09-01").toISOString());
+  });
+
+  it("rejects correcting a depart date that was never set — that's a first-time set, not a correction", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
+    await expect(
+      correctShipmentActualDepartDate(shipment.id, new Date("2026-09-03"), { changedBy: 1, reasonCategory: "logistics_delay" }),
+    ).rejects.toThrow();
   });
 });

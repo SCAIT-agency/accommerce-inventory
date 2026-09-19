@@ -3,7 +3,7 @@ import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { listSkus, createSku, listVendors, createVendor, listWarehouses, createWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
-import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, getShipmentWithLineItems, listShipments, recordShipmentCosts } from "./shipments";
+import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, getShipmentWithLineItems, listShipments, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation } from "./salesPlan";
 import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES } from "../drizzle/schema";
@@ -123,6 +123,20 @@ export const appRouter = router({
       }))
       .mutation(({ input, ctx }) =>
         markShipmentArrived(input.id, input.actualArrivalDate, {
+          changedBy: ctx.user.id,
+          reasonCategory: input.reasonCategory,
+          reasonNote: input.reasonNote,
+        }),
+      ),
+    correctActualDepartDate: editorProcedure
+      .input(z.object({
+        id: z.number(),
+        newDate: z.date(),
+        reasonCategory: reasonCategorySchema,
+        reasonNote: z.string().optional(),
+      }))
+      .mutation(({ input, ctx }) =>
+        correctShipmentActualDepartDate(input.id, input.newDate, {
           changedBy: ctx.user.id,
           reasonCategory: input.reasonCategory,
           reasonNote: input.reasonNote,
