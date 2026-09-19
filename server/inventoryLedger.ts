@@ -4,7 +4,14 @@ import { inventoryLedger, type InsertLedgerEvent } from "../drizzle/schema";
 
 export async function recordLedgerEvent(event: Omit<InsertLedgerEvent, "id">, dbClient: DbClient = db) {
   if (event.qty < 0) {
-    const currentSoh = await getSoh(event.skuId, event.warehouseId, event.date, dbClient);
+    // Same-day ledger events have no reliable sub-day insertion order: a
+    // whole-day sales aggregate (recordSalesActual) anchors at end-of-day,
+    // while a receipt or manual correction keeps its true wall-clock time.
+    // Evaluating solvency as of the END of this event's own calendar day
+    // (not its exact timestamp) makes every same-day event visible to every
+    // other same-day event's guard check, regardless of insertion order.
+    const asOfDate = endOfDayUtc(event.date);
+    const currentSoh = await getSoh(event.skuId, event.warehouseId, asOfDate, dbClient);
     if (currentSoh + event.qty < 0) {
       throw new Error(
         `recordLedgerEvent: this event would drive SOH negative for sku ${event.skuId}/warehouse ${event.warehouseId} ` +
@@ -13,6 +20,10 @@ export async function recordLedgerEvent(event: Omit<InsertLedgerEvent, "id">, db
     }
   }
   await dbClient.insert(inventoryLedger).values(event);
+}
+
+function endOfDayUtc(date: Date): Date {
+  return new Date(`${date.toISOString().slice(0, 10)}T23:59:59.999Z`);
 }
 
 export async function getSoh(skuId: number, warehouseId: number, asOfDate?: Date, dbClient: DbClient = db): Promise<number> {
