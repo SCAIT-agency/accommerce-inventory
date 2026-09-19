@@ -167,6 +167,11 @@ describe("shipments", () => {
     await expect(updateShipmentStatus(shipment.id, "delivered", { changedBy: 1 })).rejects.toThrow(/invalid transition/);
   });
 
+  it("rejects transitioning to 'departed' via updateShipmentStatus even though it's listed as a valid transition — that path belongs to markShipmentDeparted only", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
+    await expect(updateShipmentStatus(shipment.id, "departed", { changedBy: 1 })).rejects.toThrow(/markShipmentDeparted/);
+  });
+
   it("accepts a valid shipment status transition and logs it", async () => {
     const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", lineItems: [], createdBy: 1 });
     await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });

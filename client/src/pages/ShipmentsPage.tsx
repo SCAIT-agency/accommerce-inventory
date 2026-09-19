@@ -13,8 +13,14 @@ const REASON_CATEGORIES = [
 
 type ReasonCategory = (typeof REASON_CATEGORIES)[number];
 
+// "planned" has no entry here on purpose: the only forward transition out of
+// "planned" is marking a shipment departed, which must go through
+// markShipmentDeparted (records the actual depart date and enforces the
+// planned-depart-date precondition) — updateShipmentStatus now rejects
+// "departed" outright, so no button here may call it. See docs/BACKLOG.md
+// Stream A for the still-open gap: no UI exists yet to set plannedDepartDate
+// or call markShipmentDeparted.
 const VALID_SHIPMENT_TRANSITIONS: Record<string, string[]> = {
-  planned: ["departed"],
   departed: ["in_transit"],
   in_transit: ["customs"],
   customs: ["delivered"],

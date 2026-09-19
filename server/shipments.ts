@@ -88,6 +88,12 @@ export async function updateShipmentStatus(
   newStatus: (typeof SHIPMENT_STATUSES)[number],
   opts: { changedBy: number; reasonCategory?: ReasonCategory; reasonNote?: string },
 ): Promise<void> {
+  if (newStatus === "departed") {
+    throw new Error(
+      "updateShipmentStatus: cannot transition to 'departed' via this function — use markShipmentDeparted, " +
+      "which also records the actual depart date and enforces the planned-depart-date precondition.",
+    );
+  }
   const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
   if (!VALID_SHIPMENT_TRANSITIONS[shipment.status].includes(newStatus)) {
     throw new Error(`invalid transition from ${shipment.status} to ${newStatus}`);
@@ -164,9 +170,10 @@ export async function setShipmentCustomsStatus(
   id: number,
   newStatus: (typeof CUSTOMS_STATUSES)[number],
   opts: { changedBy: number; reasonCategory: ReasonCategory; reasonNote?: string },
+  dbClient: DbClient = db,
 ): Promise<void> {
-  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
-  await db.update(shipments).set({ customsStatus: newStatus }).where(eq(shipments.id, id));
+  const [shipment] = await dbClient.select().from(shipments).where(eq(shipments.id, id));
+  await dbClient.update(shipments).set({ customsStatus: newStatus }).where(eq(shipments.id, id));
   await logChange({
     entityType: "shipment",
     entityId: id,
@@ -183,9 +190,10 @@ export async function markShipmentArrived(
   id: number,
   actualArrivalDate: Date,
   opts: { changedBy: number; reasonCategory: ReasonCategory; reasonNote?: string },
+  dbClient: DbClient = db,
 ): Promise<void> {
-  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
-  await db.update(shipments).set({ actualArrivalDate }).where(eq(shipments.id, id));
+  const [shipment] = await dbClient.select().from(shipments).where(eq(shipments.id, id));
+  await dbClient.update(shipments).set({ actualArrivalDate }).where(eq(shipments.id, id));
   await logChange({
     entityType: "shipment",
     entityId: id,
@@ -202,15 +210,16 @@ export async function correctShipmentActualDepartDate(
   id: number,
   newDate: Date,
   opts: { changedBy: number; reasonCategory: ReasonCategory; reasonNote?: string },
+  dbClient: DbClient = db,
 ): Promise<void> {
-  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
+  const [shipment] = await dbClient.select().from(shipments).where(eq(shipments.id, id));
   if (!shipment.actualDepartDate) {
     throw new Error(
       "correctShipmentActualDepartDate: no actual depart date is set yet on this shipment — " +
       "use the normal departure flow to set it for the first time, this function only corrects an existing value",
     );
   }
-  await db.update(shipments).set({ actualDepartDate: newDate }).where(eq(shipments.id, id));
+  await dbClient.update(shipments).set({ actualDepartDate: newDate }).where(eq(shipments.id, id));
   await logChange({
     entityType: "shipment",
     entityId: id,
