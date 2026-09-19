@@ -201,13 +201,13 @@ export const appRouter = router({
   salesPlan: router({
     create: editorProcedure
       .input(z.object({ skuId: z.number(), warehouseId: z.number(), periodDate: z.date(), plannedQty: z.number() }))
-      .mutation(({ input }) => createSalesPlanEntry(input)),
+      .mutation(({ input }) => createSalesPlanEntry({ ...input, periodDate: input.periodDate.toISOString().slice(0, 10) })),
     volatility: protectedProcedure
       .input(z.object({ skuId: z.number(), warehouseId: z.number(), weeks: z.number() }))
       .query(({ input }) => getSalesVolatility(input.skuId, input.warehouseId, input.weeks)),
     planActualDeviation: protectedProcedure
       .input(z.object({ skuId: z.number(), warehouseId: z.number(), from: z.date(), to: z.date() }))
-      .query(({ input }) => getPlanActualDeviation(input.skuId, input.warehouseId, input.from, input.to)),
+      .query(({ input }) => getPlanActualDeviation(input.skuId, input.warehouseId, input.from.toISOString().slice(0, 10), input.to.toISOString().slice(0, 10))),
   }),
 });
 

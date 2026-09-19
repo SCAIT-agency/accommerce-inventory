@@ -32,7 +32,7 @@ const STOCK_STATUS_THRESHOLDS: { maxDays: number; label: "critical" | "low" | "o
 // number of rows that came back, which would inflate the average (and deflate
 // days-of-cover) by the ratio of selling-days to calendar-days.
 async function getAverageDailySales(skuId: number, warehouseId: number, windowDays = 30): Promise<number> {
-  const windowStart = new Date(Date.now() - windowDays * 86400000);
+  const windowStart = new Date(Date.now() - windowDays * 86400000).toISOString().slice(0, 10);
   const rows = await db
     .select()
     .from(salesActuals)

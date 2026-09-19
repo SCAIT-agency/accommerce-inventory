@@ -7,14 +7,14 @@ import { computeFifoCogs, type LandedBatch, type SaleEvent } from "./landedCost"
 export interface CreateSalesPlanEntryInput {
   skuId: number;
   warehouseId: number;
-  periodDate: Date;
+  periodDate: string;
   plannedQty: number;
 }
 
 export interface RecordSalesActualInput {
   skuId: number;
   warehouseId: number;
-  date: Date;
+  date: string;
   qty: number;
   source: "shopify_daily_pull" | "manual";
 }
@@ -42,7 +42,7 @@ export async function recordSalesActual(input: RecordSalesActualInput): Promise<
         eventType: "sale",
         qty: -input.qty,
         unitCost: null,
-        date: input.date,
+        date: new Date(input.date),
         sourceRef: `sales_actual:${input.source}`,
       },
       tx,
@@ -67,7 +67,7 @@ export async function getSalesVolatility(skuId: number, warehouseId: number, wee
   return stdev / mean;
 }
 
-export async function getPlanActualDeviation(skuId: number, warehouseId: number, from: Date, to: Date) {
+export async function getPlanActualDeviation(skuId: number, warehouseId: number, from: string, to: string) {
   const plans = await db
     .select()
     .from(salesPlan)
@@ -78,9 +78,9 @@ export async function getPlanActualDeviation(skuId: number, warehouseId: number,
     .where(and(eq(salesActuals.skuId, skuId), eq(salesActuals.warehouseId, warehouseId), between(salesActuals.date, from, to)));
 
   return plans.map((plan) => {
-    const dateKey = plan.periodDate.toISOString().slice(0, 10);
+    const dateKey = plan.periodDate;
     const actual = actuals
-      .filter((a) => a.date.toISOString().slice(0, 10) === dateKey)
+      .filter((a) => a.date === dateKey)
       .reduce((sum, a) => sum + a.qty, 0);
     return { date: dateKey, planned: plan.plannedQty, actual, deviation: actual - plan.plannedQty };
   });

@@ -46,6 +46,10 @@ function daysFromNow(n: number): Date {
   return new Date(Date.now() + n * 86400000);
 }
 
+function daysAgoStr(n: number): string {
+  return daysAgo(n).toISOString().slice(0, 10);
+}
+
 describe("dashboards", () => {
   it("Home summary reports active SKU count and current SOH-based fire count", async () => {
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku", status: "active" });
@@ -105,16 +109,23 @@ describe("dashboards", () => {
 
     // Receipt 500, sell 10/day across all 30 window days -> SOH 200,
     // avgDailySales 300/30 = 10 -> daysOfCover 20 (< 21 -> critical)
-    await recordLedgerEvent({ skuId: criticalSku.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-CRIT" });
+    // Receipt is pinned to midnight of day 29, not the real wall-clock test-run
+    // time daysAgo(29) would give — the day-29 sale below now lands at midnight
+    // of its calendar day too (sales dates are calendar-day strings as of this
+    // task), so an un-normalized receipt timestamped later in that same day
+    // would sort AFTER the sale and make getSoh's `lte` as-of-date check miss
+    // it, spuriously tripping the negative-SOH guard.
+    await recordLedgerEvent({ skuId: criticalSku.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "0.42", date: new Date(daysAgoStr(29)), sourceRef: "PO-CRIT" });
     for (let i = 0; i < 30; i++) {
-      await recordSalesActual({ skuId: criticalSku.id, warehouseId: ff.id, date: daysAgo(i), qty: 10, source: "manual" });
+      await recordSalesActual({ skuId: criticalSku.id, warehouseId: ff.id, date: daysAgoStr(i), qty: 10, source: "manual" });
     }
 
     // Receipt 1000, sell 1/day across all 30 window days -> SOH 970,
     // avgDailySales 30/30 = 1 -> daysOfCover 970 (>= 90 -> overstock)
-    await recordLedgerEvent({ skuId: overstockSku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-OVER" });
+    // Same day-29 midnight-normalization reasoning as the critical-SKU receipt above.
+    await recordLedgerEvent({ skuId: overstockSku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: new Date(daysAgoStr(29)), sourceRef: "PO-OVER" });
     for (let i = 0; i < 30; i++) {
-      await recordSalesActual({ skuId: overstockSku.id, warehouseId: ff.id, date: daysAgo(i), qty: 1, source: "manual" });
+      await recordSalesActual({ skuId: overstockSku.id, warehouseId: ff.id, date: daysAgoStr(i), qty: 1, source: "manual" });
     }
 
     // No sales history at all: SOH 500, no sales_actuals rows -> daysOfCover null, status unknown
@@ -148,7 +159,7 @@ describe("dashboards", () => {
     // 30 units over a 30-day window is 1.0/day — NOT 30/3 = 10.0/day.
     await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-SPORADIC" });
     for (const offset of [2, 9, 20]) {
-      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: daysAgo(offset), qty: 10, source: "manual" });
+      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: daysAgoStr(offset), qty: 10, source: "manual" });
     }
 
     const stock = await getStockDashboard();
@@ -166,7 +177,7 @@ describe("dashboards", () => {
 
     await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "0.42", date: daysAgo(800), sourceRef: "PO-DORMANT" });
     for (const offset of [400, 401, 402]) {
-      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: daysAgo(offset), qty: 20, source: "manual" });
+      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: daysAgoStr(offset), qty: 20, source: "manual" });
     }
 
     const stock = await getStockDashboard();

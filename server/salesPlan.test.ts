@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { salesPlan, salesActuals, inventoryLedger, skus, warehouses } from "../drizzle/schema";
 import { recordSalesActual, getSalesVolatility, getPlanActualDeviation, getDailyCogs, createSalesPlanEntry } from "./salesPlan";
@@ -37,7 +37,7 @@ describe("sales plan/actuals", () => {
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
 
     await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 2000, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1" });
-    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: new Date("2026-09-09"), qty: 1162, source: "shopify_daily_pull" });
+    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-09", qty: 1162, source: "shopify_daily_pull" });
 
     const ledgerRows = await db.select().from(inventoryLedger);
     expect(ledgerRows).toHaveLength(2);
@@ -51,7 +51,7 @@ describe("sales plan/actuals", () => {
 
     // No prior receipt — any sale drives SOH negative, so recordLedgerEvent throws.
     await expect(
-      recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: new Date("2026-09-09"), qty: 1, source: "manual" }),
+      recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-09", qty: 1, source: "manual" }),
     ).rejects.toThrow(/negative/i);
 
     const rows = await db.select().from(salesActuals);
@@ -66,7 +66,7 @@ describe("sales plan/actuals", () => {
     for (const [date, qty] of [
       ["2026-08-04", 1000], ["2026-08-11", 1200], ["2026-08-18", 900], ["2026-08-25", 1100],
     ] as const) {
-      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: new Date(date), qty, source: "manual" });
+      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date, qty, source: "manual" });
     }
 
     const cv = await getSalesVolatility(sku.id, ff.id, 4);
@@ -86,7 +86,7 @@ describe("sales plan/actuals", () => {
       ["2026-07-01", 1000], ["2026-07-08", 1000], ["2026-07-15", 1000],
       ["2026-07-22", 1000], ["2026-07-29", 3000], ["2026-08-05", 5000],
     ] as const) {
-      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: new Date(date), qty, source: "manual" });
+      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date, qty, source: "manual" });
     }
 
     const cv = await getSalesVolatility(sku.id, ff.id, 4);
@@ -98,10 +98,10 @@ describe("sales plan/actuals", () => {
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
 
     await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 2000, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1" });
-    await db.insert(salesPlan).values({ skuId: sku.id, warehouseId: ff.id, periodDate: new Date("2026-09-09"), plannedQty: 1000 });
-    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: new Date("2026-09-09"), qty: 1162, source: "shopify_daily_pull" });
+    await db.insert(salesPlan).values({ skuId: sku.id, warehouseId: ff.id, periodDate: "2026-09-09", plannedQty: 1000 });
+    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-09", qty: 1162, source: "shopify_daily_pull" });
 
-    const deviation = await getPlanActualDeviation(sku.id, ff.id, new Date("2026-09-09"), new Date("2026-09-09"));
+    const deviation = await getPlanActualDeviation(sku.id, ff.id, "2026-09-09", "2026-09-09");
     expect(deviation).toEqual([{ date: "2026-09-09", planned: 1000, actual: 1162, deviation: 162 }]);
   });
 
@@ -111,8 +111,8 @@ describe("sales plan/actuals", () => {
 
     await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
     await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.50", date: new Date("2026-09-05"), sourceRef: "PO2" });
-    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: new Date("2026-09-03"), qty: 80, source: "manual" });
-    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: new Date("2026-09-10"), qty: 40, source: "manual" });
+    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-03", qty: 80, source: "manual" });
+    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-10", qty: 40, source: "manual" });
 
     // Sept 3 sale (80 units) is fully covered by the first batch (@2.00) — the second batch hasn't landed yet.
     const cogsSept3 = await getDailyCogs(sku.id, ff.id, new Date("2026-09-03"));
@@ -130,7 +130,7 @@ describe("sales plan/actuals", () => {
     const entry = await createSalesPlanEntry({
       skuId: sku.id,
       warehouseId: ff.id,
-      periodDate: new Date("2026-10-01"),
+      periodDate: "2026-10-01",
       plannedQty: 500,
     });
 
@@ -139,5 +139,16 @@ describe("sales plan/actuals", () => {
 
     const rows = await db.select().from(salesPlan);
     expect(rows).toHaveLength(1);
+  });
+
+  it("stores and reads back a sales_actuals date as an exact calendar day, no time-of-day drift", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1" });
+
+    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-19", qty: 10, source: "manual" });
+
+    const [row] = await db.select().from(salesActuals).where(eq(salesActuals.skuId, sku.id));
+    expect(row.date).toBe("2026-09-19");
   });
 });

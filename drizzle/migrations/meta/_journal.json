@@ -15,6 +15,13 @@
       "when": 1789837594249,
       "tag": "0001_abandoned_morlun",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1789838493825,
+      "tag": "0002_sparkling_star_brand",
+      "breakpoints": true
     }
   ]
 }

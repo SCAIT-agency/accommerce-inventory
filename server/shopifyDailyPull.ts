@@ -56,7 +56,7 @@ export async function runDailyShopifyPull(
     await recordSalesActual({
       skuId,
       warehouseId,
-      date: new Date(sale.date),
+      date: sale.date,
       qty: sale.qty,
       source: "shopify_daily_pull",
     });

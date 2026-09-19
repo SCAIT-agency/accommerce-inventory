@@ -228,7 +228,7 @@ export const salesPlan = mysqlTable("sales_plan", {
   id: int("id").autoincrement().primaryKey(),
   skuId: int("skuId").notNull(),
   warehouseId: int("warehouseId").notNull(),
-  periodDate: timestamp("periodDate").notNull(),
+  periodDate: date("periodDate", { mode: "string" }).notNull(),
   plannedQty: int("plannedQty").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
@@ -240,7 +240,7 @@ export const salesActuals = mysqlTable("sales_actuals", {
   id: int("id").autoincrement().primaryKey(),
   skuId: int("skuId").notNull(),
   warehouseId: int("warehouseId").notNull(),
-  date: timestamp("date").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
   qty: int("qty").notNull(),
   source: mysqlEnum("source", SALES_ACTUAL_SOURCES).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
