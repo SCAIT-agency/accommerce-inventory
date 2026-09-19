@@ -34,7 +34,6 @@ function SalesPlanSection() {
   });
 
   const catalogError = skusQuery.error ?? warehousesQuery.error;
-  if (catalogError) return <div>Failed to load catalogs: {catalogError.message}</div>;
 
   const selectedSkuId = form.skuId ? Number(form.skuId) : undefined;
   const selectedWarehouseId = form.warehouseId ? Number(form.warehouseId) : undefined;
@@ -56,6 +55,8 @@ function SalesPlanSection() {
 
   const canCreate = selectedSkuId !== undefined && selectedWarehouseId !== undefined
     && form.plannedQty.trim().length > 0;
+
+  if (catalogError) return <div>Failed to load catalogs: {catalogError.message}</div>;
 
   return (
     <div>
