@@ -48,6 +48,24 @@ function defaultCostsForm(shipment: ShipmentListItem): CostsFormState {
   };
 }
 
+interface CustomsArrivalFormState {
+  customsStatus: string;
+  actualArrivalDate: string;
+  reasonCategory: ReasonCategory;
+  reasonNote: string;
+}
+
+const CUSTOMS_STATUSES = ["not_declared", "declared", "held", "cleared"] as const;
+
+function defaultCustomsArrivalForm(shipment: ShipmentListItem): CustomsArrivalFormState {
+  return {
+    customsStatus: shipment.customsStatus,
+    actualArrivalDate: shipment.actualArrivalDate ? new Date(shipment.actualArrivalDate).toISOString().slice(0, 10) : "",
+    reasonCategory: "customs_hold",
+    reasonNote: "",
+  };
+}
+
 function StatusTransitionControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
   const updateStatus = trpc.shipments.updateStatus.useMutation({ onSuccess: onUpdated });
   const [form, setForm] = useState<StatusTransitionFormState>(() => defaultStatusTransitionForm());
@@ -93,6 +111,71 @@ function StatusTransitionControl({ shipment, onUpdated }: { shipment: ShipmentLi
   );
 }
 
+function CustomsArrivalControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
+  const setCustomsStatus = trpc.shipments.setCustomsStatus.useMutation({ onSuccess: onUpdated });
+  const markArrived = trpc.shipments.markArrived.useMutation({ onSuccess: onUpdated });
+  const [form, setForm] = useState<CustomsArrivalFormState>(() => defaultCustomsArrivalForm(shipment));
+  const noteRequired = form.reasonCategory === "other";
+  const canSave = !noteRequired || form.reasonNote.trim().length > 0;
+
+  return (
+    <div>
+      <div>Customs: {shipment.customsStatus} · Arrived: {shipment.actualArrivalDate ? new Date(shipment.actualArrivalDate).toISOString().slice(0, 10) : "—"}</div>
+      <select
+        value={form.customsStatus}
+        onChange={(e) => setForm((prev) => ({ ...prev, customsStatus: e.target.value }))}
+      >
+        {CUSTOMS_STATUSES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <input
+        type="date"
+        value={form.actualArrivalDate}
+        onChange={(e) => setForm((prev) => ({ ...prev, actualArrivalDate: e.target.value }))}
+      />
+      <select
+        value={form.reasonCategory}
+        onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
+      >
+        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {noteRequired && (
+        <input
+          placeholder="required note"
+          value={form.reasonNote}
+          onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
+        />
+      )}
+      <button
+        disabled={!canSave || setCustomsStatus.isPending}
+        onClick={() =>
+          setCustomsStatus.mutate({
+            id: shipment.id,
+            newStatus: form.customsStatus as (typeof CUSTOMS_STATUSES)[number],
+            reasonCategory: form.reasonCategory,
+            reasonNote: noteRequired ? form.reasonNote : undefined,
+          })
+        }
+      >
+        Save customs status
+      </button>
+      <button
+        disabled={!canSave || !form.actualArrivalDate || markArrived.isPending}
+        onClick={() =>
+          markArrived.mutate({
+            id: shipment.id,
+            actualArrivalDate: new Date(form.actualArrivalDate),
+            reasonCategory: form.reasonCategory,
+            reasonNote: noteRequired ? form.reasonNote : undefined,
+          })
+        }
+      >
+        Save arrival date
+      </button>
+      {(setCustomsStatus.error ?? markArrived.error) && <div>Failed to save: {(setCustomsStatus.error ?? markArrived.error)!.message}</div>}
+    </div>
+  );
+}
+
 function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
   const { data, error, isLoading, refetch } = trpc.shipments.getWithLineItems.useQuery(shipment.id);
   const utils = trpc.useUtils();
@@ -119,6 +202,9 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
         {shipment.status}
         <div style={{ marginTop: "8px" }}>
           <StatusTransitionControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+        </div>
+        <div style={{ marginTop: "8px" }}>
+          <CustomsArrivalControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
         </div>
       </td>
       <td>

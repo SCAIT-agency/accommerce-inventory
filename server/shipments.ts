@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
-import { shipments, shipmentLineItems, type Shipment, SHIPMENT_STATUSES } from "../drizzle/schema";
+import { shipments, shipmentLineItems, type Shipment, SHIPMENT_STATUSES, CUSTOMS_STATUSES } from "../drizzle/schema";
 import { logChange, type ReasonCategory } from "./changeLog";
 
 const VALID_SHIPMENT_TRANSITIONS: Record<(typeof SHIPMENT_STATUSES)[number], (typeof SHIPMENT_STATUSES)[number][]> = {
@@ -158,4 +158,42 @@ export async function recordShipmentCosts(
 
   const [row] = await db.select().from(shipments).where(eq(shipments.id, id));
   return row;
+}
+
+export async function setShipmentCustomsStatus(
+  id: number,
+  newStatus: (typeof CUSTOMS_STATUSES)[number],
+  opts: { changedBy: number; reasonCategory: ReasonCategory; reasonNote?: string },
+): Promise<void> {
+  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
+  await db.update(shipments).set({ customsStatus: newStatus }).where(eq(shipments.id, id));
+  await logChange({
+    entityType: "shipment",
+    entityId: id,
+    field: "customsStatus",
+    oldValue: shipment.customsStatus,
+    newValue: newStatus,
+    reasonCategory: opts.reasonCategory,
+    reasonNote: opts.reasonNote,
+    changedBy: opts.changedBy,
+  });
+}
+
+export async function markShipmentArrived(
+  id: number,
+  actualArrivalDate: Date,
+  opts: { changedBy: number; reasonCategory: ReasonCategory; reasonNote?: string },
+): Promise<void> {
+  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
+  await db.update(shipments).set({ actualArrivalDate }).where(eq(shipments.id, id));
+  await logChange({
+    entityType: "shipment",
+    entityId: id,
+    field: "actualArrivalDate",
+    oldValue: shipment.actualArrivalDate?.toISOString() ?? null,
+    newValue: actualArrivalDate.toISOString(),
+    reasonCategory: opts.reasonCategory,
+    reasonNote: opts.reasonNote,
+    changedBy: opts.changedBy,
+  });
 }

@@ -3,10 +3,10 @@ import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { listSkus, createSku, listVendors, createVendor, listWarehouses, createWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
-import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, getShipmentWithLineItems, listShipments, recordShipmentCosts } from "./shipments";
+import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, getShipmentWithLineItems, listShipments, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation } from "./salesPlan";
-import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES } from "../drizzle/schema";
+import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES } from "../drizzle/schema";
 import { listChangeLog } from "./changeLog";
 
 const reasonCategorySchema = z.enum(REASON_CATEGORIES);
@@ -99,6 +99,34 @@ export const appRouter = router({
           { freightCost: input.freightCost, dutyCost: input.dutyCost, costCurrency: input.costCurrency },
           { reasonCategory: input.reasonCategory, reasonNote: input.reasonNote, changedBy: ctx.user.id },
         ),
+      ),
+    setCustomsStatus: editorProcedure
+      .input(z.object({
+        id: z.number(),
+        newStatus: z.enum(CUSTOMS_STATUSES),
+        reasonCategory: reasonCategorySchema,
+        reasonNote: z.string().optional(),
+      }))
+      .mutation(({ input, ctx }) =>
+        setShipmentCustomsStatus(input.id, input.newStatus, {
+          changedBy: ctx.user.id,
+          reasonCategory: input.reasonCategory,
+          reasonNote: input.reasonNote,
+        }),
+      ),
+    markArrived: editorProcedure
+      .input(z.object({
+        id: z.number(),
+        actualArrivalDate: z.date(),
+        reasonCategory: reasonCategorySchema,
+        reasonNote: z.string().optional(),
+      }))
+      .mutation(({ input, ctx }) =>
+        markShipmentArrived(input.id, input.actualArrivalDate, {
+          changedBy: ctx.user.id,
+          reasonCategory: input.reasonCategory,
+          reasonNote: input.reasonNote,
+        }),
       ),
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("shipment", input)),
   }),

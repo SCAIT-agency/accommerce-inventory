@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql, eq } from "drizzle-orm";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments } from "../drizzle/schema";
-import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus } from "./shipments";
+import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived } from "./shipments";
 import { createSku, createVendor } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { listChangeLog } from "./changeLog";
@@ -212,5 +212,32 @@ describe("shipments", () => {
 
     const entries = await listChangeLog("shipment", shipment.id);
     expect(entries[0].reasonCategory).toBeNull();
+  });
+
+  it("records a customs status change with a required reason category", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
+    await setShipmentCustomsStatus(shipment.id, "held", { changedBy: 1, reasonCategory: "customs_hold" });
+
+    const [updated] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(updated.customsStatus).toBe("held");
+
+    const entries = await listChangeLog("shipment", shipment.id);
+    expect(entries[0].field).toBe("customsStatus");
+    expect(entries[0].oldValue).toBe("not_declared");
+    expect(entries[0].newValue).toBe("held");
+    expect(entries[0].reasonCategory).toBe("customs_hold");
+  });
+
+  it("records an actual arrival date with the real prior value", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
+    const arrivalDate = new Date("2026-10-15");
+    await markShipmentArrived(shipment.id, arrivalDate, { changedBy: 1, reasonCategory: "logistics_delay" });
+
+    const [updated] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(updated.actualArrivalDate?.toISOString()).toBe(arrivalDate.toISOString());
+
+    const entries = await listChangeLog("shipment", shipment.id);
+    expect(entries[0].field).toBe("actualArrivalDate");
+    expect(entries[0].oldValue).toBeNull();
   });
 });
