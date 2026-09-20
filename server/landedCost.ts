@@ -89,7 +89,11 @@ export async function getShipmentLandedUnitCost(
     if (!poLine) {
       throw new Error(`getShipmentLandedUnitCost: no PO line item found with id ${line.poLineItemId} (shipment ${shipmentId}, line item ${line.id})`);
     }
-    if (shipment.costCurrency != null && poLine.currency !== shipment.costCurrency) {
+    // Currency codes are freeform text at input time (no enum/normalization
+    // at write time) — compare case-insensitively so "usd" vs "USD" isn't
+    // treated as a real mismatch; a genuine mismatch (e.g. USD vs EUR) still
+    // throws regardless of casing on either side.
+    if (shipment.costCurrency != null && poLine.currency.toUpperCase() !== shipment.costCurrency.toUpperCase()) {
       throw new Error(
         `getShipmentLandedUnitCost: currency mismatch on shipment ${shipmentId}, line item ${line.id} — ` +
         `PO line currency is "${poLine.currency}" but shipment cost currency is "${shipment.costCurrency}"; ` +

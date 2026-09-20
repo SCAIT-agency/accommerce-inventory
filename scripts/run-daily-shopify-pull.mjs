@@ -29,7 +29,7 @@ if (!inputPath) {
 try {
   const rows = JSON.parse(await readFile(inputPath, "utf-8"));
 
-  const skus = await listSkus();
+  const skus = await listSkus("active");
   const warehouses = await listWarehouses();
   const skuLookup = Object.fromEntries(skus.filter((s) => s.sku).map((s) => [s.sku, s.id]));
   const warehouseLookup = Object.fromEntries(warehouses.map((w) => [w.code, w.id]));

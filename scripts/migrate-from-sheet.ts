@@ -56,11 +56,21 @@ export function transformSheetExport(rows: SheetExportRow[]): TransformedMigrati
       skipped.push({ rowIndex, reason: `unparseable unit_cost "${r.unit_cost}"` });
       return;
     }
-    const date = new Date(r.date);
-    if (Number.isNaN(date.getTime())) {
+    const parsedDate = new Date(r.date);
+    if (Number.isNaN(parsedDate.getTime())) {
       skipped.push({ rowIndex, reason: `unparseable date "${r.date}"` });
       return;
     }
+    // A migrated "sale" row represents a whole calendar day's aggregate in
+    // the historical Sheet, exactly like recordSalesActual's own live-code
+    // convention — anchor it at end-of-day so it sorts after any same-day
+    // receipt with a real timestamp, matching how the negative-stock guard
+    // already treats live-recorded sales. Receipts/adjustments keep their
+    // given timestamp as-is (migrated historical data has no more precise
+    // information to anchor them by anyway).
+    const date = r.event_type === "sale"
+      ? new Date(`${parsedDate.toISOString().slice(0, 10)}T23:59:59.999Z`)
+      : parsedDate;
 
     ledgerEvents.push({
       sku: r.sku,

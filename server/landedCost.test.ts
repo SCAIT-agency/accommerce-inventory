@@ -243,6 +243,31 @@ describe("getShipmentLandedUnitCost", () => {
     expect(results[0].landedUnitCost).toBeCloseTo(0.15 + 100 * 1.0 / 1000 + 20 * 1.0 / 1000);
   });
 
+  it("does not treat differently-cased currency codes as a mismatch (\"usd\" vs \"USD\")", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "usd" }],
+      createdBy: 1,
+    });
+    const withItems = await getPurchaseOrderWithLineItems(po.id);
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container1",
+      lineItems: [{ poLineItemId: withItems.lineItems[0].id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: 1,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "100.00", dutyCost: "20.00", costCurrency: "USD" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+
+    const results = await getShipmentLandedUnitCost(shipment.id);
+    expect(results[0].landedUnitCost).toBeCloseTo(0.15 + 100 * 1.0 / 1000 + 20 * 1.0 / 1000);
+  });
+
   it("computes EXW-only landed cost when shipment costCurrency is null (costs not yet recorded)", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });

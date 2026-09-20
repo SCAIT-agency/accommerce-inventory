@@ -111,7 +111,7 @@ describe("shipments", () => {
     const actualDepartureDateEntry = entries.find((e) => e.field === "actualDepartDate");
     expect(actualDepartureDateEntry).toBeDefined();
     expect(actualDepartureDateEntry?.oldValue).toBeNull();
-    expect(actualDepartureDateEntry?.newValue).toBe(firstActualDate.toISOString());
+    expect(actualDepartureDateEntry?.newValue).toBe(firstActualDate.toISOString().slice(0, 10));
   });
 
   it("logs a change_log entry with a logistics_delay reason when the planned depart date slips", async () => {
@@ -266,7 +266,7 @@ describe("shipments", () => {
 
     const entries = await listChangeLog("shipment", shipment.id);
     expect(entries[0].field).toBe("actualDepartDate");
-    expect(entries[0].oldValue).toBe(new Date("2026-09-01").toISOString());
+    expect(entries[0].oldValue).toBe(new Date("2026-09-01").toISOString().slice(0, 10));
   });
 
   it("rejects correcting a depart date that was never set — that's a first-time set, not a correction", async () => {

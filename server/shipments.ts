@@ -75,8 +75,12 @@ export async function updateShipmentPlannedDepartDate(
     entityType: "shipment",
     entityId: id,
     field: "plannedDepartDate",
-    oldValue: shipment.plannedDepartDate?.toISOString() ?? null,
-    newValue: newDate.toISOString(),
+    // Plain calendar-day string, matching purchase_orders.plannedReadyDate's
+    // own change_log format — plannedDepartDate is a calendar-day concept
+    // even though the column itself is still `timestamp` (a schema change
+    // is out of scope here; this is a cosmetic audit-trail fix only).
+    oldValue: shipment.plannedDepartDate?.toISOString().slice(0, 10) ?? null,
+    newValue: newDate.toISOString().slice(0, 10),
     reasonCategory: opts.reasonCategory,
     reasonNote: opts.reasonNote,
     changedBy: opts.changedBy,
@@ -133,8 +137,10 @@ export async function markShipmentDeparted(id: number, actualDate: Date, opts: {
     entityType: "shipment",
     entityId: id,
     field: "actualDepartDate",
-    oldValue: shipment.actualDepartDate?.toISOString() ?? null,
-    newValue: actualDate.toISOString(),
+    // Plain calendar-day string — see updateShipmentPlannedDepartDate's
+    // comment above for why.
+    oldValue: shipment.actualDepartDate?.toISOString().slice(0, 10) ?? null,
+    newValue: actualDate.toISOString().slice(0, 10),
     changedBy: opts.changedBy,
   });
 }
@@ -204,8 +210,10 @@ export async function markShipmentArrived(
     entityType: "shipment",
     entityId: id,
     field: "actualArrivalDate",
-    oldValue: shipment.actualArrivalDate?.toISOString() ?? null,
-    newValue: actualArrivalDate.toISOString(),
+    // Plain calendar-day string — see updateShipmentPlannedDepartDate's
+    // comment above for why.
+    oldValue: shipment.actualArrivalDate?.toISOString().slice(0, 10) ?? null,
+    newValue: actualArrivalDate.toISOString().slice(0, 10),
     reasonCategory: opts.reasonCategory,
     reasonNote: opts.reasonNote,
     changedBy: opts.changedBy,
@@ -230,8 +238,10 @@ export async function correctShipmentActualDepartDate(
     entityType: "shipment",
     entityId: id,
     field: "actualDepartDate",
-    oldValue: shipment.actualDepartDate.toISOString(),
-    newValue: newDate.toISOString(),
+    // Plain calendar-day string — see updateShipmentPlannedDepartDate's
+    // comment above for why.
+    oldValue: shipment.actualDepartDate.toISOString().slice(0, 10),
+    newValue: newDate.toISOString().slice(0, 10),
     reasonCategory: opts.reasonCategory,
     reasonNote: opts.reasonNote,
     changedBy: opts.changedBy,

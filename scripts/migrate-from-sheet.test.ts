@@ -38,6 +38,17 @@ describe("transformSheetExport", () => {
     expect(result.skipped).toEqual([{ rowIndex: 0, reason: expect.stringContaining("qty") }]);
   });
 
+  it("anchors a migrated sale row at end-of-day, matching recordSalesActual's live-code convention — receipts keep their given date as-is", () => {
+    const rows = [
+      { sku: "JELLO-CAL-500", warehouse: "FF-DE", event_type: "sale", qty: "-30", unit_cost: "", date: "2026-09-02", source_ref: "shopify-2026-09-02" },
+      { sku: "JELLO-CAL-500", warehouse: "FF-DE", event_type: "receipt", qty: "1000", unit_cost: "0.42", date: "2026-09-02", source_ref: "PO1-W1" },
+    ];
+    const result = transformSheetExport(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.ledgerEvents[0].date).toEqual(new Date("2026-09-02T23:59:59.999Z"));
+    expect(result.ledgerEvents[1].date).toEqual(new Date("2026-09-02"));
+  });
+
   it("quarantines a row with an invalid event_type instead of blindly casting it", () => {
     const rows = [
       { sku: "JELLO-CAL-500", warehouse: "FF-DE", event_type: "not_a_real_event_type", qty: "1000", unit_cost: "0.42", date: "2026-06-16", source_ref: "PO1-W1" },
