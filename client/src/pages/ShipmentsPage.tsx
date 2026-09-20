@@ -17,9 +17,8 @@ type ReasonCategory = (typeof REASON_CATEGORIES)[number];
 // "planned" is marking a shipment departed, which must go through
 // markShipmentDeparted (records the actual depart date and enforces the
 // planned-depart-date precondition) — updateShipmentStatus now rejects
-// "departed" outright, so no button here may call it. See docs/BACKLOG.md
-// Stream A for the still-open gap: no UI exists yet to set plannedDepartDate
-// or call markShipmentDeparted.
+// "departed" outright, so no button here may call it. PlannedDepartureControl
+// below is what actually drives that transition.
 const VALID_SHIPMENT_TRANSITIONS: Record<string, string[]> = {
   departed: ["in_transit"],
   in_transit: ["customs"],
@@ -80,6 +79,92 @@ interface DepartDateCorrectionFormState {
 
 function defaultDepartDateCorrectionForm(): DepartDateCorrectionFormState {
   return { newDate: new Date().toISOString().slice(0, 10), reasonCategory: "logistics_delay", reasonNote: "" };
+}
+
+interface PlannedDepartureFormState {
+  plannedDepartDate: string;
+  actualDepartDate: string;
+  reasonCategory: ReasonCategory;
+  reasonNote: string;
+}
+
+function defaultPlannedDepartureForm(shipment: ShipmentListItem): PlannedDepartureFormState {
+  return {
+    plannedDepartDate: shipment.plannedDepartDate ? new Date(shipment.plannedDepartDate).toISOString().slice(0, 10) : "",
+    actualDepartDate: new Date().toISOString().slice(0, 10),
+    reasonCategory: "logistics_delay",
+    reasonNote: "",
+  };
+}
+
+// Only relevant while a shipment is still "planned" — updateShipmentStatus
+// rejects a direct transition to "departed" precisely so this is the only
+// path a shipment can take out of "planned". markShipmentDeparted itself
+// enforces that plannedDepartDate must already be set, which is why "Mark
+// departed" only appears once shipment.plannedDepartDate is non-null.
+function PlannedDepartureControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
+  const updatePlannedDepartDate = trpc.shipments.updatePlannedDepartDate.useMutation({ onSuccess: onUpdated });
+  const markDeparted = trpc.shipments.markDeparted.useMutation({ onSuccess: onUpdated });
+  const [form, setForm] = useState<PlannedDepartureFormState>(() => defaultPlannedDepartureForm(shipment));
+  const noteRequired = form.reasonCategory === "other";
+  const canSavePlanned = !noteRequired || form.reasonNote.trim().length > 0;
+
+  if (shipment.status !== "planned") return null;
+
+  return (
+    <div>
+      <div>Planned depart: {shipment.plannedDepartDate ? new Date(shipment.plannedDepartDate).toISOString().slice(0, 10) : "not set"}</div>
+      <input
+        type="date"
+        value={form.plannedDepartDate}
+        onChange={(e) => setForm((prev) => ({ ...prev, plannedDepartDate: e.target.value }))}
+      />
+      <select
+        value={form.reasonCategory}
+        onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
+      >
+        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {noteRequired && (
+        <input
+          placeholder="required note"
+          value={form.reasonNote}
+          onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
+        />
+      )}
+      <button
+        disabled={!canSavePlanned || !form.plannedDepartDate || updatePlannedDepartDate.isPending}
+        onClick={() =>
+          updatePlannedDepartDate.mutate({
+            id: shipment.id,
+            newDate: new Date(form.plannedDepartDate),
+            reasonCategory: form.reasonCategory,
+            reasonNote: noteRequired ? form.reasonNote : undefined,
+          })
+        }
+      >
+        Save planned depart date
+      </button>
+      {updatePlannedDepartDate.error && <div>Failed to save: {updatePlannedDepartDate.error.message}</div>}
+
+      {shipment.plannedDepartDate && (
+        <div style={{ marginTop: "4px" }}>
+          <input
+            type="date"
+            value={form.actualDepartDate}
+            onChange={(e) => setForm((prev) => ({ ...prev, actualDepartDate: e.target.value }))}
+          />
+          <button
+            disabled={markDeparted.isPending}
+            onClick={() => markDeparted.mutate({ id: shipment.id, actualDate: new Date(form.actualDepartDate) })}
+          >
+            Mark departed
+          </button>
+          {markDeparted.error && <div>Failed to mark departed: {markDeparted.error.message}</div>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function StatusTransitionControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
@@ -265,6 +350,9 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
       <td>{shipment.shipmentRef}</td>
       <td>
         {shipment.status}
+        <div style={{ marginTop: "8px" }}>
+          <PlannedDepartureControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+        </div>
         <div style={{ marginTop: "8px" }}>
           <StatusTransitionControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
         </div>
