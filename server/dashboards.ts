@@ -59,8 +59,21 @@ export async function getHomeSummary() {
   const activeSkus = await listSkus("active");
   const skuIds = activeSkus.map((s) => s.id);
   const unmatched = await listUnmatchedTransactions();
-  const forecast = await getCashflowForecast(new Date(), new Date(Date.now() + 14 * 86400000));
+
+  // Split strictly at "today": [epoch, yesterday] is payables already past
+  // their expected date (overdue -- unpaid and should have been settled
+  // already), [today, +14d] is the forward-looking near-term window. Reusing
+  // getCashflowForecast for both keeps the mixed-currency estimate/flag logic
+  // in one place rather than re-summing payments.expectedAmount here too.
+  const todayStart = new Date(new Date().toISOString().slice(0, 10));
+  const yesterday = new Date(todayStart.getTime() - 86400000);
+  const [forecast, overdueForecast] = await Promise.all([
+    getCashflowForecast(todayStart, new Date(todayStart.getTime() + 14 * 86400000)),
+    getCashflowForecast(new Date(0), yesterday),
+  ]);
   const nearTermCashNeeds = forecast.reduce((sum, d) => sum + d.plannedOutflow, 0);
+  const overduePayablesAmount = overdueForecast.reduce((sum, d) => sum + d.plannedOutflow, 0);
+  const overduePayablesIsEstimated = overdueForecast.some((d) => d.plannedOutflowIsEstimated);
 
   const sohMap = await getSohForSkus(skuIds);
   const avgSalesMap = await getAverageDailySalesForSkus(skuIds);
@@ -68,7 +81,10 @@ export async function getHomeSummary() {
   let stockoutRiskSkuCount = 0;
   for (const sku of activeSkus) {
     const byWarehouse = sohMap.get(sku.id) ?? [];
-    let atRisk = false;
+    // A SKU with no ledger history at all has no stock and no visibility into
+    // demand — that's the highest-risk state, not a safe one, so it must not
+    // be silently excluded just because the inner loop below never runs.
+    let atRisk = byWarehouse.length === 0;
     for (const w of byWarehouse) {
       const avgDailySales = avgSalesMap.get(`${sku.id}:${w.warehouseId}`) ?? 0;
       const daysOfCover = avgDailySales > 0 ? w.soh / avgDailySales : null;
@@ -84,6 +100,8 @@ export async function getHomeSummary() {
     activeSkuCount: activeSkus.length,
     stockoutRiskSkuCount,
     nearTermCashNeeds,
+    overduePayablesAmount,
+    overduePayablesIsEstimated,
     unmatchedTransactionCount: unmatched.length,
   };
 }

@@ -11,6 +11,7 @@ export function HomePage() {
         <dt>Active SKUs</dt><dd>{data.activeSkuCount}</dd>
         <dt>Stockout-risk SKUs</dt><dd>{data.stockoutRiskSkuCount}</dd>
         <dt>Near-term cash needs (14d)</dt><dd>{data.nearTermCashNeeds.toFixed(2)}</dd>
+        <dt>Overdue payables</dt><dd>{data.overduePayablesIsEstimated ? "≈ " : ""}{data.overduePayablesAmount.toFixed(2)}</dd>
         <dt>Unmatched transactions</dt><dd>{data.unmatchedTransactionCount}</dd>
       </dl>
     </div>

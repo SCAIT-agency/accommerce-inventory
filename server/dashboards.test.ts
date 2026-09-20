@@ -276,4 +276,32 @@ describe("dashboards", () => {
     expect(summary.activeSkuCount).toBe(2);
     expect(summary.stockoutRiskSkuCount).toBe(1);
   });
+
+  it("counts a SKU with no ledger history at all as stockout risk, not silently safe", async () => {
+    const safeSku = await createSku({ sku: "JELLO-SAFE", primaryIdentifierType: "sku", status: "active" });
+    const neverReceivedSku = await createSku({ sku: "JELLO-NEW", primaryIdentifierType: "sku", status: "active" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await recordLedgerEvent({ skuId: safeSku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-SAFE" });
+    for (let i = 0; i < 30; i++) {
+      await recordSalesActual({ skuId: safeSku.id, warehouseId: ff.id, date: daysAgoStr(i), qty: 1, source: "manual" });
+    }
+    // neverReceivedSku has no ledger events at all -- never received, never sold.
+
+    const summary = await getHomeSummary();
+    expect(summary.activeSkuCount).toBe(2);
+    expect(summary.stockoutRiskSkuCount).toBe(1);
+  });
+
+  it("surfaces unpaid payments past their expected date as overdue payables, separate from the forward-looking near-term window", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+
+    await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "5000.00", expectedDate: daysAgo(3), currency: "EUR" });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "2000.00", expectedDate: daysFromNow(2), currency: "EUR" });
+
+    const summary = await getHomeSummary();
+    expect(summary.overduePayablesAmount).toBeCloseTo(5000);
+    expect(summary.nearTermCashNeeds).toBeCloseTo(2000);
+  });
 });
