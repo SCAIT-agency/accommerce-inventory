@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { skus, vendors, warehouses } from "../drizzle/schema";
-import { createSku, listSkus, createVendor, createWarehouse, setAppSetting, getAppSetting } from "./db";
+import { createSku, listSkus, createVendor, createWarehouse, setAppSetting, getAppSetting, updateSku, updateVendor, updateWarehouse } from "./db";
 
 beforeEach(async () => {
   // Real FKs now tie skus/warehouses to other tables, but each test file only
@@ -66,5 +66,27 @@ describe("catalog repository", () => {
 
   it("rejects a SKU with no value in the primary identifier column", async () => {
     await expect(createSku({ primaryIdentifierType: "sku" })).rejects.toThrow();
+  });
+
+  it("updateSku persists a status/lead-time/safety-stock change", async () => {
+    const sku = await createSku({ sku: "JELLO-UPDATE-TEST", primaryIdentifierType: "sku", status: "active" });
+    const updated = await updateSku(sku.id, { status: "inactive", leadTimeDays: 30, safetyStockDays: 5 });
+    expect(updated.status).toBe("inactive");
+    expect(updated.leadTimeDays).toBe(30);
+    expect(updated.safetyStockDays).toBe(5);
+  });
+
+  it("updateVendor persists a name/contact-email change", async () => {
+    const vendor = await createVendor({ name: "Old Name" });
+    const updated = await updateVendor(vendor.id, { name: "New Name", contactEmail: "new@example.com" });
+    expect(updated.name).toBe("New Name");
+    expect(updated.contactEmail).toBe("new@example.com");
+  });
+
+  it("updateWarehouse persists a code/name change", async () => {
+    const warehouse = await createWarehouse({ code: "OLD-CODE", name: "Old Name" });
+    const updated = await updateWarehouse(warehouse.id, { code: "NEW-CODE", name: "New Name" });
+    expect(updated.code).toBe("NEW-CODE");
+    expect(updated.name).toBe("New Name");
   });
 });

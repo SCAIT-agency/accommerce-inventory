@@ -40,11 +40,9 @@ function SkusSection() {
     <div>
       <h2>SKUs</h2>
       <table>
-        <thead><tr><th>SKU</th><th>Name</th><th>Identifier Type</th></tr></thead>
+        <thead><tr><th>SKU</th><th>Name</th><th>Identifier Type</th><th>Status</th><th>Lead Time (days)</th><th>Safety Stock (days)</th></tr></thead>
         <tbody>
-          {(skusQuery.data ?? []).map((s) => (
-            <tr key={s.id}><td>{s.sku ?? "—"}</td><td>{s.name ?? "—"}</td><td>{s.primaryIdentifierType}</td></tr>
-          ))}
+          {(skusQuery.data ?? []).map((s) => <SkuRow key={s.id} sku={s} onUpdated={() => utils.catalog.listSkus.invalidate()} />)}
         </tbody>
       </table>
       <div>
@@ -82,6 +80,37 @@ function SkusSection() {
   );
 }
 
+function SkuRow({ sku, onUpdated }: { sku: { id: number; sku: string | null; name: string | null; primaryIdentifierType: string; status: "active" | "inactive"; leadTimeDays: number; safetyStockDays: number }; onUpdated: () => void }) {
+  const [leadTimeDays, setLeadTimeDays] = useState(String(sku.leadTimeDays));
+  const [safetyStockDays, setSafetyStockDays] = useState(String(sku.safetyStockDays));
+  const updateSku = trpc.catalog.updateSku.useMutation({ onSuccess: onUpdated });
+
+  return (
+    <tr>
+      <td>{sku.sku ?? "—"}</td>
+      <td>{sku.name ?? "—"}</td>
+      <td>{sku.primaryIdentifierType}</td>
+      <td>
+        <button
+          disabled={updateSku.isPending}
+          onClick={() => updateSku.mutate({ id: sku.id, status: sku.status === "active" ? "inactive" : "active" })}
+        >
+          {sku.status}
+        </button>
+      </td>
+      <td>
+        <input type="number" value={leadTimeDays} onChange={(e) => setLeadTimeDays(e.target.value)} style={{ width: "4em" }} />
+        <button disabled={updateSku.isPending} onClick={() => updateSku.mutate({ id: sku.id, leadTimeDays: Number(leadTimeDays) })}>Save</button>
+      </td>
+      <td>
+        <input type="number" value={safetyStockDays} onChange={(e) => setSafetyStockDays(e.target.value)} style={{ width: "4em" }} />
+        <button disabled={updateSku.isPending} onClick={() => updateSku.mutate({ id: sku.id, safetyStockDays: Number(safetyStockDays) })}>Save</button>
+      </td>
+      {updateSku.error && <td>Failed: {updateSku.error.message}</td>}
+    </tr>
+  );
+}
+
 function VendorsSection() {
   const utils = trpc.useUtils();
   const vendorsQuery = trpc.catalog.listVendors.useQuery();
@@ -99,9 +128,9 @@ function VendorsSection() {
     <div>
       <h2>Vendors</h2>
       <table>
-        <thead><tr><th>Name</th></tr></thead>
+        <thead><tr><th>Name</th><th>Contact Email</th></tr></thead>
         <tbody>
-          {(vendorsQuery.data ?? []).map((v) => (<tr key={v.id}><td>{v.name}</td></tr>))}
+          {(vendorsQuery.data ?? []).map((v) => <VendorRow key={v.id} vendor={v} onUpdated={() => utils.catalog.listVendors.invalidate()} />)}
         </tbody>
       </table>
       <div>
@@ -112,6 +141,34 @@ function VendorsSection() {
         {createVendor.error && <div>Failed to save: {createVendor.error.message}</div>}
       </div>
     </div>
+  );
+}
+
+function VendorRow({ vendor, onUpdated }: { vendor: { id: number; name: string; contactEmail: string | null }; onUpdated: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(vendor.name);
+  const [contactEmail, setContactEmail] = useState(vendor.contactEmail ?? "");
+  const updateVendor = trpc.catalog.updateVendor.useMutation({ onSuccess: () => { setEditing(false); onUpdated(); } });
+
+  if (!editing) {
+    return (
+      <tr>
+        <td>{vendor.name}</td>
+        <td>{vendor.contactEmail ?? "—"}</td>
+        <td><button onClick={() => setEditing(true)}>Edit</button></td>
+      </tr>
+    );
+  }
+  return (
+    <tr>
+      <td><input value={name} onChange={(e) => setName(e.target.value)} /></td>
+      <td><input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} /></td>
+      <td>
+        <button disabled={updateVendor.isPending} onClick={() => updateVendor.mutate({ id: vendor.id, name, contactEmail: contactEmail || undefined })}>Save</button>
+        <button onClick={() => setEditing(false)}>Cancel</button>
+        {updateVendor.error && <div>Failed: {updateVendor.error.message}</div>}
+      </td>
+    </tr>
   );
 }
 
@@ -136,7 +193,7 @@ function WarehousesSection() {
       <table>
         <thead><tr><th>Code</th><th>Name</th></tr></thead>
         <tbody>
-          {(warehousesQuery.data ?? []).map((w) => (<tr key={w.id}><td>{w.code}</td><td>{w.name}</td></tr>))}
+          {(warehousesQuery.data ?? []).map((w) => <WarehouseRow key={w.id} warehouse={w} onUpdated={() => utils.catalog.listWarehouses.invalidate()} />)}
         </tbody>
       </table>
       <div>
@@ -148,6 +205,34 @@ function WarehousesSection() {
         {createWarehouse.error && <div>Failed to save: {createWarehouse.error.message}</div>}
       </div>
     </div>
+  );
+}
+
+function WarehouseRow({ warehouse, onUpdated }: { warehouse: { id: number; code: string; name: string }; onUpdated: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [code, setCode] = useState(warehouse.code);
+  const [name, setName] = useState(warehouse.name);
+  const updateWarehouse = trpc.catalog.updateWarehouse.useMutation({ onSuccess: () => { setEditing(false); onUpdated(); } });
+
+  if (!editing) {
+    return (
+      <tr>
+        <td>{warehouse.code}</td>
+        <td>{warehouse.name}</td>
+        <td><button onClick={() => setEditing(true)}>Edit</button></td>
+      </tr>
+    );
+  }
+  return (
+    <tr>
+      <td><input value={code} onChange={(e) => setCode(e.target.value)} /></td>
+      <td><input value={name} onChange={(e) => setName(e.target.value)} /></td>
+      <td>
+        <button disabled={updateWarehouse.isPending} onClick={() => updateWarehouse.mutate({ id: warehouse.id, code, name })}>Save</button>
+        <button onClick={() => setEditing(false)}>Cancel</button>
+        {updateWarehouse.error && <div>Failed: {updateWarehouse.error.message}</div>}
+      </td>
+    </tr>
   );
 }
 

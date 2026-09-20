@@ -2,7 +2,7 @@ import { z } from "zod";
 import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { getRemainingBatches } from "./inventoryLedger";
-import { listSkus, createSku, listVendors, createVendor, listWarehouses, createWarehouse } from "./db";
+import { listSkus, createSku, updateSku, listVendors, createVendor, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
@@ -47,12 +47,26 @@ export const appRouter = router({
         return typeof value === "string" && value.trim().length > 0;
       }, { message: "the field matching primaryIdentifierType must be provided and non-empty" }))
       .mutation(({ input }) => createSku(input)),
+    updateSku: editorProcedure
+      .input(z.object({
+        id: z.number(),
+        status: z.enum(["active", "inactive"]).optional(),
+        leadTimeDays: z.number().int().positive().optional(),
+        safetyStockDays: z.number().int().min(0).optional(),
+      }))
+      .mutation(({ input }) => updateSku(input.id, { status: input.status, leadTimeDays: input.leadTimeDays, safetyStockDays: input.safetyStockDays })),
     listVendors: protectedProcedure.query(() => listVendors()),
     createVendor: editorProcedure.input(z.object({ name: z.string() })).mutation(({ input }) => createVendor(input)),
+    updateVendor: editorProcedure
+      .input(z.object({ id: z.number(), name: z.string().optional(), contactEmail: z.string().optional(), notes: z.string().optional() }))
+      .mutation(({ input }) => updateVendor(input.id, { name: input.name, contactEmail: input.contactEmail, notes: input.notes })),
     listWarehouses: protectedProcedure.query(() => listWarehouses()),
     createWarehouse: editorProcedure
       .input(z.object({ code: z.string(), name: z.string() }))
       .mutation(({ input }) => createWarehouse(input)),
+    updateWarehouse: editorProcedure
+      .input(z.object({ id: z.number(), code: z.string().optional(), name: z.string().optional() }))
+      .mutation(({ input }) => updateWarehouse(input.id, { code: input.code, name: input.name })),
   }),
   purchaseOrders: router({
     list: protectedProcedure.query(() => listPurchaseOrders()),

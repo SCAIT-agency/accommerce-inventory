@@ -18,6 +18,12 @@ export async function createSku(data: Omit<InsertSku, "id">, dbClient: DbClient 
   return row;
 }
 
+export async function updateSku(id: number, data: Partial<InsertSku>, dbClient: DbClient = db) {
+  await dbClient.update(skus).set(data).where(eq(skus.id, id));
+  const [row] = await dbClient.select().from(skus).where(eq(skus.id, id));
+  return row;
+}
+
 export async function createUser(data: Omit<InsertUser, "id">, dbClient: DbClient = db) {
   const [result] = await dbClient.insert(users).values(data);
   const [row] = await dbClient.select().from(users).where(eq(users.id, result.insertId));
@@ -39,6 +45,12 @@ export async function listVendors() {
   return db.select().from(vendors);
 }
 
+export async function updateVendor(id: number, data: Partial<InsertVendor>, dbClient: DbClient = db) {
+  await dbClient.update(vendors).set(data).where(eq(vendors.id, id));
+  const [row] = await dbClient.select().from(vendors).where(eq(vendors.id, id));
+  return row;
+}
+
 export async function createWarehouse(data: Omit<InsertWarehouse, "id">, dbClient: DbClient = db) {
   const [result] = await dbClient.insert(warehouses).values(data);
   const [row] = await dbClient.select().from(warehouses).where(eq(warehouses.id, result.insertId));
@@ -47,6 +59,12 @@ export async function createWarehouse(data: Omit<InsertWarehouse, "id">, dbClien
 
 export async function listWarehouses() {
   return db.select().from(warehouses);
+}
+
+export async function updateWarehouse(id: number, data: Partial<InsertWarehouse>, dbClient: DbClient = db) {
+  await dbClient.update(warehouses).set(data).where(eq(warehouses.id, id));
+  const [row] = await dbClient.select().from(warehouses).where(eq(warehouses.id, id));
+  return row;
 }
 
 export async function getAppSetting(key: string): Promise<string | null> {
