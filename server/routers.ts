@@ -6,7 +6,7 @@ import { listSkus, createSku, listVendors, createVendor, listWarehouses, createW
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
-import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation } from "./salesPlan";
+import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation, upsertWeeklyInput, listWeeklyInputs } from "./salesPlan";
 import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES } from "../drizzle/schema";
 import { listChangeLog } from "./changeLog";
 
@@ -216,6 +216,19 @@ export const appRouter = router({
     planActualDeviation: protectedProcedure
       .input(z.object({ skuId: z.number(), warehouseId: z.number(), from: z.date(), to: z.date() }))
       .query(({ input }) => getPlanActualDeviation(input.skuId, input.warehouseId, input.from.toISOString().slice(0, 10), input.to.toISOString().slice(0, 10))),
+    listWeeklyInputs: protectedProcedure
+      .input(z.object({ from: z.date(), to: z.date() }))
+      .query(({ input }) => listWeeklyInputs(input.from.toISOString().slice(0, 10), input.to.toISOString().slice(0, 10))),
+    upsertWeeklyInput: editorProcedure
+      .input(z.object({
+        weekStartDate: z.date(),
+        plannedRevenue: z.string(),
+        primaryWarehouseId: z.number(),
+        primaryPercent: z.string(),
+        secondaryWarehouseId: z.number(),
+        recipeLines: z.array(z.object({ skuId: z.number(), unitsPer1000: z.string() })),
+      }))
+      .mutation(({ input }) => upsertWeeklyInput({ ...input, weekStartDate: input.weekStartDate.toISOString().slice(0, 10) })),
   }),
 });
 
