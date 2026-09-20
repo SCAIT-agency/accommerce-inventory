@@ -16,7 +16,7 @@ This started as a **V1 skeleton** and has since gone through four hardening pass
 - [`docs/superpowers/plans/2026-09-19-systemic-correctness-hardening.md`](docs/superpowers/plans/2026-09-19-systemic-correctness-hardening.md) — the task-by-task implementation plan Stream E was built from.
 - [`docs/2026-09-20-security-hardening-design.md`](docs/2026-09-20-security-hardening-design.md) — the design spec for Backlog Stream C (security hardening).
 - [`docs/superpowers/plans/2026-09-20-security-hardening.md`](docs/superpowers/plans/2026-09-20-security-hardening.md) — the task-by-task implementation plan Stream C was built from.
-- [`docs/BUILD-HISTORY.md`](docs/BUILD-HISTORY.md) — what was actually built, task by task, and every real bug found and fixed along the way (V1, Stream B, and Stream A).
+- [`docs/BUILD-HISTORY.md`](docs/BUILD-HISTORY.md) — what was actually built, task by task, and every real bug found and fixed along the way (V1, Stream B, Stream A, Stream E, and Stream C).
 - [`docs/BACKLOG.md`](docs/BACKLOG.md) — the prioritized list of what's left before this is genuinely production-ready, sourced from full whole-branch reviews.
 - [`RAILWAY.md`](RAILWAY.md) — deploy runbook for standing up an instance on a client's own infrastructure.
 
