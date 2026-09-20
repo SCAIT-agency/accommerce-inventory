@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { payments, transactions, purchaseOrders, vendors, changeLog } from "../drizzle/schema";
-import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listUnpaidPayments } from "./payments";
+import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listUnpaidPayments, listTransactions } from "./payments";
 import { createVendor } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 
@@ -204,5 +204,20 @@ describe("payments and transactions", () => {
 
     const result = await listUnpaidPayments();
     expect(result[0].poNumber).toBe("PO3-JELLO");
+  });
+
+  it("listTransactions returns every transaction, matched or not, newest first", async () => {
+    const tx1 = await recordTransaction({ date: new Date("2026-09-01"), amount: "100.00", currency: "USD", fxRate: "1.0", counterparty: "Vendor A" });
+    const tx2 = await recordTransaction({ date: new Date("2026-09-05"), amount: "200.00", currency: "USD", fxRate: "1.0", counterparty: "Vendor B" });
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const payment = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date("2026-09-01"), currency: "USD" });
+    await matchTransactionToPayment(tx1.id, payment.id);
+
+    const result = await listTransactions();
+
+    expect(result.map((t) => t.id)).toEqual([tx2.id, tx1.id]);
+    expect(result.find((t) => t.id === tx1.id)?.matchedPaymentId).toBe(payment.id);
+    expect(result.find((t) => t.id === tx2.id)?.matchedPaymentId).toBeNull();
   });
 });

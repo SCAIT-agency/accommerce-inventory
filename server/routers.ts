@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
+import { getRemainingBatches } from "./inventoryLedger";
 import { listSkus, createSku, listVendors, createVendor, listWarehouses, createWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
-import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments } from "./payments";
+import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation } from "./salesPlan";
 import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES } from "../drizzle/schema";
 import { listChangeLog } from "./changeLog";
@@ -24,6 +25,11 @@ export const appRouter = router({
         shipmentId: z.number().optional(),
       }))
       .query(({ input }) => getMoneyDashboard(input.from, input.to, input)),
+  }),
+  inventoryLedger: router({
+    remainingBatches: protectedProcedure
+      .input(z.object({ skuId: z.number(), warehouseId: z.number() }))
+      .query(({ input }) => getRemainingBatches(input.skuId, input.warehouseId)),
   }),
   catalog: router({
     listSkus: protectedProcedure.query(() => listSkus()),
@@ -154,6 +160,7 @@ export const appRouter = router({
   payments: router({
     listForPo: protectedProcedure.input(z.number()).query(({ input }) => listPaymentsForPo(input)),
     listUnmatchedTransactions: protectedProcedure.query(() => listUnmatchedTransactions()),
+    listTransactions: protectedProcedure.query(() => listTransactions()),
     listUnpaid: protectedProcedure.query(() => listUnpaidPayments()),
     createExpectedPayment: editorProcedure
       .input(z.object({

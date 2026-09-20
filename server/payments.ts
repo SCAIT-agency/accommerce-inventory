@@ -1,4 +1,4 @@
-import { eq, isNull, and, ne } from "drizzle-orm";
+import { eq, isNull, and, ne, desc } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
 import { payments, transactions, purchaseOrders, type Payment, type Transaction } from "../drizzle/schema";
 import { logChange, type ReasonCategory } from "./changeLog";
@@ -117,6 +117,10 @@ export async function matchTransactionToPayment(transactionId: number, paymentId
 
 export async function listUnmatchedTransactions(): Promise<Transaction[]> {
   return db.select().from(transactions).where(isNull(transactions.matchedPaymentId));
+}
+
+export async function listTransactions(): Promise<Transaction[]> {
+  return db.select().from(transactions).orderBy(desc(transactions.date));
 }
 
 export async function listPaymentsForPo(poId: number, dbClient: DbClient = db): Promise<Payment[]> {
