@@ -184,12 +184,14 @@ function PlannedDepartureControl({ shipment, onUpdated }: { shipment: ShipmentLi
 function StatusTransitionControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
   const updateStatus = trpc.shipments.updateStatus.useMutation({ onSuccess: onUpdated });
   const [form, setForm] = useState<StatusTransitionFormState>(() => defaultStatusTransitionForm());
-  // "departed" and "delivered" always have a dedicated control (PlannedDepartureControl's
-  // "Mark departed" button, CustomsArrivalControl's "Save arrival date" button) --
-  // offering them here too would render a working-looking option that
-  // updateShipmentStatus (server/shipments.ts) unconditionally rejects.
+  // "delivered" always has a dedicated control (CustomsArrivalControl's
+  // "Save arrival date" button) -- offering it here too would render a
+  // working-looking option that updateShipmentStatus (server/shipments.ts)
+  // unconditionally rejects. ("departed" needs no such filter: it isn't a key
+  // in VALID_SHIPMENT_TRANSITIONS at all, so it never appears here in the
+  // first place — see the comment on that constant above.)
   const nextStatuses = (VALID_SHIPMENT_TRANSITIONS[shipment.status] ?? []).filter(
-    (s) => s !== "departed" && s !== "delivered",
+    (s) => s !== "delivered",
   );
   const noteRequired = form.reasonCategory === "other";
   const canSave = !noteRequired || form.reasonNote.trim().length > 0;
@@ -239,6 +241,7 @@ function CustomsArrivalControl({ shipment, onUpdated }: { shipment: ShipmentList
   const [form, setForm] = useState<CustomsArrivalFormState>(() => defaultCustomsArrivalForm(shipment));
   const noteRequired = form.reasonCategory === "other";
   const canSave = !noteRequired || form.reasonNote.trim().length > 0;
+  const costsRecorded = shipment.freightCost != null && shipment.dutyCost != null && shipment.costCurrency != null;
 
   return (
     <div>
@@ -285,7 +288,7 @@ function CustomsArrivalControl({ shipment, onUpdated }: { shipment: ShipmentList
         Save customs status
       </button>
       <button
-        disabled={!canSave || !form.actualArrivalDate || shipment.status !== "customs" || markArrived.isPending}
+        disabled={!canSave || !form.actualArrivalDate || shipment.status !== "customs" || !costsRecorded || markArrived.isPending}
         onClick={() =>
           markArrived.mutate({
             id: shipment.id,
@@ -297,7 +300,8 @@ function CustomsArrivalControl({ shipment, onUpdated }: { shipment: ShipmentList
       >
         Save arrival date
       </button>
-      {shipment.status !== "customs" && <p>Available once the shipment has reached customs.</p>}
+      {shipment.status !== "customs" && shipment.status !== "delivered" && <p>Available once the shipment has reached customs.</p>}
+      {shipment.status === "customs" && !costsRecorded && <p>Available once freight/duty costs are recorded.</p>}
       {(setCustomsStatus.error ?? markArrived.error) && <div>Failed to save: {(setCustomsStatus.error ?? markArrived.error)!.message}</div>}
     </div>
   );
@@ -401,7 +405,11 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
         </ul>
       </td>
       <td>
-        <div>Freight: {shipment.freightCost ?? "—"} · Duty: {shipment.dutyCost ?? "—"} {shipment.costCurrency ?? ""}</div>
+        <div>
+          Freight: {shipment.freightCost != null && shipment.costCurrency ? formatMoney(shipment.freightCost, shipment.costCurrency) : "—"}
+          {" · "}
+          Duty: {shipment.dutyCost != null && shipment.costCurrency ? formatMoney(shipment.dutyCost, shipment.costCurrency) : "—"}
+        </div>
         <input
           type="text"
           placeholder="freight cost"

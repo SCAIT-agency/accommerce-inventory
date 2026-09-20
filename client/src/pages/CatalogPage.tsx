@@ -86,28 +86,34 @@ function SkuRow({ sku, onUpdated }: { sku: { id: number; sku: string | null; nam
   const updateSku = trpc.catalog.updateSku.useMutation({ onSuccess: onUpdated });
 
   return (
-    <tr>
-      <td>{sku.sku ?? "—"}</td>
-      <td>{sku.name ?? "—"}</td>
-      <td>{sku.primaryIdentifierType}</td>
-      <td>
-        <button
-          disabled={updateSku.isPending}
-          onClick={() => updateSku.mutate({ id: sku.id, status: sku.status === "active" ? "inactive" : "active" })}
-        >
-          {sku.status}
-        </button>
-      </td>
-      <td>
-        <input type="number" value={leadTimeDays} onChange={(e) => setLeadTimeDays(e.target.value)} style={{ width: "4em" }} />
-        <button disabled={updateSku.isPending} onClick={() => updateSku.mutate({ id: sku.id, leadTimeDays: Number(leadTimeDays) })}>Save</button>
-      </td>
-      <td>
-        <input type="number" value={safetyStockDays} onChange={(e) => setSafetyStockDays(e.target.value)} style={{ width: "4em" }} />
-        <button disabled={updateSku.isPending} onClick={() => updateSku.mutate({ id: sku.id, safetyStockDays: Number(safetyStockDays) })}>Save</button>
-      </td>
-      {updateSku.error && <td>Failed: {updateSku.error.message}</td>}
-    </tr>
+    <>
+      <tr>
+        <td>{sku.sku ?? "—"}</td>
+        <td>{sku.name ?? "—"}</td>
+        <td>{sku.primaryIdentifierType}</td>
+        <td>
+          <button
+            disabled={updateSku.isPending}
+            onClick={() => updateSku.mutate({ id: sku.id, status: sku.status === "active" ? "inactive" : "active" })}
+          >
+            {sku.status}
+          </button>
+        </td>
+        <td>
+          <input type="number" value={leadTimeDays} onChange={(e) => setLeadTimeDays(e.target.value)} style={{ width: "4em" }} />
+          <button disabled={updateSku.isPending || leadTimeDays.trim() === ""} onClick={() => updateSku.mutate({ id: sku.id, leadTimeDays: Number(leadTimeDays) })}>Save</button>
+        </td>
+        <td>
+          <input type="number" value={safetyStockDays} onChange={(e) => setSafetyStockDays(e.target.value)} style={{ width: "4em" }} />
+          <button disabled={updateSku.isPending || safetyStockDays.trim() === ""} onClick={() => updateSku.mutate({ id: sku.id, safetyStockDays: Number(safetyStockDays) })}>Save</button>
+        </td>
+      </tr>
+      {updateSku.error && (
+        <tr>
+          <td colSpan={6}>Failed: {updateSku.error.message}</td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -128,7 +134,7 @@ function VendorsSection() {
     <div>
       <h2>Vendors</h2>
       <table>
-        <thead><tr><th>Name</th><th>Contact Email</th></tr></thead>
+        <thead><tr><th>Name</th><th>Contact Email</th><th>Actions</th></tr></thead>
         <tbody>
           {(vendorsQuery.data ?? []).map((v) => <VendorRow key={v.id} vendor={v} onUpdated={() => utils.catalog.listVendors.invalidate()} />)}
         </tbody>
@@ -164,7 +170,7 @@ function VendorRow({ vendor, onUpdated }: { vendor: { id: number; name: string; 
       <td><input value={name} onChange={(e) => setName(e.target.value)} /></td>
       <td><input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} /></td>
       <td>
-        <button disabled={updateVendor.isPending} onClick={() => updateVendor.mutate({ id: vendor.id, name, contactEmail: contactEmail || undefined })}>Save</button>
+        <button disabled={updateVendor.isPending || !name} onClick={() => updateVendor.mutate({ id: vendor.id, name, contactEmail: contactEmail || undefined })}>Save</button>
         <button onClick={() => setEditing(false)}>Cancel</button>
         {updateVendor.error && <div>Failed: {updateVendor.error.message}</div>}
       </td>
@@ -191,7 +197,7 @@ function WarehousesSection() {
     <div>
       <h2>Warehouses</h2>
       <table>
-        <thead><tr><th>Code</th><th>Name</th></tr></thead>
+        <thead><tr><th>Code</th><th>Name</th><th>Actions</th></tr></thead>
         <tbody>
           {(warehousesQuery.data ?? []).map((w) => <WarehouseRow key={w.id} warehouse={w} onUpdated={() => utils.catalog.listWarehouses.invalidate()} />)}
         </tbody>
@@ -228,7 +234,7 @@ function WarehouseRow({ warehouse, onUpdated }: { warehouse: { id: number; code:
       <td><input value={code} onChange={(e) => setCode(e.target.value)} /></td>
       <td><input value={name} onChange={(e) => setName(e.target.value)} /></td>
       <td>
-        <button disabled={updateWarehouse.isPending} onClick={() => updateWarehouse.mutate({ id: warehouse.id, code, name })}>Save</button>
+        <button disabled={updateWarehouse.isPending || !code || !name} onClick={() => updateWarehouse.mutate({ id: warehouse.id, code, name })}>Save</button>
         <button onClick={() => setEditing(false)}>Cancel</button>
         {updateWarehouse.error && <div>Failed: {updateWarehouse.error.message}</div>}
       </td>

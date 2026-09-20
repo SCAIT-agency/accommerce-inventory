@@ -21,7 +21,7 @@ export function ChangeLogPage({ entityType, entityId }: { entityType: "purchase_
             <tr key={e.id}>
               <td>{e.field}</td><td>{e.oldValue}</td><td>{e.newValue}</td>
               <td>{e.reasonCategory ?? "—"}{e.reasonNote ? `: ${e.reasonNote}` : ""}</td>
-              <td>{new Date(e.changedAt).toISOString().slice(0, 10)}</td>
+              <td>{new Date(e.changedAt).toISOString().slice(0, 16).replace("T", " ")}</td>
             </tr>
           ))}
         </tbody>
