@@ -22,7 +22,8 @@ export function mountAuthRoutes(app: Express) {
       }
       res.cookie(SESSION_COOKIE, result.token, getSessionCookieOptions());
       res.json({ ok: true, user: result.user });
-    } catch {
+    } catch (err) {
+      console.error("POST /api/auth/login failed:", err instanceof Error ? err.message : err);
       res.status(500).json({ error: "login failed" });
     }
   });
@@ -30,9 +31,10 @@ export function mountAuthRoutes(app: Express) {
   app.post("/api/auth/logout", async (req: Request, res: Response) => {
     try {
       await performLogout(getCookie(req, SESSION_COOKIE));
-    } catch {
+    } catch (err) {
       // Logout must never leave a client stuck — clear the cookie regardless
       // of whether the tokenVersion bump succeeded.
+      console.error("POST /api/auth/logout failed to revoke the session:", err instanceof Error ? err.message : err);
     }
     res.clearCookie(SESSION_COOKIE);
     res.json({ ok: true });
@@ -43,7 +45,8 @@ export function mountAuthRoutes(app: Express) {
       const session = await resolveSession(getCookie(req, SESSION_COOKIE));
       if (!session) return res.json({ authenticated: false });
       res.json({ authenticated: true, userId: session.userId, role: session.role });
-    } catch {
+    } catch (err) {
+      console.error("GET /api/auth/status failed:", err instanceof Error ? err.message : err);
       res.json({ authenticated: false });
     }
   });
