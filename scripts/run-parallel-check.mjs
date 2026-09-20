@@ -36,9 +36,10 @@ try {
       const skuId = skuByCode.get(sku);
       const warehouseId = warehouseByCode.get(warehouseCode);
       if (!skuId || !warehouseId) {
-        // SKU or warehouse not found in Control Tower — return 0 so the mismatch
-        // is visible (sheet expects data but Control Tower has none).
-        return 0;
+        // SKU or warehouse not found in Control Tower at all — distinct from
+        // a real SOH of 0, which the sheet can also legitimately expect.
+        // reconcileMigration treats null as an unconditional mismatch.
+        return null;
       }
       return getSoh(skuId, warehouseId);
     },

@@ -95,6 +95,9 @@ export async function updateShipmentStatus(
     );
   }
   const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
+  if (!shipment) {
+    throw new Error(`updateShipmentStatus: no shipment found with id ${id}`);
+  }
   if (!VALID_SHIPMENT_TRANSITIONS[shipment.status].includes(newStatus)) {
     throw new Error(`invalid transition from ${shipment.status} to ${newStatus}`);
   }
@@ -113,6 +116,9 @@ export async function updateShipmentStatus(
 
 export async function markShipmentDeparted(id: number, actualDate: Date, opts: { changedBy: number }) {
   const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
+  if (!shipment) {
+    throw new Error(`markShipmentDeparted: no shipment found with id ${id}`);
+  }
   if (!shipment.plannedDepartDate) {
     throw new Error("cannot mark departed: no planned depart date set");
   }

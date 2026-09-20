@@ -57,6 +57,17 @@ describe("reconcileMigration", () => {
     return expect(result).resolves.toEqual({ passed: true, mismatches: [] });
   });
 
+  it("fails a SKU/warehouse the migrated DB doesn't recognize, even when the Sheet also expects 0 — never a silent false match", () => {
+    const result = reconcileMigration(
+      [{ sku: "JELLO-UNKNOWN", warehouseCode: "FF-DE", sohFromSheet: 0 }],
+      { getMigratedSoh: async () => null },
+    );
+    return expect(result).resolves.toEqual({
+      passed: false,
+      mismatches: [{ sku: "JELLO-UNKNOWN", warehouseCode: "FF-DE", expected: 0, actual: null, diff: null, kind: "soh" }],
+    });
+  });
+
   it("fails and lists the mismatch when migrated SOH diverges from the Sheet", () => {
     const result = reconcileMigration(
       [{ sku: "JELLO-CAL-500", warehouseCode: "FF-DE", sohFromSheet: 150827 }],

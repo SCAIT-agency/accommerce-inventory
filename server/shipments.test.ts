@@ -162,6 +162,14 @@ describe("shipments", () => {
     ).rejects.toThrow();
   });
 
+  it("updateShipmentStatus rejects a nonexistent shipment id with a clear error instead of crashing on a missing row", async () => {
+    await expect(updateShipmentStatus(999999, "in_transit", { changedBy: 1 })).rejects.toThrow(/no shipment found with id 999999/);
+  });
+
+  it("markShipmentDeparted rejects a nonexistent shipment id with a clear error instead of crashing on a missing row", async () => {
+    await expect(markShipmentDeparted(999999, new Date(), { changedBy: 1 })).rejects.toThrow(/no shipment found with id 999999/);
+  });
+
   it("rejects an invalid shipment status transition", async () => {
     const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", lineItems: [], createdBy: 1 });
     await expect(updateShipmentStatus(shipment.id, "delivered", { changedBy: 1 })).rejects.toThrow(/invalid transition/);

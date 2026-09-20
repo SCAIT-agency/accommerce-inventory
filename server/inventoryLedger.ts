@@ -3,6 +3,16 @@ import { db, type DbClient } from "./dbClient";
 import { inventoryLedger, type InsertLedgerEvent } from "../drizzle/schema";
 
 export async function recordLedgerEvent(event: Omit<InsertLedgerEvent, "id">, dbClient: DbClient = db) {
+  // Known, accepted TOCTOU race: the SOH check below and the insert after it
+  // are not atomic against another concurrent write for the same SKU/
+  // warehouse — two negative-qty events checked in parallel could each see
+  // the same pre-write SOH and both pass, together driving it negative. Not
+  // fixed: this is a single-operator system with no concurrent-write path in
+  // practice today (the daily Shopify pull and manual entry aren't run
+  // concurrently against the same SKU/warehouse), and a real fix (a
+  // SELECT ... FOR UPDATE or a DB-level CHECK constraint) is more machinery
+  // than the actual risk currently justifies. Revisit if a second writer
+  // (e.g. a second operator, or a concurrent import) is ever introduced.
   if (event.qty < 0) {
     // Same-day ledger events have no reliable sub-day insertion order: a
     // whole-day sales aggregate (recordSalesActual) anchors at end-of-day,

@@ -83,15 +83,19 @@ export interface SkuWarehouseTotal {
 }
 
 export interface ReconciliationDeps {
-  getMigratedSoh: (sku: string, warehouseCode: string) => Promise<number>;
+  // null means "this SKU/warehouse pair doesn't exist in Control Tower at
+  // all" — distinct from a real SOH of 0, which a sheet row can legitimately
+  // also expect. Collapsing both to the number 0 would let a genuinely
+  // missing SKU/warehouse silently "match" a sheet row that also expects 0.
+  getMigratedSoh: (sku: string, warehouseCode: string) => Promise<number | null>;
 }
 
 export interface Mismatch {
   sku: string;
   warehouseCode: string;
   expected: number;
-  actual: number;
-  diff: number;
+  actual: number | null;
+  diff: number | null;
   kind: "soh" | "landed_cost";
 }
 
@@ -122,13 +126,16 @@ export async function reconcileMigration(
   const mismatches: Mismatch[] = [];
   for (const total of sheetTotals) {
     const actual = await deps.getMigratedSoh(total.sku, total.warehouseCode);
-    if (actual !== total.sohFromSheet) {
+    // A missing SKU/warehouse pair (null) is always a mismatch, regardless of
+    // what the sheet expects — including when the sheet also expects 0,
+    // which a bare number comparison would have let through as a false match.
+    if (actual === null || actual !== total.sohFromSheet) {
       mismatches.push({
         sku: total.sku,
         warehouseCode: total.warehouseCode,
         expected: total.sohFromSheet,
         actual,
-        diff: actual - total.sohFromSheet,
+        diff: actual === null ? null : actual - total.sohFromSheet,
         kind: "soh",
       });
     }
