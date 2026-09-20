@@ -152,4 +152,78 @@ describe("inventory ledger", () => {
     const result = await getSohForSkus([]);
     expect(result.size).toBe(0);
   });
+
+  it("getRemainingBatches reports oldest-first remaining stock after a partial sale", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 200, unitCost: "2.50", date: new Date("2026-09-05"), sourceRef: "PO2" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -150, unitCost: null, date: new Date("2026-09-10"), sourceRef: "shopify-2026-09-10" });
+
+    const { getRemainingBatches } = await import("./inventoryLedger");
+    const result = await getRemainingBatches(sku.id, ff.id);
+
+    expect(result).toEqual([
+      { batchDate: new Date("2026-09-05"), sourceRef: "PO2", unitCost: 2.5, remainingQty: 150 },
+    ]);
+  });
+
+  it("getRemainingBatches leaves an untouched newer batch alone when the older one fully covers a sale", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 200, unitCost: "2.50", date: new Date("2026-09-05"), sourceRef: "PO2" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -60, unitCost: null, date: new Date("2026-09-03"), sourceRef: "shopify-2026-09-03" });
+
+    const { getRemainingBatches } = await import("./inventoryLedger");
+    const result = await getRemainingBatches(sku.id, ff.id);
+
+    expect(result).toEqual([
+      { batchDate: new Date("2026-09-01"), sourceRef: "PO1", unitCost: 2.0, remainingQty: 40 },
+      { batchDate: new Date("2026-09-05"), sourceRef: "PO2", unitCost: 2.5, remainingQty: 200 },
+    ]);
+  });
+
+  it("getRemainingBatches treats a positive adjustment as its own batch and a negative adjustment as FIFO consumption", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "adjustment", qty: 20, unitCost: "1.90", date: new Date("2026-09-03"), sourceRef: "manual-recount" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "adjustment", qty: -30, unitCost: null, date: new Date("2026-09-06"), sourceRef: "manual-shrinkage" });
+
+    const { getRemainingBatches } = await import("./inventoryLedger");
+    const result = await getRemainingBatches(sku.id, ff.id);
+
+    expect(result).toEqual([
+      { batchDate: new Date("2026-09-01"), sourceRef: "PO1", unitCost: 2.0, remainingQty: 70 },
+      { batchDate: new Date("2026-09-03"), sourceRef: "manual-recount", unitCost: 1.9, remainingQty: 20 },
+    ]);
+  });
+
+  it("getRemainingBatches returns an empty array for a fully-depleted SKU", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -100, unitCost: null, date: new Date("2026-09-10"), sourceRef: "shopify-2026-09-10" });
+
+    const { getRemainingBatches } = await import("./inventoryLedger");
+    const result = await getRemainingBatches(sku.id, ff.id);
+
+    expect(result).toEqual([]);
+  });
+
+  it("getRemainingBatches's remaining quantities sum to getSoh for the same SKU/warehouse", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 300, unitCost: "1.10", date: new Date("2026-09-08"), sourceRef: "PO2" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -220, unitCost: null, date: new Date("2026-09-12"), sourceRef: "shopify-2026-09-12" });
+
+    const { getRemainingBatches, getSoh } = await import("./inventoryLedger");
+    const batches = await getRemainingBatches(sku.id, ff.id);
+    const totalRemaining = batches.reduce((sum, b) => sum + b.remainingQty, 0);
+    const soh = await getSoh(sku.id, ff.id);
+
+    expect(totalRemaining).toBe(soh);
+  });
 });

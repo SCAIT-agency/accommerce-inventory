@@ -68,3 +68,52 @@ export async function getSohForSkus(skuIds: number[]): Promise<Map<number, { war
   }
   return result;
 }
+
+export interface RemainingBatch {
+  batchDate: Date;
+  sourceRef: string | null;
+  unitCost: number;
+  remainingQty: number;
+}
+
+export async function getRemainingBatches(skuId: number, warehouseId: number): Promise<RemainingBatch[]> {
+  const events = await db
+    .select()
+    .from(inventoryLedger)
+    .where(and(eq(inventoryLedger.skuId, skuId), eq(inventoryLedger.warehouseId, warehouseId)))
+    .orderBy(inventoryLedger.date);
+
+  interface MutableBatch { qty: number; unitCost: number; date: Date; sourceRef: string | null }
+  const batches: MutableBatch[] = [];
+
+  const consume = (qtyToConsume: number, asOfDate: Date, context: string) => {
+    let remaining = qtyToConsume;
+    while (remaining > 0) {
+      const batch = batches.find((b) => b.qty > 0 && b.date <= asOfDate);
+      if (!batch) throw new Error(`getRemainingBatches: insufficient stock to consume ${remaining} units for ${context}`);
+      const consumed = Math.min(batch.qty, remaining);
+      batch.qty -= consumed;
+      remaining -= consumed;
+    }
+  };
+
+  for (const event of events) {
+    if (event.eventType === "receipt") {
+      batches.push({ qty: event.qty, unitCost: parseFloat(event.unitCost ?? "0"), date: event.date, sourceRef: event.sourceRef });
+    } else if (event.eventType === "sale") {
+      consume(Math.abs(event.qty), event.date, `sale event ${event.id}`);
+    } else {
+      // adjustment: negative consumes FIFO like a sale; positive is its own batch.
+      if (event.qty < 0) {
+        consume(Math.abs(event.qty), event.date, `adjustment event ${event.id}`);
+      } else if (event.qty > 0) {
+        batches.push({ qty: event.qty, unitCost: parseFloat(event.unitCost ?? "0"), date: event.date, sourceRef: event.sourceRef });
+      }
+    }
+  }
+
+  return batches
+    .filter((b) => b.qty > 0)
+    .map((b) => ({ batchDate: b.date, sourceRef: b.sourceRef, unitCost: b.unitCost, remainingQty: b.qty }))
+    .sort((a, b) => a.batchDate.getTime() - b.batchDate.getTime());
+}
