@@ -1,20 +1,25 @@
 import { useMemo, useState } from "react";
 import { trpc } from "../lib/trpc";
 
+function skuLabel(s: { id: number; sku?: string | null; name?: string | null }): string {
+  return s.name || s.sku || `SKU #${s.id}`;
+}
+
 export function MoneyPage() {
   const [tab, setTab] = useState<"cashflow" | "landed_cost" | "daily_cogs">("cashflow");
 
   // Daily COGS needs a SKU+warehouse to scope to; Landed Cost needs a shipment.
-  // A real picker belongs in a follow-up polish pass — these are placeholder
-  // selections (first SKU/warehouse/shipment in each list) just to prove the
-  // wiring end-to-end for V1.
   const skusQuery = trpc.catalog.listSkus.useQuery();
   const warehousesQuery = trpc.catalog.listWarehouses.useQuery();
   const shipmentsQuery = trpc.shipments.list.useQuery();
 
-  const selectedSkuId = skusQuery.data?.[0]?.id;
-  const selectedWarehouseId = warehousesQuery.data?.[0]?.id;
-  const selectedShipmentId = shipmentsQuery.data?.[0]?.id;
+  const [skuId, setSkuId] = useState<string>("");
+  const [warehouseId, setWarehouseId] = useState<string>("");
+  const [shipmentId, setShipmentId] = useState<string>("");
+
+  const selectedSkuId = skuId ? Number(skuId) : undefined;
+  const selectedWarehouseId = warehouseId ? Number(warehouseId) : undefined;
+  const selectedShipmentId = shipmentId ? Number(shipmentId) : undefined;
 
   // Computed once per mount, not inline per render: a fresh `new Date(Date.now() ± …)`
   // on every render changes react-query's input-derived cache key by a few
@@ -48,6 +53,32 @@ export function MoneyPage() {
         <button onClick={() => setTab("landed_cost")}>Landed Cost</button>
         <button onClick={() => setTab("daily_cogs")}>Daily COGS/Sales</button>
       </div>
+      {tab === "daily_cogs" && (
+        <div>
+          <select value={skuId} onChange={(e) => setSkuId(e.target.value)}>
+            <option value="">Select a SKU…</option>
+            {(skusQuery.data ?? []).map((s) => (
+              <option key={s.id} value={s.id}>{skuLabel(s)}</option>
+            ))}
+          </select>
+          <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
+            <option value="">Select a warehouse…</option>
+            {(warehousesQuery.data ?? []).map((w) => (
+              <option key={w.id} value={w.id}>{w.name} ({w.code})</option>
+            ))}
+          </select>
+        </div>
+      )}
+      {tab === "landed_cost" && (
+        <div>
+          <select value={shipmentId} onChange={(e) => setShipmentId(e.target.value)}>
+            <option value="">Select a shipment…</option>
+            {(shipmentsQuery.data ?? []).map((sh) => (
+              <option key={sh.id} value={sh.id}>{sh.shipmentRef}</option>
+            ))}
+          </select>
+        </div>
+      )}
       {tab === "cashflow" && (
         <>
           <table>
@@ -68,7 +99,9 @@ export function MoneyPage() {
         </>
       )}
       {tab === "daily_cogs" && (
-        data.dailyCogsError ? (
+        !selectedSkuId || !selectedWarehouseId ? (
+          <p>Select a SKU and a warehouse above to see Daily COGS.</p>
+        ) : data.dailyCogsError ? (
           <div>Failed to compute daily COGS: {data.dailyCogsError}</div>
         ) : (
           <table>
@@ -82,7 +115,9 @@ export function MoneyPage() {
         )
       )}
       {tab === "landed_cost" && (
-        data.landedCostError ? (
+        !selectedShipmentId ? (
+          <p>Select a shipment above to see its landed cost.</p>
+        ) : data.landedCostError ? (
           <div>Failed to compute landed cost: {data.landedCostError}</div>
         ) : (
           <table>
