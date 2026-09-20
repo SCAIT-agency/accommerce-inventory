@@ -2,13 +2,13 @@
 
 Source: the final whole-branch review after V1's 20 tasks (see [`BUILD-HISTORY.md`](./BUILD-HISTORY.md)), plus the deferred-minor triage that review ran against everything parked during the build. Every item here is a real finding, not a guess — each was independently verified against the actual code, not just asserted.
 
-Grouped into six work streams (A–F). Recommended order: **B → A → E → C → D**, with F riding along with whichever other stream touches the same files. Reasoning: B and A are what make the system honestly comparable against Control Tower during the parallel run; C and D matter most once real client staff and real data volume show up, which comes after that. **B, E, C, and D are done** — A has one real item still open (see below); remaining work otherwise is F (cleanup, opportunistic) plus the small deferred items each stream surfaced along the way.
+Grouped into six work streams (A–F). Recommended order: **B → A → E → C → D**, with F riding along with whichever other stream touches the same files. Reasoning: B and A are what make the system honestly comparable against Control Tower during the parallel run; C and D matter most once real client staff and real data volume show up, which comes after that. **A, B, C, D, and E are all done** — remaining work is F (cleanup, opportunistic) plus the small deferred items each stream surfaced along the way.
 
 Status legend: ✅ done · ⬜ open
 
 ---
 
-## A. Wiring completion
+## A. Wiring completion — ✅ DONE (2026-09-20, last item closed alongside Stream D's close-out)
 
 Backend logic exists and is tested; no router procedure or UI exposes it. Recommended as **one single task**, not nine — the review explicitly called this out as a checklist item, not nine separate features.
 
@@ -19,7 +19,7 @@ Backend logic exists and is tested; no router procedure or UI exposes it. Recomm
 - ✅ `getSalesVolatility` / `getPlanActualDeviation` — surfaced on the Stock page's Sales Plan section.
 - ✅ `listShipmentsForPo` — `shipments.listForPo`, surfaced on the Purchase Orders page.
 - ✅ `matchTransaction` — wired to a real UI action on the Money page's Cashflow tab (`listUnpaidPayments` dropdown + match button), including the payment-double-matching and dropdown-identity fixes from the final review's fix wave (see `docs/2026-09-19-wiring-completion-design.md` Section 8 and the fix-wave report at `.superpowers/sdd/2026-09-19-wiring-completion/final-review-fix-report.md`).
-- ⬜ **No UI exists anywhere to set a shipment's `plannedDepartDate` or to mark it departed with a real actual-depart-date** (`shipments.updatePlannedDepartDate` and `shipments.markDeparted` router procedures exist and are tested, but nothing in the client calls either) — a real gap predating this stream, now explicitly closed off from being reachable through the wrong function (`updateShipmentStatus`) rather than fixed with a proper UI. `updateShipmentStatus` now throws if asked to transition to `"departed"`, and the client's `VALID_SHIPMENT_TRANSITIONS` no longer offers a "Mark departed" button for `planned` shipments. Building the real "set planned depart date + mark departed with a date" UI is a separate, larger piece of work.
+- ✅ **UI now exists to set a shipment's `plannedDepartDate` and mark it departed with a real actual-depart-date.** New `PlannedDepartureControl` on the Shipments page, shown only for a `planned` shipment, calling the already-tested `shipments.updatePlannedDepartDate`/`shipments.markDeparted` router procedures — mirrors the existing `CustomsArrivalControl`/`DepartDateCorrectionControl` pattern. Verified end-to-end via the real API (create shipment → confirm `plannedDepartDate: null` → set it → mark departed → confirm `status: "departed"` with both dates persisted).
 
 ## B. Migration & cutover readiness — ✅ DONE (2026-09-14, see [`BUILD-HISTORY.md`](./BUILD-HISTORY.md) for the full build/review narrative)
 
