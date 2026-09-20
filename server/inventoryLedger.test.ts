@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { inventoryLedger, skus, warehouses } from "../drizzle/schema";
-import { recordLedgerEvent, getSoh, getSohByWarehouse } from "./inventoryLedger";
+import { recordLedgerEvent, getSoh, getSohByWarehouse, getSohForSkus } from "./inventoryLedger";
 import { createSku, createWarehouse } from "./db";
 
 beforeEach(async () => {
@@ -133,5 +133,34 @@ describe("inventory ledger", () => {
 
     const soh = await getSoh(sku.id, ff.id);
     expect(soh).toBe(20); // 100 - 80; the rejected adjustment never landed
+  });
+
+  it("returns per-SKU/per-warehouse SOH breakdowns for multiple SKUs in one call, omitting a SKU with no ledger history entirely", async () => {
+    const skuA = await createSku({ sku: "JELLO-A", primaryIdentifierType: "sku" });
+    const skuB = await createSku({ sku: "JELLO-B", primaryIdentifierType: "sku" });
+    const skuC = await createSku({ sku: "JELLO-C", primaryIdentifierType: "sku" }); // no ledger rows at all
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
+
+    await recordLedgerEvent({ skuId: skuA.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: skuA.id, warehouseId: mutual.id, eventType: "receipt", qty: 300, unitCost: "0.45", date: new Date("2026-09-01"), sourceRef: "PO1-Local" });
+    await recordLedgerEvent({ skuId: skuB.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO2" });
+    await recordLedgerEvent({ skuId: skuB.id, warehouseId: ff.id, eventType: "sale", qty: -50, unitCost: null, date: new Date("2026-09-02"), sourceRef: "shopify-1" });
+
+    const result = await getSohForSkus([skuA.id, skuB.id, skuC.id]);
+
+    expect(result.get(skuA.id)).toEqual(
+      expect.arrayContaining([
+        { warehouseId: ff.id, soh: 1000 },
+        { warehouseId: mutual.id, soh: 300 },
+      ]),
+    );
+    expect(result.get(skuB.id)).toEqual([{ warehouseId: ff.id, soh: 450 }]);
+    expect(result.has(skuC.id)).toBe(false);
+  });
+
+  it("returns an empty map for an empty skuIds array, without querying the database", async () => {
+    const result = await getSohForSkus([]);
+    expect(result.size).toBe(0);
   });
 });

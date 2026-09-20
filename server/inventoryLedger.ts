@@ -1,4 +1,4 @@
-import { and, eq, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
 import { inventoryLedger, type InsertLedgerEvent } from "../drizzle/schema";
 
@@ -35,6 +35,28 @@ export async function getSoh(skuId: number, warehouseId: number, asOfDate?: Date
     .from(inventoryLedger)
     .where(and(...conditions));
   return row?.total ?? 0;
+}
+
+export async function getSohForSkus(skuIds: number[]): Promise<Map<number, { warehouseId: number; soh: number }[]>> {
+  const result = new Map<number, { warehouseId: number; soh: number }[]>();
+  if (skuIds.length === 0) return result;
+
+  const rows = await db
+    .select({
+      skuId: inventoryLedger.skuId,
+      warehouseId: inventoryLedger.warehouseId,
+      soh: sql<number>`CAST(COALESCE(SUM(${inventoryLedger.qty}), 0) AS SIGNED)`,
+    })
+    .from(inventoryLedger)
+    .where(inArray(inventoryLedger.skuId, skuIds))
+    .groupBy(inventoryLedger.skuId, inventoryLedger.warehouseId);
+
+  for (const row of rows) {
+    const existing = result.get(row.skuId) ?? [];
+    existing.push({ warehouseId: row.warehouseId, soh: row.soh });
+    result.set(row.skuId, existing);
+  }
+  return result;
 }
 
 export async function getSohByWarehouse(skuId: number): Promise<{ warehouseId: number; soh: number }[]> {
