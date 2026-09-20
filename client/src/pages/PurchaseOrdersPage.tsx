@@ -10,6 +10,17 @@ const REASON_CATEGORIES = [
 
 type ReasonCategory = (typeof REASON_CATEGORIES)[number];
 
+const PO_STATUS_BADGE_CLASS: Record<string, string> = {
+  delivered: "badge badge-ok",
+  closed: "badge badge-ok",
+  customs: "badge badge-warning",
+};
+const SHIPMENT_STATUS_BADGE_CLASS: Record<string, string> = {
+  delivered: "badge badge-ok",
+  customs: "badge badge-warning",
+};
+const DEFAULT_STATUS_BADGE_CLASS = "badge badge-neutral";
+
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type Payment = RouterOutputs["payments"]["createExpectedPayment"];
 
@@ -237,7 +248,9 @@ function PoShipmentsSection({ poId }: { poId: number }) {
       <strong>Shipments</strong>
       <ul>
         {shipmentsQuery.data.map((shipment) => (
-          <li key={shipment.id}>{shipment.shipmentRef} — {shipment.status}</li>
+          <li key={shipment.id}>
+            {shipment.shipmentRef} — <span className={SHIPMENT_STATUS_BADGE_CLASS[shipment.status] ?? DEFAULT_STATUS_BADGE_CLASS}>{shipment.status}</span>
+          </li>
         ))}
       </ul>
     </div>
@@ -268,7 +281,7 @@ export function PurchaseOrdersPage() {
             return (
               <tr key={po.id}>
                 <td>{po.poNumber}</td>
-                <td>{po.status}</td>
+                <td><span className={PO_STATUS_BADGE_CLASS[po.status] ?? DEFAULT_STATUS_BADGE_CLASS}>{po.status}</span></td>
                 <td>{po.plannedReadyDate?.toString() ?? "—"}</td>
                 <td>
                   <input
