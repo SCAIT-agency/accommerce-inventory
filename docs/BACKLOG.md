@@ -159,17 +159,17 @@ All of the above went through a full review + fix-round + scoped re-review cycle
 
 **Tracked, not yet built** (grouped by lens — see the full doc linked above for file:line evidence on each):
 
-*Operational (Cook):*
-- ⬜ No way to enter a bank transaction from the UI — `payments.recordTransaction` has a router procedure but no client caller; the Transactions page can only ever show what the migration script imported.
-- ⬜ Purchase Order status can never be advanced from the UI — `purchaseOrders.updateStatus` has a full state machine, tests, and a router procedure, but `PurchaseOrdersPage.tsx` renders status as a read-only badge. Every PO stays `draft` forever in the live app.
-- ⬜ The daily Shopify pull is a manual CLI chore with no schedule, retry, or alerting — and treats the negative-stock guard firing (the most likely real production error) as an "expected skip," silently vanishing that SKU's sales for the day with only a console line as a trace.
-- ⬜ No reversal or correction path exists anywhere for stock, cost, or payment data — a wrong receipt qty, landed cost, or payment can never be corrected or reversed by any operator action. `sales_plan` is the only table the app will delete from.
-- ⬜ Freight/duty can be edited after a shipment has already arrived and its ledger receipt written, permanently desyncing the two with no warning.
-- ⬜ Migrations aren't in the deploy pipeline (`RAILWAY.md` only says to run `pnpm db:push` manually once); the nightly export has no row bound and will OOM at real ledger volume; no monitoring/alerting/restore-drill exists anywhere.
-- ⬜ Matching a transaction doesn't mark its payment paid — the two functions (`matchTransactionToPayment`, cashflow's `paid` check) disagree on what "paid" means, so a matched-but-unpaid payment is invisible to both the actual and the unpaid views.
-- ⬜ Overdue payables (expectedDate in the past, still unpaid) are excluded from "near-term cash needs" entirely — only future-dated unpaid amounts are counted.
-- ⬜ `MoneyPage`'s Daily COGS/Landed Cost tabs silently show data for an arbitrary first-in-list SKU/warehouse/shipment with no picker or label — a V1 placeholder the comment admits, never revisited by the stream that relabeled this page.
-- ⬜ A SKU with no ledger history is structurally excluded from the stockout-risk count rather than shown at risk.
+*Operational (Cook)* — ✅ every bounded item done (2026-09-20); see commits `c8f99a3`, `47ccf50`, `302191c`, `0d4c99d`, `e4b180d`. Remaining items need a real design pass or external infra decisions and are deliberately deferred to a future session:
+- ✅ No way to enter a bank transaction from the UI — `RecordTransactionForm` added to the Transactions page, calling the already-tested `payments.recordTransaction`.
+- ✅ Purchase Order status can never be advanced from the UI — `AdvanceStatusControl` added per PO row, walking the existing linear `VALID_TRANSITIONS` chain via `purchaseOrders.updateStatus`.
+- ✅ Migrations weren't in the deploy pipeline — added `db:migrate` script, `RAILWAY.md` step 6 now mandates it over `db:push` for production, with the `generate`-vs-`migrate` risk spelled out.
+- ✅ `nightlyExport.ts`'s `CORE_TABLES` had drifted from the schema (missing Stream H's 2 sales-plan-input tables, silently dropping them from every export) — added.
+- ✅ Matching a transaction doesn't mark its payment paid — `matchTransactionToPayment` now atomically calls the new `markPaymentPaidCore` (extracted from `markPaymentPaid`, same core/wrapper transaction pattern as Stream H) using the transaction's own amount/fxRate/date, without overwriting an already-paid payment's recorded values.
+- ✅ Overdue payables were excluded from "near-term cash needs" entirely — `getHomeSummary` now also computes `overduePayablesAmount` over `[epoch, yesterday]`, reusing `getCashflowForecast`'s existing mixed-currency handling, surfaced on the Home page.
+- ✅ `MoneyPage`'s Daily COGS/Landed Cost tabs silently scoped to an arbitrary first-in-list SKU/warehouse/shipment — replaced with real dropdowns per tab and a plain prompt when nothing is selected yet.
+- ✅ A SKU with no ledger history was structurally excluded from the stockout-risk count — an empty `byWarehouse` (never received) now counts as at-risk instead of silently safe.
+- ⬜ **Deferred — needs its own design pass:** No reversal or correction path exists anywhere for stock, cost, or payment data (a wrong receipt qty, landed cost, or payment can never be corrected or reversed); freight/duty can still be edited after a shipment has already arrived, permanently desyncing the ledger; nightly export still has no row bound and will OOM at real ledger volume (only the missing-tables drift was fixed, not the underlying unbounded query).
+- ⬜ **Deferred — needs external infra decisions:** the daily Shopify pull has no schedule/retry/alerting and treats the negative-stock guard firing as an "expected skip"; no monitoring/alerting/restore-drill exists anywhere.
 
 *Product (Jobs):*
 - ⬜ The Change Log page is completely unreachable from the UI (no link anywhere) despite 7+ reason-category dropdowns across the app existing specifically to feed it.
@@ -187,7 +187,7 @@ All of the above went through a full review + fix-round + scoped re-review cycle
 - ⬜ Several money-affecting writes aren't atomic — `recordShipmentCosts` and `markPaymentPaid` each do an update followed by multiple unguarded `logChange` calls with no transaction.
 - ⬜ Missing FKs on `sales_plan`/`sales_actuals` (skuId/warehouseId), `purchase_orders.vendorId`, and every `createdBy`/`changedBy` column; exactly one index exists in the whole schema (`inventory_ledger`'s), so `change_log`'s history lookup and `payments`'/`transactions`' cashflow-relevant queries all full-scan.
 - ⬜ `.mjs` CLI scripts are outside the TypeScript project entirely (no `allowJs`) — the daily Shopify pull path has none of the migration path's input validation rigor.
-- ⬜ Dead code: `updateSku` (never called), `computeFifoCogs` (superseded, test-only); `nightlyExport.ts`'s `CORE_TABLES` list already missed Stream H's two new tables the moment they shipped, since it's a hand-maintained list rather than derived from the schema.
+- ⬜ Dead code: `updateSku` (never called), `computeFifoCogs` (superseded, test-only). `nightlyExport.ts`'s `CORE_TABLES` is still a hand-maintained list rather than derived from the schema (the specific drift this caused — missing Stream H's two tables — was fixed 2026-09-20), so the same gap will recur the next time a table is added and this list isn't updated alongside it.
 - ⬜ `payments.history` router procedure is unreachable from the UI (`ChangeLogPage`/its route only accept `"purchase_order" | "shipment"`).
 
 ---
