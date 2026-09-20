@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
-import { skuLabel } from "../lib/labels";
+import { skuLabel, formatMoney } from "../lib/labels";
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type ShipmentListItem = RouterOutputs["shipments"]["list"][number];
@@ -482,7 +482,7 @@ function NewLineItemPicker({ onAdd }: { onAdd: (li: NewShipmentLineItem) => void
         <select value={poLineItemId} onChange={(e) => setPoLineItemId(e.target.value)}>
           <option value="">Line item…</option>
           {poLineItemsQuery.data.lineItems.map((li) => (
-            <option key={li.id} value={li.id}>{skuLabel(skusById.get(li.skuId) ?? { id: li.skuId })} — qty {li.qty} @ {li.unitPrice} {li.currency}</option>
+            <option key={li.id} value={li.id}>{skuLabel(skusById.get(li.skuId) ?? { id: li.skuId })} — qty {li.qty} @ {formatMoney(li.unitPrice, li.currency)}</option>
           ))}
         </select>
       )}

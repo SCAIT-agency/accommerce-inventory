@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { trpc } from "../lib/trpc";
+import { formatMoney } from "../lib/labels";
 
 const REASON_CATEGORIES = [
   "production_delay",
@@ -32,7 +33,7 @@ function MatchTransactionRow({ transaction, unpaidPayments, onMatched }: { trans
       <select value={selectedPaymentId} onChange={(e) => setSelectedPaymentId(e.target.value)}>
         <option value="">Match to payment…</option>
         {unpaidPayments.map((p) => (
-          <option key={p.id} value={p.id}>{p.poNumber ?? "no PO"} — #{p.sequenceNo} — {p.expectedAmount} {p.currency}</option>
+          <option key={p.id} value={p.id}>{p.poNumber ?? "no PO"} — #{p.sequenceNo} — {formatMoney(p.expectedAmount, p.currency)}</option>
         ))}
       </select>
       <select value={reasonCategory} onChange={(e) => setReasonCategory(e.target.value as ReasonCategory)}>
@@ -163,7 +164,7 @@ export function TransactionsPage() {
           {transactionsQuery.data.map((tx) => (
             <tr key={tx.id}>
               <td>{new Date(tx.date).toISOString().slice(0, 10)}</td>
-              <td>{tx.amount} {tx.currency}</td>
+              <td>{formatMoney(tx.amount, tx.currency)}</td>
               <td>{tx.counterparty ?? "—"}</td>
               <td>
                 {tx.matchedPaymentId != null ? (
