@@ -98,11 +98,38 @@ describe("shipments", () => {
     const freightEntry = entries.find((e) => e.field === "freightCost");
     const dutyEntry = entries.find((e) => e.field === "dutyCost");
     expect(freightEntry?.oldValue).toBeNull();
-    expect(freightEntry?.newValue).toBe("4200.00");
+    // Normalized for audit comparison (see normalizeDecimalForAudit) — drops
+    // trailing zeros from the caller-supplied "4200.00"/"980.00" strings.
+    expect(freightEntry?.newValue).toBe("4200");
     expect(freightEntry?.reasonCategory).toBe("freight_rate_change");
     expect(dutyEntry?.oldValue).toBeNull();
-    expect(dutyEntry?.newValue).toBe("980.00");
+    expect(dutyEntry?.newValue).toBe("980");
     expect(dutyEntry?.reasonCategory).toBe("freight_rate_change");
+  });
+
+  it("does not log a spurious change when recordShipmentCosts is called twice with the identical logical value", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "4200.00", dutyCost: "980.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
+    );
+    // Second call repeats the same logical cost values. Read back from the
+    // DB, freightCost/dutyCost are now zero-padded ("4200.0000"); the raw
+    // caller string here is "4200.00" — without normalization these would
+    // look like a real change even though nothing changed.
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "4200.00", dutyCost: "980.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
+    );
+
+    const entries = await db.select().from(changeLog).orderBy(changeLog.id);
+    expect(entries).toHaveLength(4);
+    const secondCallEntries = entries.slice(2);
+    for (const entry of secondCallEntries) {
+      expect(entry.oldValue).toBe(entry.newValue);
+    }
   });
 
   it("blocks marking a shipment departed without a planned depart date first", async () => {

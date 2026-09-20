@@ -73,6 +73,19 @@ design spec's single-tenant-per-client model).
    `../drizzle/schema`, etc.) don't resolve under Node's native ESM loader,
    even with `--experimental-strip-types`.
 
+**Pre-flight check before applying migrations to a populated database.** The
+`0007_volatile_meggan.sql` (FKs/indexes) and `0008_young_klaw.sql` (varchar→decimal
+money/share columns) migrations both assume clean data: an orphaned foreign-key
+value (e.g. a `change_log.changedBy` or `sales_actuals.skuId` pointing at a row
+that no longer exists) makes the FK migration fail outright, and a non-numeric
+value in a money/share column (`freightCost`, `dutyCost`, `weightShare`,
+`valueShare`, `fxRate`, `paidAmount`, etc.) gets silently coerced or rounded by
+the decimal migration instead of erroring. Both happened against this repo's
+own dev DB during development. Every instance today is freshly provisioned per
+client, so this hasn't mattered yet — but before ever running `pnpm db:migrate`
+against a database that already has real data in it, check for orphaned FK
+values and non-numeric money/share values first.
+
 ## One-time migration (when a real Control Tower export is ready)
 
 ```bash

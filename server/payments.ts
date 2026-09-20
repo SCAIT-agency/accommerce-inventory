@@ -1,7 +1,7 @@
 import { eq, isNull, and, ne, desc } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
 import { payments, transactions, purchaseOrders, type Payment, type Transaction } from "../drizzle/schema";
-import { logChange, type ReasonCategory } from "./changeLog";
+import { logChange, normalizeDecimalForAudit, type ReasonCategory } from "./changeLog";
 
 export interface CreateExpectedPaymentInput {
   poId?: number;
@@ -59,8 +59,8 @@ async function markPaymentPaidCore(id: number, opts: MarkPaymentPaidOpts, dbClie
     entityType: "payment",
     entityId: id,
     field: "fxRate",
-    oldValue: before.fxRate,
-    newValue: opts.fxRate,
+    oldValue: normalizeDecimalForAudit(before.fxRate),
+    newValue: normalizeDecimalForAudit(opts.fxRate),
     reasonCategory: opts.reasonCategory,
     reasonNote: opts.reasonNote,
     changedBy: opts.changedBy,
@@ -69,8 +69,8 @@ async function markPaymentPaidCore(id: number, opts: MarkPaymentPaidOpts, dbClie
     entityType: "payment",
     entityId: id,
     field: "paidAmount",
-    oldValue: before.paidAmount,
-    newValue: opts.amount,
+    oldValue: normalizeDecimalForAudit(before.paidAmount),
+    newValue: normalizeDecimalForAudit(opts.amount),
     reasonCategory: opts.reasonCategory,
     reasonNote: opts.reasonNote,
     changedBy: opts.changedBy,

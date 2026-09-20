@@ -242,7 +242,13 @@ describe("getShipmentLandedUnitCost", () => {
     // migration), so MySQL itself now rejects a non-numeric value at insert
     // time -- the app-level guard in getShipmentLandedUnitCost that this test
     // used to exercise is unreachable for this case now that the schema is
-    // the guard.
+    // the guard. This dev DB runs in strict mode (STRICT_TRANS_TABLES,
+    // confirmed via `SELECT @@sql_mode`), so a non-numeric decimal insert
+    // reliably throws ER_TRUNCATED_WRONG_VALUE_FOR_FIELD rather than silently
+    // coercing to 0. Drizzle wraps the real mysql2 error in a generic "Failed
+    // query" Error whose own .message doesn't carry the underlying reason, so
+    // assert on the wrapped .cause's error code instead of a bare toThrow()
+    // (which would also pass for an unrelated FK violation or dropped connection).
     await expect(
       createShipment({
         shipmentRef: "PO1-W4-Container2",
@@ -250,7 +256,55 @@ describe("getShipmentLandedUnitCost", () => {
         lineItems: [{ poLineItemId: lineItem.id, skuId: sku.id, qty: 1000, weightShare: "abc", valueShare: "1.0" }],
         createdBy: userId,
       }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({
+      cause: expect.objectContaining({ code: "ER_TRUNCATED_WRONG_VALUE_FOR_FIELD" }),
+    });
+  });
+
+  it("rejects a weightShare/valueShare that's a valid decimal but out of the [0,1] range, via the app-level guard", async () => {
+    // decimal(9,6) happily stores an out-of-range value like 1.5 or -0.5 —
+    // only the non-numeric half of the original guard became unreachable
+    // after the varchar->decimal migration (see test above). The range half
+    // is still live app logic in getShipmentLandedUnitCost and needs its own
+    // coverage, independent of the write-time schema guard.
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const skuA = await createSku({ sku: "JELLO-MULTI-A", primaryIdentifierType: "sku" });
+    const skuB = await createSku({ sku: "JELLO-MULTI-B", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [
+        { skuId: skuA.id, qty: 1000, unitPrice: "0.15", currency: "EUR" },
+        { skuId: skuB.id, qty: 500, unitPrice: "0.30", currency: "EUR" },
+      ],
+      createdBy: userId,
+    });
+    const poLines = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+    const lineA = poLines.find((l) => l.skuId === skuA.id)!;
+    const lineB = poLines.find((l) => l.skuId === skuB.id)!;
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container5",
+      warehouseId: ff.id,
+      // weightShare 1.5 is a perfectly valid decimal(9,6) value (so the
+      // schema won't reject it), but out of the [0,1] range the app-level
+      // guard requires — this must be caught by getShipmentLandedUnitCost's
+      // own validation, not the schema. The rest of the shares are left not
+      // summing to 1 as a natural consequence, but the per-line range check
+      // runs first and throws before the sum check is ever reached.
+      lineItems: [
+        { poLineItemId: lineA.id, skuId: skuA.id, qty: 1000, weightShare: "1.5", valueShare: "1.0" },
+        { poLineItemId: lineB.id, skuId: skuB.id, qty: 500, weightShare: "-0.5", valueShare: "0.0" },
+      ],
+      createdBy: userId,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "150.00", dutyCost: "20.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
+    );
+
+    await expect(getShipmentLandedUnitCost(shipment.id)).rejects.toThrow(/invalid weightShare/);
   });
 
   it("rejects a shipment whose line items' weightShare doesn't sum to 1, instead of silently over- or under-allocating freight", async () => {

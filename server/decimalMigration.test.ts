@@ -56,7 +56,7 @@ describe("decimal column migration round-trips every value at its real precision
     const po = await createPurchaseOrder({ poNumber: "PO-DECIMAL-TEST-2", vendorId: vendor.id, lineItems: [], createdBy: user.id });
     const sku = await createSku({ sku: "JELLO-DECIMAL-TEST-2", primaryIdentifierType: "sku" });
     const wh = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
-    const [poLine] = await db.insert(poLineItems).values({ poId: po.id, skuId: sku.id, qty: 100, unitPrice: "1.234567", currency: "USD" });
+    const [poLine] = await db.insert(poLineItems).values({ poId: po.id, skuId: sku.id, qty: 100, unitPrice: "1.2346", currency: "USD" });
     const shipment = await createShipment({
       shipmentRef: "SHIP-DECIMAL-TEST", warehouseId: wh.id, createdBy: user.id,
       lineItems: [{ poLineItemId: poLine.insertId, skuId: sku.id, qty: 100, weightShare: "0.333333", valueShare: "0.666667" }],

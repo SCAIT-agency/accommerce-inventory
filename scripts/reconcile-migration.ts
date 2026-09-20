@@ -91,7 +91,7 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
     async function ensureMigrationUser(): Promise<number> {
       const [existing] = await tx.select().from(users).where(eq(users.email, MIGRATION_USER_EMAIL));
       if (existing) return existing.id;
-      const created = await createUser({ email: MIGRATION_USER_EMAIL, role: "editor" }, tx);
+      const created = await createUser({ email: MIGRATION_USER_EMAIL, role: "viewer" }, tx);
       return created.id;
     }
     const migrationUserId = await ensureMigrationUser();

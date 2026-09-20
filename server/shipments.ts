@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
 import { shipments, shipmentLineItems, type Shipment, SHIPMENT_STATUSES, CUSTOMS_STATUSES } from "../drizzle/schema";
-import { logChange, type ReasonCategory } from "./changeLog";
+import { logChange, normalizeDecimalForAudit, type ReasonCategory } from "./changeLog";
 import { recordLedgerEvent } from "./inventoryLedger";
 import { getShipmentLandedUnitCost } from "./landedCost";
 
@@ -180,8 +180,8 @@ export async function recordShipmentCosts(
       entityType: "shipment",
       entityId: id,
       field: "freightCost",
-      oldValue: before.freightCost,
-      newValue: costs.freightCost,
+      oldValue: normalizeDecimalForAudit(before.freightCost),
+      newValue: normalizeDecimalForAudit(costs.freightCost),
       reasonCategory: opts.reasonCategory,
       reasonNote: opts.reasonNote,
       changedBy: opts.changedBy,
@@ -190,8 +190,8 @@ export async function recordShipmentCosts(
       entityType: "shipment",
       entityId: id,
       field: "dutyCost",
-      oldValue: before.dutyCost,
-      newValue: costs.dutyCost,
+      oldValue: normalizeDecimalForAudit(before.dutyCost),
+      newValue: normalizeDecimalForAudit(costs.dutyCost),
       reasonCategory: opts.reasonCategory,
       reasonNote: opts.reasonNote,
       changedBy: opts.changedBy,

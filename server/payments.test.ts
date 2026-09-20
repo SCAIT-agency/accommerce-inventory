@@ -96,7 +96,9 @@ describe("payments and transactions", () => {
     expect(fxRateEntry?.oldValue).toBeNull();
     expect(fxRateEntry?.newValue).toBe("0.93");
     expect(paidAmountEntry?.oldValue).toBeNull();
-    expect(paidAmountEntry?.newValue).toBe("30746.70");
+    // Normalized for audit comparison (see normalizeDecimalForAudit) — drops
+    // the trailing zero that "30746.70" would otherwise carry.
+    expect(paidAmountEntry?.newValue).toBe("30746.7");
   });
 
   it("surfaces an unmatched transaction until it's manually linked to a payment", async () => {
@@ -138,7 +140,10 @@ describe("payments and transactions", () => {
     expect(updated.paid).toBe(true);
     expect(updated.paidAmount).toBe("30700.0000");
     expect(updated.fxRate).toBe("0.930000");
-    expect(updated.baseCurrencyAmount).toBe((30700 * 0.93).toFixed(4));
+    // Production computes baseCurrencyAmount via .toFixed(2) before the
+    // decimal(18,4) column zero-pads it on read-back — a recomputation at
+    // 4dp here would only coincidentally match. Compare numerically instead.
+    expect(parseFloat(updated.baseCurrencyAmount!)).toBeCloseTo(30700 * 0.93, 2);
   });
 
   it("does not overwrite an already-paid payment's recorded amount/date when later matched to a transaction", async () => {
