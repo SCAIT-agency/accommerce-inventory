@@ -16,6 +16,7 @@ import { TransactionsPage } from "./pages/TransactionsPage";
 import { ChangeLogPage } from "./pages/ChangeLogPage";
 import { InventoryLedgerPage } from "./pages/InventoryLedgerPage";
 import { LoginPage } from "./pages/LoginPage";
+import { CatalogPage } from "./pages/CatalogPage";
 
 // Without this guard every protected page just renders "Failed to load:
 // UNAUTHORIZED" forever, with no way for the user to discover they need to
@@ -109,6 +110,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="/shipments" element={<ShipmentsPage />} />
               <Route path="/money" element={<MoneyPage />} />
               <Route path="/transactions" element={<TransactionsPage />} />
+              <Route path="/catalog" element={<CatalogPage />} />
               <Route path="/change-log/:entityType/:entityId" element={<ChangeLogRoute />} />
               <Route path="/inventory-ledger/:skuId/:warehouseId" element={<InventoryLedgerRoute />} />
             </Route>
