@@ -1,6 +1,6 @@
 import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
-import { inventoryLedger, type InsertLedgerEvent } from "../drizzle/schema";
+import { inventoryLedger, type InsertLedgerEvent, type LedgerEvent } from "../drizzle/schema";
 
 export async function recordLedgerEvent(event: Omit<InsertLedgerEvent, "id">, dbClient: DbClient = db) {
   // Known, accepted TOCTOU race: the SOH check below and the insert after it
@@ -76,6 +76,55 @@ export interface RemainingBatch {
   remainingQty: number;
 }
 
+export interface FifoBatch {
+  qty: number;
+  unitCost: number;
+  date: Date;
+  sourceRef: string | null;
+}
+
+// Shared FIFO replay primitive used by getRemainingBatches (below) and by
+// getDailyCogsForRange (server/salesPlan.ts) — previously two separate,
+// drifting implementations of the exact same consume() loop. onSaleConsumed
+// fires only for "sale" events, not adjustments: an adjustment consumes FIFO
+// stock like a sale (a write-off/correction) but must never be counted as
+// Daily COGS, since it isn't a sale.
+export function replayLedgerEventsFifo(
+  events: LedgerEvent[],
+  onSaleConsumed?: (event: LedgerEvent, consumedCost: number) => void,
+): FifoBatch[] {
+  const batches: FifoBatch[] = [];
+
+  const consume = (qtyToConsume: number, asOfDate: Date, context: string): number => {
+    let remaining = qtyToConsume;
+    let consumedCost = 0;
+    while (remaining > 0) {
+      const batch = batches.find((b) => b.qty > 0 && b.date <= asOfDate);
+      if (!batch) throw new Error(`replayLedgerEventsFifo: insufficient stock to consume ${remaining} units for ${context}`);
+      const consumed = Math.min(batch.qty, remaining);
+      consumedCost += consumed * batch.unitCost;
+      batch.qty -= consumed;
+      remaining -= consumed;
+    }
+    return consumedCost;
+  };
+
+  for (const event of events) {
+    if (event.eventType === "receipt") {
+      batches.push({ qty: event.qty, unitCost: parseFloat(event.unitCost ?? "0"), date: event.date, sourceRef: event.sourceRef });
+    } else if (event.eventType === "sale") {
+      const consumedCost = consume(Math.abs(event.qty), event.date, `sale event ${event.id}`);
+      onSaleConsumed?.(event, consumedCost);
+    } else if (event.qty < 0) {
+      consume(Math.abs(event.qty), event.date, `adjustment event ${event.id}`);
+    } else if (event.qty > 0) {
+      batches.push({ qty: event.qty, unitCost: parseFloat(event.unitCost ?? "0"), date: event.date, sourceRef: event.sourceRef });
+    }
+  }
+
+  return batches;
+}
+
 // Known, accepted ordering asymmetry: recordLedgerEvent's negative-stock
 // guard evaluates solvency as of END OF DAY (see endOfDayUtc above), so
 // same-day events are mutually visible to each other's guard check
@@ -94,34 +143,7 @@ export async function getRemainingBatches(skuId: number, warehouseId: number): P
     .where(and(eq(inventoryLedger.skuId, skuId), eq(inventoryLedger.warehouseId, warehouseId)))
     .orderBy(inventoryLedger.date, inventoryLedger.id);
 
-  interface MutableBatch { qty: number; unitCost: number; date: Date; sourceRef: string | null }
-  const batches: MutableBatch[] = [];
-
-  const consume = (qtyToConsume: number, asOfDate: Date, context: string) => {
-    let remaining = qtyToConsume;
-    while (remaining > 0) {
-      const batch = batches.find((b) => b.qty > 0 && b.date <= asOfDate);
-      if (!batch) throw new Error(`getRemainingBatches: insufficient stock to consume ${remaining} units for ${context}`);
-      const consumed = Math.min(batch.qty, remaining);
-      batch.qty -= consumed;
-      remaining -= consumed;
-    }
-  };
-
-  for (const event of events) {
-    if (event.eventType === "receipt") {
-      batches.push({ qty: event.qty, unitCost: parseFloat(event.unitCost ?? "0"), date: event.date, sourceRef: event.sourceRef });
-    } else if (event.eventType === "sale") {
-      consume(Math.abs(event.qty), event.date, `sale event ${event.id}`);
-    } else {
-      // adjustment: negative consumes FIFO like a sale; positive is its own batch.
-      if (event.qty < 0) {
-        consume(Math.abs(event.qty), event.date, `adjustment event ${event.id}`);
-      } else if (event.qty > 0) {
-        batches.push({ qty: event.qty, unitCost: parseFloat(event.unitCost ?? "0"), date: event.date, sourceRef: event.sourceRef });
-      }
-    }
-  }
+  const batches = replayLedgerEventsFifo(events);
 
   return batches
     .filter((b) => b.qty > 0)

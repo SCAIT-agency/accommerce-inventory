@@ -1,9 +1,8 @@
 import { and, between, desc, eq, inArray, lte } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
 import { salesPlan, salesActuals, inventoryLedger, salesPlanWeeklyInputs, salesPlanWeeklyRecipeLines } from "../drizzle/schema";
-import { recordLedgerEvent } from "./inventoryLedger";
+import { recordLedgerEvent, replayLedgerEventsFifo } from "./inventoryLedger";
 import { enumerateDateStrings } from "./dates";
-import type { LandedBatch } from "./landedCost";
 
 export interface CreateSalesPlanEntryInput {
   skuId: number;
@@ -139,48 +138,14 @@ export async function getDailyCogsForRange(skuId: number, warehouseId: number, d
     .where(and(eq(inventoryLedger.skuId, skuId), eq(inventoryLedger.warehouseId, warehouseId), lte(inventoryLedger.date, windowEnd)))
     .orderBy(inventoryLedger.date, inventoryLedger.id);
 
-  // Single chronological pass, handling all three ledger event types —
-  // receipt and sale exactly as before, plus adjustment (previously silently
-  // ignored here, unlike getRemainingBatches in inventoryLedger.ts, which
-  // already handles it: a negative adjustment consumes FIFO like a sale — a
-  // write-off/correction, not attributed to Daily COGS since it isn't a
-  // sale — and a positive adjustment becomes its own batch). Ignoring
-  // adjustments here let SOH/batch detail and Daily COGS silently disagree
-  // on any SKU with a real adjustment in its history.
-  const batches: LandedBatch[] = [];
   const dailyCogs = new Map<string, number>(dateKeys.map((d) => [d, 0]));
 
-  const consume = (qtyToConsume: number, asOfDate: Date, context: string): number => {
-    let remaining = qtyToConsume;
-    let consumedCost = 0;
-    while (remaining > 0) {
-      const batch = batches.find((b) => b.qty > 0 && b.date <= asOfDate);
-      if (!batch) {
-        throw new Error(`insufficient stock: cannot consume ${remaining} units for ${context}`);
-      }
-      const consumed = Math.min(batch.qty, remaining);
-      consumedCost += consumed * batch.unitCost;
-      batch.qty -= consumed;
-      remaining -= consumed;
+  replayLedgerEventsFifo(events, (event, consumedCost) => {
+    const dateKey = event.date.toISOString().slice(0, 10);
+    if (dailyCogs.has(dateKey)) {
+      dailyCogs.set(dateKey, dailyCogs.get(dateKey)! + consumedCost);
     }
-    return consumedCost;
-  };
-
-  for (const event of events) {
-    if (event.eventType === "receipt") {
-      batches.push({ qty: event.qty, unitCost: parseFloat(event.unitCost ?? "0"), date: event.date });
-    } else if (event.eventType === "sale") {
-      const consumedCost = consume(Math.abs(event.qty), event.date, `sale on ${event.date.toISOString()}`);
-      const dateKey = event.date.toISOString().slice(0, 10);
-      if (dailyCogs.has(dateKey)) {
-        dailyCogs.set(dateKey, dailyCogs.get(dateKey)! + consumedCost);
-      }
-    } else if (event.qty < 0) {
-      consume(Math.abs(event.qty), event.date, `adjustment on ${event.date.toISOString()}`);
-    } else if (event.qty > 0) {
-      batches.push({ qty: event.qty, unitCost: parseFloat(event.unitCost ?? "0"), date: event.date });
-    }
-  }
+  });
 
   return dateKeys.map((date) => ({ date, cogs: dailyCogs.get(date)! }));
 }
