@@ -81,8 +81,13 @@ describe("login throttle", () => {
     // The oldest entry's failure count should have been forgotten — a fresh
     // failed attempt against it now starts a new count of 1, not 2, so 4 more
     // failures (5 total post-eviction) should NOT lock it, proving eviction
-    // actually happened rather than just capping silently.
-    for (let i = 0; i < 3; i++) recordFailedAttempt("flood-0@example.com", now + 1000 + i);
+    // actually happened rather than just capping silently. Without eviction,
+    // flood-0 already carries 1 failure from the fill loop above, so these
+    // same 4 calls would reach count 5 and WOULD lock it — this is what
+    // makes the assertion below actually discriminate working eviction from
+    // a silently-broken cap (an earlier version of this test used 3
+    // iterations here, which passed regardless of whether eviction worked).
+    for (let i = 0; i < 4; i++) recordFailedAttempt("flood-0@example.com", now + 1000 + i);
     expect(isLocked("flood-0@example.com", now + 5000)).toBe(false);
 
     clearAttempts("flood-0@example.com");
