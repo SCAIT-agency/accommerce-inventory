@@ -21,7 +21,7 @@ The current flow: `POST /api/auth/password` checks a single shared `APP_PASSWORD
 - A full session-management table (list of active devices, per-device revoke) — no requirement in the spec or BACKLOG asks for session visibility; the `tokenVersion` mechanism below gives real revocation without it.
 - Single sign-on, OAuth, or magic-link email login — this app has no email-sending capability today, and introducing an external identity provider or email infrastructure is a new dependency this stream doesn't need to take on. Worth revisiting if the spec's planned SCAIT Console (a separate, multi-instance portfolio app) makes centralized auth valuable later.
 - An in-app UI for creating/managing users — no such UI exists today (only a one-time seed script), and BACKLOG doesn't ask for one. This design extends the existing CLI-script convention instead.
-- Rate-limiting or lockout on repeated failed login attempts — a real hardening measure, but out of scope for a single-tenant tool with ~4-5 total users behind a private deployment; worth a future item if this ever faces a wider audience.
+- Distributed or IP-based rate limiting, CAPTCHA, or persistent (survives-a-restart) lockout tracking — real additional hardening, but this stream includes a minimal in-process per-email throttle (Section 5) that already closes the obvious "unlimited password guesses" gap for a login endpoint now protecting real financial data; the heavier versions of this control are worth a future item only if this app ever faces a wider or more adversarial audience than its current ~4-5 trusted users.
 - Any change to how `editorProcedure`/`protectedProcedure` enforce roles at the router layer (`server/_core/trpc.ts`) — that enforcement is already correct; the gap is entirely upstream, in how a session gets its identity in the first place.
 
 ## Design
@@ -37,7 +37,7 @@ POST /api/auth/login
 body: { email: string, password: string }
 ```
 
-Looks up the user by email, verifies the password against `passwordHash` (a missing/null `passwordHash` fails closed — treated as "wrong password", not a crash), and on success issues the session JWT directly (see Section 2 for its new payload shape). Wrong email or wrong password both return the same generic `401 { error: "invalid email or password" }` — not distinguishing "no such user" from "wrong password", so the login form can't be used to enumerate registered emails.
+Looks up the user by email, verifies the password against `passwordHash` (a missing/null `passwordHash` fails closed — treated as "wrong password", not a crash), and on success issues the session JWT directly (see Section 2 for its new payload shape). Wrong email or wrong password both return the same generic `401 { error: "invalid email or password" }` — not distinguishing "no such user" from "wrong password", so the login form's *response body* can't be used to enumerate registered emails. Response *timing* still differs slightly (a nonexistent email skips the `scrypt` hash comparison entirely; an existing one pays its real cost) — a real, known side-channel in principle, but an accepted residual risk here: the handful of real emails in this system (Andrew/Julian/Klemens, the SCAIT editor) are already known to each other through normal business contact, so timing-based enumeration defends against a threat that doesn't meaningfully exist for this deployment. Not worth the extra complexity of a dummy-hash comparison on the not-found path.
 
 `client/src/pages/LoginPage.tsx` becomes a single email+password form, replacing the current password-then-identity-list UI. `GET /api/auth/users` is deleted — nothing needs to list every identity anymore.
 
@@ -75,6 +75,12 @@ hashes the new password, updates `passwordHash`, and increments `tokenVersion` i
 
 Both new scripts follow the existing CLI convention (`tsx`-executable, `process.exit(0)`/`process.exit(1)` on every path, since the mysql2 pool otherwise keeps the process alive) and get documented in `RAILWAY.md` alongside the existing seed-user section.
 
+### 5. Minimal failed-login throttle
+
+`/api/auth/login` is now a real password-checking endpoint protecting access to real financial data — leaving it open to unlimited guesses would undercut everything above it. A new `server/_core/loginThrottle.ts` tracks failed attempts **per email** in an in-process `Map<string, { count: number; firstFailureAt: number }>` (no new dependency, no persistent store): 5 failed attempts within a 15-minute window for a given email locks that email out for the next 15 minutes, returning the same generic `401` as a wrong password (not a distinct "locked out" message, so a lockout itself can't be used to confirm an email exists via a different response shape). A successful login clears that email's entry. The window resets on process restart — an accepted limitation at this deployment's scale (infrequent restarts, no adversary sophisticated enough to time deploys), not worth the complexity of persisting counters to the DB.
+
+Deliberately per-email, not per-IP: the real users here may share an office network, and per-IP tracking would let one legitimate user's failed attempts lock out a colleague on the same connection. Per-email correctly rate-limits guessing against any single account regardless of source IP, which is the threat that actually matters at this scale.
+
 ## Testing
 
 `server/_core/passwords.test.ts`: round-trips a password through `hashPassword`/`verifyPassword` (correct password verifies, wrong password doesn't, two hashes of the same password differ due to random salting).
@@ -82,6 +88,8 @@ Both new scripts follow the existing CLI convention (`tsx`-executable, `process.
 `server/_core/authRoutes.test.ts` (extended, real DB not mocks, matching this codebase's existing test convention): `/api/auth/login` succeeds with correct credentials and issues a session cookie; fails with wrong password; fails with a nonexistent email; fails with a null `passwordHash` (a user who exists but was never given a password); the generic error message is identical across all three failure cases (byte-for-byte, proving no enumeration signal). `/api/auth/logout` test proves the OLD token stops working immediately after logout — verified against a real request using the pre-logout cookie, not just checking the cookie-clearing response. A `tokenVersion` mismatch test proves `createContext` treats a stale token as unauthenticated even though its JWT signature and expiry are still valid.
 
 `scripts/reset-password.mjs`'s behavior (password changes AND old sessions get invalidated) gets its own test proving both effects from one invocation, run against the real dev DB matching this codebase's existing script-testing convention (see `scripts/parallel-run-report.test.ts` for the pattern of testing a script's core logic without shelling out to the CLI itself).
+
+`server/_core/loginThrottle.test.ts`: 5 failed attempts for one email locks it out (the 6th correct-password attempt still fails while locked); a *different* email is unaffected by another email's lockout; a successful login clears that email's failure count; the lockout expires after the window elapses (test controls the clock rather than sleeping 15 real minutes — inject time via a parameter or module-level override, matching whatever pattern this codebase already uses for time-dependent tests, if any exists — check before inventing a new one).
 
 ## Open Questions
 
