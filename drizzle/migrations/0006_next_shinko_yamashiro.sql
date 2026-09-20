@@ -18,6 +18,10 @@ CREATE TABLE `sales_plan_weekly_recipe_lines` (
 	CONSTRAINT `sales_plan_weekly_recipe_lines_id` PRIMARY KEY(`id`)
 );
 --> statement-breakpoint
+DELETE t1 FROM sales_plan t1
+INNER JOIN sales_plan t2
+  ON t1.skuId = t2.skuId AND t1.warehouseId = t2.warehouseId AND t1.periodDate = t2.periodDate
+WHERE t1.id < t2.id;--> statement-breakpoint
 ALTER TABLE `sales_plan` ADD CONSTRAINT `sales_plan_sku_warehouse_date_unique` UNIQUE(`skuId`,`warehouseId`,`periodDate`);--> statement-breakpoint
 ALTER TABLE `sales_plan_weekly_inputs` ADD CONSTRAINT `sales_plan_weekly_inputs_primaryWarehouseId_warehouses_id_fk` FOREIGN KEY (`primaryWarehouseId`) REFERENCES `warehouses`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `sales_plan_weekly_inputs` ADD CONSTRAINT `sales_plan_weekly_inputs_secondaryWarehouseId_warehouses_id_fk` FOREIGN KEY (`secondaryWarehouseId`) REFERENCES `warehouses`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint

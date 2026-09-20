@@ -7,17 +7,7 @@ import { listUnmatchedTransactions } from "./payments";
 import { getCashflowForecast } from "./cashflow";
 import { getDailyCogsForRange } from "./salesPlan";
 import { getShipmentLandedUnitCost } from "./landedCost";
-
-export function enumerateDateStrings(from: Date, to: Date): string[] {
-  const dates: string[] = [];
-  const cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
-  const end = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()));
-  while (cursor <= end) {
-    dates.push(cursor.toISOString().slice(0, 10));
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-  return dates;
-}
+import { enumerateDateStrings } from "./dates";
 
 // In-code lookup for V1; move to app_settings-driven config when a real
 // client needs to tune these thresholds — out of scope for this task.

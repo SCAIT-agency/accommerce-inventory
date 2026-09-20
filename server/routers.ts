@@ -227,6 +227,10 @@ export const appRouter = router({
         primaryPercent: z.string(),
         secondaryWarehouseId: z.number(),
         recipeLines: z.array(z.object({ skuId: z.number(), unitsPer1000: z.string() })),
+      }).refine((input) => input.primaryWarehouseId !== input.secondaryWarehouseId, {
+        message: "primaryWarehouseId and secondaryWarehouseId must be different",
+      }).refine((input) => new Set(input.recipeLines.map((l) => l.skuId)).size === input.recipeLines.length, {
+        message: "recipeLines must not repeat the same SKU",
       }))
       .mutation(({ input }) => upsertWeeklyInput({ ...input, weekStartDate: input.weekStartDate.toISOString().slice(0, 10) })),
   }),

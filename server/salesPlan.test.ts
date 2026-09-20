@@ -15,6 +15,15 @@ import {
 import { createSku, createWarehouse } from "./db";
 import { recordLedgerEvent } from "./inventoryLedger";
 
+function futureMonday(weeksAhead: number): string {
+  const today = new Date();
+  const cursor = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const day = cursor.getUTCDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  cursor.setUTCDate(cursor.getUTCDate() + diffToMonday + weeksAhead * 7);
+  return cursor.toISOString().slice(0, 10);
+}
+
 beforeEach(async () => {
   // Real FKs now tie skus/warehouses to other tables, but each test file only
   // cleans its own tables at the start of each test (no afterAll anywhere in
@@ -198,7 +207,7 @@ describe("sales plan/actuals", () => {
       secondaryWarehouseId: number;
     }> & { primaryWarehouseId: number; secondaryWarehouseId: number; recipe: { skuId: number; unitsPer1000: string }[] }) {
       const [result] = await db.insert(salesPlanWeeklyInputs).values({
-        weekStartDate: overrides.weekStartDate ?? "2026-10-05",
+        weekStartDate: overrides.weekStartDate ?? futureMonday(4),
         plannedRevenue: overrides.plannedRevenue ?? "70000.00",
         primaryWarehouseId: overrides.primaryWarehouseId,
         primaryPercent: overrides.primaryPercent ?? "70.00",
@@ -218,7 +227,7 @@ describe("sales plan/actuals", () => {
       // 70000/7 = 10000/day. 10000/1000 * 5 units-per-1000 = 50 units/day.
       // 70% FF = 35, 30% Mutual = 15.
       await seedWeekInput({
-        weekStartDate: "2026-10-05",
+        weekStartDate: futureMonday(4),
         plannedRevenue: "70000.00",
         primaryWarehouseId: ff.id,
         primaryPercent: "70.00",
@@ -226,12 +235,12 @@ describe("sales plan/actuals", () => {
         recipe: [{ skuId: sku.id, unitsPer1000: "5" }],
       });
 
-      await regenerateSalesPlanForWeek("2026-10-05");
+      await regenerateSalesPlanForWeek(futureMonday(4));
 
       const rows = await db.select().from(salesPlan).where(eq(salesPlan.skuId, sku.id));
       expect(rows).toHaveLength(14); // 7 days * 2 warehouses
-      const ffRow = rows.find((r) => r.warehouseId === ff.id && r.periodDate === "2026-10-05");
-      const mutualRow = rows.find((r) => r.warehouseId === mutual.id && r.periodDate === "2026-10-05");
+      const ffRow = rows.find((r) => r.warehouseId === ff.id && r.periodDate === futureMonday(4));
+      const mutualRow = rows.find((r) => r.warehouseId === mutual.id && r.periodDate === futureMonday(4));
       expect(ffRow?.plannedQty).toBe(35);
       expect(mutualRow?.plannedQty).toBe(15);
     });
@@ -242,14 +251,14 @@ describe("sales plan/actuals", () => {
       const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
 
       await seedWeekInput({
-        weekStartDate: "2026-10-05",
+        weekStartDate: futureMonday(4),
         primaryWarehouseId: ff.id,
         secondaryWarehouseId: mutual.id,
         recipe: [{ skuId: sku.id, unitsPer1000: "5" }],
       });
 
-      await regenerateSalesPlanForWeek("2026-10-05");
-      await regenerateSalesPlanForWeek("2026-10-05");
+      await regenerateSalesPlanForWeek(futureMonday(4));
+      await regenerateSalesPlanForWeek(futureMonday(4));
 
       const rows = await db.select().from(salesPlan).where(eq(salesPlan.skuId, sku.id));
       expect(rows).toHaveLength(14);
@@ -261,15 +270,15 @@ describe("sales plan/actuals", () => {
       const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
       const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
 
-      await createSalesPlanEntry({ skuId: otherSku.id, warehouseId: ff.id, periodDate: "2026-10-05", plannedQty: 999 });
+      await createSalesPlanEntry({ skuId: otherSku.id, warehouseId: ff.id, periodDate: futureMonday(4), plannedQty: 999 });
       await seedWeekInput({
-        weekStartDate: "2026-10-05",
+        weekStartDate: futureMonday(4),
         primaryWarehouseId: ff.id,
         secondaryWarehouseId: mutual.id,
         recipe: [{ skuId: recipeSkU.id, unitsPer1000: "5" }],
       });
 
-      await regenerateSalesPlanForWeek("2026-10-05");
+      await regenerateSalesPlanForWeek(futureMonday(4));
 
       const otherRows = await db.select().from(salesPlan).where(eq(salesPlan.skuId, otherSku.id));
       expect(otherRows).toHaveLength(1);
@@ -283,7 +292,7 @@ describe("sales plan/actuals", () => {
       const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
 
       await seedWeekInput({
-        weekStartDate: "2026-10-05",
+        weekStartDate: futureMonday(4),
         plannedRevenue: "70000.00",
         primaryPercent: "50.00",
         primaryWarehouseId: ff.id,
@@ -291,15 +300,19 @@ describe("sales plan/actuals", () => {
         recipe: [{ skuId: jello.id, unitsPer1000: "5" }, { skuId: mixer.id, unitsPer1000: "0.5" }],
       });
 
-      await regenerateSalesPlanForWeek("2026-10-05");
+      await regenerateSalesPlanForWeek(futureMonday(4));
 
       // Jello: 10000/1000*5 = 50/day, 50/50 split = 25/25.
       // Mixer: 10000/1000*0.5 = 5/day, 50/50 split = 3/2 (largest remainder: round(5)=5, round(5*0.5)=3 (banker's rounding could give 2, but Math.round(2.5)=3 in JS), remainder=2).
-      const jelloFf = await db.select().from(salesPlan).where(and(eq(salesPlan.skuId, jello.id), eq(salesPlan.warehouseId, ff.id), eq(salesPlan.periodDate, "2026-10-05")));
+      const jelloFf = await db.select().from(salesPlan).where(and(eq(salesPlan.skuId, jello.id), eq(salesPlan.warehouseId, ff.id), eq(salesPlan.periodDate, futureMonday(4))));
       expect(jelloFf[0].plannedQty).toBe(25);
-      const mixerRows = await db.select().from(salesPlan).where(and(eq(salesPlan.skuId, mixer.id), eq(salesPlan.periodDate, "2026-10-05")));
+      const mixerRows = await db.select().from(salesPlan).where(and(eq(salesPlan.skuId, mixer.id), eq(salesPlan.periodDate, futureMonday(4))));
       const mixerTotal = mixerRows.reduce((sum, r) => sum + r.plannedQty, 0);
       expect(mixerTotal).toBe(5);
+      const mixerFf = mixerRows.find((r) => r.warehouseId === ff.id);
+      const mixerMutual = mixerRows.find((r) => r.warehouseId === mutual.id);
+      expect(mixerFf?.plannedQty).toBe(3);
+      expect(mixerMutual?.plannedQty).toBe(2);
     });
 
     it("throws when regenerating a week that has already fully elapsed", async () => {
@@ -320,6 +333,53 @@ describe("sales plan/actuals", () => {
     it("throws a clear error when no weekly input exists for the given week", async () => {
       await expect(regenerateSalesPlanForWeek("2026-11-02")).rejects.toThrow(/no weekly input found/);
     });
+
+    it("rejects a primaryPercent above 100 instead of silently writing a negative plannedQty", async () => {
+      const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+      const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+      const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
+
+      await seedWeekInput({
+        weekStartDate: futureMonday(4),
+        primaryPercent: "150",
+        primaryWarehouseId: ff.id,
+        secondaryWarehouseId: mutual.id,
+        recipe: [{ skuId: sku.id, unitsPer1000: "5" }],
+      });
+
+      await expect(regenerateSalesPlanForWeek(futureMonday(4))).rejects.toThrow(/invalid primaryPercent/);
+    });
+
+    it("rejects a negative plannedRevenue", async () => {
+      const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+      const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+      const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
+
+      await seedWeekInput({
+        weekStartDate: futureMonday(4),
+        plannedRevenue: "-100",
+        primaryWarehouseId: ff.id,
+        secondaryWarehouseId: mutual.id,
+        recipe: [{ skuId: sku.id, unitsPer1000: "5" }],
+      });
+
+      await expect(regenerateSalesPlanForWeek(futureMonday(4))).rejects.toThrow(/invalid plannedRevenue/);
+    });
+
+    it("rejects a negative unitsPer1000 on a recipe line", async () => {
+      const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+      const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+      const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
+
+      await seedWeekInput({
+        weekStartDate: futureMonday(4),
+        primaryWarehouseId: ff.id,
+        secondaryWarehouseId: mutual.id,
+        recipe: [{ skuId: sku.id, unitsPer1000: "-5" }],
+      });
+
+      await expect(regenerateSalesPlanForWeek(futureMonday(4))).rejects.toThrow(/invalid unitsPer1000/);
+    });
   });
 
   describe("upsertWeeklyInput", () => {
@@ -329,7 +389,7 @@ describe("sales plan/actuals", () => {
       const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
 
       await upsertWeeklyInput({
-        weekStartDate: "2026-10-05",
+        weekStartDate: futureMonday(4),
         plannedRevenue: "70000.00",
         primaryWarehouseId: ff.id,
         primaryPercent: "70.00",
@@ -340,7 +400,7 @@ describe("sales plan/actuals", () => {
       const rows = await db.select().from(salesPlan).where(eq(salesPlan.skuId, sku.id));
       expect(rows).toHaveLength(14);
 
-      const inputs = await listWeeklyInputs("2026-10-01", "2026-10-31");
+      const inputs = await listWeeklyInputs(futureMonday(0), futureMonday(8));
       expect(inputs).toHaveLength(1);
       expect(inputs[0].recipeLines).toHaveLength(1);
     });
@@ -352,15 +412,15 @@ describe("sales plan/actuals", () => {
       const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
 
       await upsertWeeklyInput({
-        weekStartDate: "2026-10-05", plannedRevenue: "70000.00", primaryWarehouseId: ff.id, primaryPercent: "70.00", secondaryWarehouseId: mutual.id,
+        weekStartDate: futureMonday(4), plannedRevenue: "70000.00", primaryWarehouseId: ff.id, primaryPercent: "70.00", secondaryWarehouseId: mutual.id,
         recipeLines: [{ skuId: skuA.id, unitsPer1000: "5" }],
       });
       await upsertWeeklyInput({
-        weekStartDate: "2026-10-05", plannedRevenue: "70000.00", primaryWarehouseId: ff.id, primaryPercent: "70.00", secondaryWarehouseId: mutual.id,
+        weekStartDate: futureMonday(4), plannedRevenue: "70000.00", primaryWarehouseId: ff.id, primaryPercent: "70.00", secondaryWarehouseId: mutual.id,
         recipeLines: [{ skuId: skuB.id, unitsPer1000: "2" }],
       });
 
-      const inputs = await listWeeklyInputs("2026-10-01", "2026-10-31");
+      const inputs = await listWeeklyInputs(futureMonday(0), futureMonday(8));
       expect(inputs[0].recipeLines).toHaveLength(1);
       expect(inputs[0].recipeLines[0].skuId).toBe(skuB.id);
 
@@ -379,11 +439,11 @@ describe("sales plan/actuals", () => {
       const otherSecondary = await createWarehouse({ code: "MUTUAL-AT", name: "Mutual AT" });
 
       await upsertWeeklyInput({
-        weekStartDate: "2026-10-05", plannedRevenue: "70000.00", primaryWarehouseId: ff.id, primaryPercent: "70.00", secondaryWarehouseId: mutual.id,
+        weekStartDate: futureMonday(4), plannedRevenue: "70000.00", primaryWarehouseId: ff.id, primaryPercent: "70.00", secondaryWarehouseId: mutual.id,
         recipeLines: [{ skuId: skuA.id, unitsPer1000: "5" }],
       });
       await upsertWeeklyInput({
-        weekStartDate: "2026-10-05", plannedRevenue: "70000.00", primaryWarehouseId: otherPrimary.id, primaryPercent: "70.00", secondaryWarehouseId: otherSecondary.id,
+        weekStartDate: futureMonday(4), plannedRevenue: "70000.00", primaryWarehouseId: otherPrimary.id, primaryPercent: "70.00", secondaryWarehouseId: otherSecondary.id,
         recipeLines: [{ skuId: skuB.id, unitsPer1000: "2" }],
       });
 
@@ -404,11 +464,11 @@ describe("sales plan/actuals", () => {
       const otherSecondary = await createWarehouse({ code: "MUTUAL-AT", name: "Mutual AT" });
 
       await upsertWeeklyInput({
-        weekStartDate: "2026-10-05", plannedRevenue: "70000.00", primaryWarehouseId: ff.id, primaryPercent: "70.00", secondaryWarehouseId: mutual.id,
+        weekStartDate: futureMonday(4), plannedRevenue: "70000.00", primaryWarehouseId: ff.id, primaryPercent: "70.00", secondaryWarehouseId: mutual.id,
         recipeLines: [{ skuId: sku.id, unitsPer1000: "5" }],
       });
       await upsertWeeklyInput({
-        weekStartDate: "2026-10-05", plannedRevenue: "70000.00", primaryWarehouseId: otherPrimary.id, primaryPercent: "70.00", secondaryWarehouseId: otherSecondary.id,
+        weekStartDate: futureMonday(4), plannedRevenue: "70000.00", primaryWarehouseId: otherPrimary.id, primaryPercent: "70.00", secondaryWarehouseId: otherSecondary.id,
         recipeLines: [{ skuId: sku.id, unitsPer1000: "5" }],
       });
 

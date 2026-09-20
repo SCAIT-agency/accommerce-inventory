@@ -2,7 +2,7 @@ import { and, between, desc, eq, inArray, lte } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
 import { salesPlan, salesActuals, inventoryLedger, salesPlanWeeklyInputs, salesPlanWeeklyRecipeLines } from "../drizzle/schema";
 import { recordLedgerEvent } from "./inventoryLedger";
-import { enumerateDateStrings } from "./dashboards";
+import { enumerateDateStrings } from "./dates";
 import type { LandedBatch, SaleEvent } from "./landedCost";
 
 export interface CreateSalesPlanEntryInput {
@@ -187,12 +187,28 @@ export async function regenerateSalesPlanForWeek(weekStartDate: string, dbClient
     throw new Error(`regenerateSalesPlanForWeek: week starting ${weekStartDate} is entirely in the past — planning only applies to the current week or later`);
   }
 
+  const revenue = parseFloat(weekInput.plannedRevenue);
+  if (!Number.isFinite(revenue) || revenue < 0) {
+    throw new Error(`regenerateSalesPlanForWeek: invalid plannedRevenue "${weekInput.plannedRevenue}" for week starting ${weekStartDate} — must be a non-negative number`);
+  }
+  const primaryPctRaw = parseFloat(weekInput.primaryPercent);
+  if (!Number.isFinite(primaryPctRaw) || primaryPctRaw < 0 || primaryPctRaw > 100) {
+    throw new Error(`regenerateSalesPlanForWeek: invalid primaryPercent "${weekInput.primaryPercent}" for week starting ${weekStartDate} — must be between 0 and 100`);
+  }
+
   const recipeLines = await dbClient.select().from(salesPlanWeeklyRecipeLines).where(eq(salesPlanWeeklyRecipeLines.weeklyInputId, weekInput.id));
-  const dailyRevenue = parseFloat(weekInput.plannedRevenue) / 7;
-  const primaryPct = parseFloat(weekInput.primaryPercent) / 100;
+  const dailyRevenue = revenue / 7;
+  const primaryPct = primaryPctRaw / 100;
 
   const rowsToInsert: { skuId: number; warehouseId: number; periodDate: string; plannedQty: number }[] = [];
   const skuIds = recipeLines.map((line) => line.skuId);
+
+  for (const line of recipeLines) {
+    const unitsPer1000 = parseFloat(line.unitsPer1000);
+    if (!Number.isFinite(unitsPer1000) || unitsPer1000 < 0) {
+      throw new Error(`regenerateSalesPlanForWeek: invalid unitsPer1000 "${line.unitsPer1000}" for SKU ${line.skuId} — must be a non-negative number`);
+    }
+  }
 
   for (const date of weekDates) {
     for (const line of recipeLines) {

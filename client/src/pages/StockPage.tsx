@@ -195,10 +195,13 @@ function WeeklyPlanRow({ weekStartDate, existing, skus, warehouses, onSaved }: {
     setForm((prev) => ({ ...prev, recipeLines: prev.recipeLines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)) }));
   const removeRecipeLine = (i: number) => setForm((prev) => ({ ...prev, recipeLines: prev.recipeLines.filter((_, idx) => idx !== i) }));
 
+  const recipeSkuIds = form.recipeLines.filter((l) => l.skuId !== "").map((l) => l.skuId);
   const canSave = form.plannedRevenue.trim().length > 0
     && form.primaryWarehouseId !== "" && form.secondaryWarehouseId !== "" && form.primaryPercent.trim().length > 0
+    && form.primaryWarehouseId !== form.secondaryWarehouseId
     && form.recipeLines.length > 0
-    && form.recipeLines.every((l) => l.skuId !== "" && l.unitsPer1000.trim().length > 0);
+    && form.recipeLines.every((l) => l.skuId !== "" && l.unitsPer1000.trim().length > 0)
+    && new Set(recipeSkuIds).size === recipeSkuIds.length;
 
   return (
     <tr>
