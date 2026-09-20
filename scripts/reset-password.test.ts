@@ -29,4 +29,14 @@ describe("resetPassword", () => {
   it("throws for a nonexistent email", async () => {
     await expect(resetPassword("nobody@accommerce.example", "new password")).rejects.toThrow(/no user/i);
   });
+
+  it("resets a password even when the email casing differs from how it was stored", async () => {
+    const oldHash = await hashPassword("old password");
+    const [result] = await db.insert(users).values({ email: EMAIL, role: "viewer", passwordHash: oldHash });
+
+    await resetPassword(EMAIL.toUpperCase(), "new password");
+
+    const [after] = await db.select().from(users).where(eq(users.id, result.insertId));
+    await expect(verifyPassword("new password", after.passwordHash)).resolves.toBe(true);
+  });
 });

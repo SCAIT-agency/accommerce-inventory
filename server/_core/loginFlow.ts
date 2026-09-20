@@ -15,16 +15,23 @@ export type LoginResult =
   | { ok: true; token: string; user: { id: number; email: string; role: "editor" | "viewer" } }
   | { ok: false };
 
-export async function attemptLogin(email: string, password: string): Promise<LoginResult> {
-  if (isLocked(email)) return { ok: false };
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
 
-  const [user] = await db.select().from(users).where(eq(users.email, email));
+export async function attemptLogin(email: string, password: string): Promise<LoginResult> {
+  const normalizedEmail = normalizeEmail(email);
+  if (normalizedEmail.length === 0 || normalizedEmail.length > 320) return { ok: false };
+
+  if (isLocked(normalizedEmail)) return { ok: false };
+
+  const [user] = await db.select().from(users).where(eq(users.email, normalizedEmail));
   if (!user || !(await verifyPassword(password, user.passwordHash))) {
-    recordFailedAttempt(email);
+    recordFailedAttempt(normalizedEmail);
     return { ok: false };
   }
 
-  clearAttempts(email);
+  clearAttempts(normalizedEmail);
   const token = await createSessionToken(user.id, user.role, user.tokenVersion);
   return { ok: true, token, user: { id: user.id, email: user.email, role: user.role } };
 }

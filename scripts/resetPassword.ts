@@ -10,8 +10,10 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "../server/dbClient";
 import { users } from "../drizzle/schema";
 import { hashPassword } from "../server/_core/passwords";
+import { normalizeEmail } from "../server/_core/loginFlow";
 
-export async function resetPassword(email: string, newPassword: string): Promise<void> {
+export async function resetPassword(rawEmail: string, newPassword: string): Promise<void> {
+  const email = normalizeEmail(rawEmail);
   const [user] = await db.select().from(users).where(eq(users.email, email));
   if (!user) throw new Error(`no user found with email ${email}`);
 

@@ -13,16 +13,18 @@ import { eq } from "drizzle-orm";
 import { db } from "../server/dbClient";
 import { users } from "../drizzle/schema";
 import { hashPassword } from "../server/_core/passwords";
+import { normalizeEmail } from "../server/_core/loginFlow";
 
 const ROLES = ["editor", "viewer"] as const;
 type Role = (typeof ROLES)[number];
 
 async function main() {
-  const email = process.env.SEED_USER_EMAIL;
+  const rawEmail = process.env.SEED_USER_EMAIL;
   const role = process.env.SEED_USER_ROLE ?? "editor";
   const password = process.env.SEED_USER_PASSWORD;
 
-  if (!email) throw new Error("SEED_USER_EMAIL is required");
+  if (!rawEmail) throw new Error("SEED_USER_EMAIL is required");
+  const email = normalizeEmail(rawEmail);
   if (!ROLES.includes(role as Role)) {
     throw new Error(`SEED_USER_ROLE must be one of ${ROLES.join(", ")} — got "${role}"`);
   }

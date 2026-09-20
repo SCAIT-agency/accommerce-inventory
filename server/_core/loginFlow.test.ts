@@ -60,6 +60,26 @@ describe("attemptLogin", () => {
     const outcome = await attemptLogin(EMAIL, PASSWORD);
     expect(outcome.ok).toBe(false);
   });
+
+  it("throttles across email case variants — a lockout on one casing applies to all", async () => {
+    const passwordHash = await hashPassword(PASSWORD);
+    await db.insert(users).values({ email: EMAIL, role: "viewer", passwordHash });
+
+    for (let i = 0; i < 5; i++) {
+      await attemptLogin(EMAIL.toUpperCase(), "wrong password");
+    }
+    // A different casing of the same email must also be locked out now.
+    const outcome = await attemptLogin(EMAIL, PASSWORD);
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("logs in successfully regardless of the email's casing", async () => {
+    const passwordHash = await hashPassword(PASSWORD);
+    await db.insert(users).values({ email: EMAIL, role: "viewer", passwordHash });
+
+    const outcome = await attemptLogin(EMAIL.toUpperCase(), PASSWORD);
+    expect(outcome.ok).toBe(true);
+  });
 });
 
 describe("resolveSession", () => {
