@@ -3,62 +3,14 @@ import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems } from "../drizzle/schema";
 
 /**
+ * Per-SKU landed unit cost for a shipment: PO line unit price (EXW) plus this
+ * line's weight/value share of the shipment's total freight/duty cost.
  * unitCost must already be expressed in the instance's single reporting
  * currency — multi-currency PO components (EXW in USD/CNY, freight in EUR)
  * are converted to base currency by the caller before this function runs.
  * See spec "Open Questions — Multi-currency landed cost aggregation":
  * the conversion strategy itself is not yet decided; this function only
  * documents where that decision must land.
- */
-export interface LandedBatch {
-  qty: number;
-  unitCost: number;
-  date: Date;
-}
-
-export interface SaleEvent {
-  qty: number;
-  date: Date;
-}
-
-export interface FifoCogsResult {
-  totalCogs: number;
-  remainingBatches: LandedBatch[];
-}
-
-export function computeFifoCogs(receipts: LandedBatch[], saleEvents: SaleEvent[]): FifoCogsResult {
-  const sortedReceipts = [...receipts].sort((a, b) => a.date.getTime() - b.date.getTime());
-  const sortedSales = [...saleEvents].sort((a, b) => a.date.getTime() - b.date.getTime());
-
-  const batches = sortedReceipts.map((r) => ({ ...r }));
-  let totalCogs = 0;
-
-  for (const sale of sortedSales) {
-    let remainingToConsume = sale.qty;
-    while (remainingToConsume > 0) {
-      const batch = batches.find((b) => b.qty > 0 && b.date <= sale.date);
-      if (!batch) {
-        throw new Error(`insufficient stock: cannot consume ${remainingToConsume} units for sale on ${sale.date.toISOString()}`);
-      }
-      const consumed = Math.min(batch.qty, remainingToConsume);
-      totalCogs += consumed * batch.unitCost;
-      batch.qty -= consumed;
-      remainingToConsume -= consumed;
-    }
-  }
-
-  return {
-    totalCogs,
-    remainingBatches: batches.filter((b) => b.qty > 0),
-  };
-}
-
-/**
- * Per-SKU landed unit cost for a shipment: PO line unit price (EXW) plus this
- * line's weight/value share of the shipment's total freight/duty cost.
- * Same single-reporting-currency assumption as computeFifoCogs above — the
- * PO line's unitPrice/currency and the shipment's costCurrency must already
- * match the caller's base currency.
  */
 export async function getShipmentLandedUnitCost(
   shipmentId: number,

@@ -1,40 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { eq, sql } from "drizzle-orm";
-import { computeFifoCogs, getShipmentLandedUnitCost } from "./landedCost";
+import { getShipmentLandedUnitCost } from "./landedCost";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, inventoryLedger, payments, warehouses } from "../drizzle/schema";
 import { createSku, createVendor, createWarehouse } from "./db";
 import { createPurchaseOrder, getPurchaseOrderWithLineItems } from "./purchaseOrders";
 import { createShipment, recordShipmentCosts } from "./shipments";
-
-describe("computeFifoCogs", () => {
-  it("consumes the oldest batch first, splitting a sale across two batches when the first is exhausted", () => {
-    const receipts = [
-      { qty: 100, unitCost: 2.0, date: new Date("2026-09-01") },
-      { qty: 200, unitCost: 2.5, date: new Date("2026-09-05") },
-    ];
-    const saleEvents = [{ qty: 150, date: new Date("2026-09-10") }];
-
-    const result = computeFifoCogs(receipts, saleEvents);
-
-    expect(result.totalCogs).toBeCloseTo(100 * 2.0 + 50 * 2.5, 2);
-    expect(result.remainingBatches).toEqual([{ qty: 150, unitCost: 2.5, date: new Date("2026-09-05") }]);
-  });
-
-  it("throws if total sale quantity exceeds total received quantity (would go negative)", () => {
-    const receipts = [{ qty: 50, unitCost: 2.0, date: new Date("2026-09-01") }];
-    const saleEvents = [{ qty: 80, date: new Date("2026-09-10") }];
-    expect(() => computeFifoCogs(receipts, saleEvents)).toThrow(/insufficient stock/);
-  });
-
-  it("ignores receipts dated after the sale event (can't sell what hasn't landed yet)", () => {
-    const receipts = [
-      { qty: 100, unitCost: 2.0, date: new Date("2026-09-10") },
-    ];
-    const saleEvents = [{ qty: 10, date: new Date("2026-09-05") }];
-    expect(() => computeFifoCogs(receipts, saleEvents)).toThrow(/insufficient stock/);
-  });
-});
 
 describe("getShipmentLandedUnitCost", () => {
   beforeEach(async () => {

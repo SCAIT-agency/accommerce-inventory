@@ -13,12 +13,6 @@ export async function listSkus(status?: "active" | "inactive") {
   return db.select().from(skus);
 }
 
-export async function updateSku(id: number, data: Partial<InsertSku>) {
-  await db.update(skus).set(data).where(eq(skus.id, id));
-  const [row] = await db.select().from(skus).where(eq(skus.id, id));
-  return row;
-}
-
 export async function createVendor(data: Omit<InsertVendor, "id">, dbClient: DbClient = db) {
   const [result] = await dbClient.insert(vendors).values(data);
   const [row] = await dbClient.select().from(vendors).where(eq(vendors.id, result.insertId));
