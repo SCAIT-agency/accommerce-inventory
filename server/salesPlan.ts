@@ -228,6 +228,14 @@ export interface UpsertWeeklyInputInput {
 
 export async function upsertWeeklyInput(input: UpsertWeeklyInputInput): Promise<void> {
   await db.transaction(async (tx) => {
+    // Capture the OLD warehouse pair (and recipe) before the upsert overwrites
+    // them. If this save both reassigns the warehouse pair and drops a SKU
+    // from the recipe, the orphaned rows for that SKU physically live under
+    // the OLD pair, not the new one — cleanup below must delete against the
+    // pair the rows actually live under. No existing row means a brand-new
+    // week: nothing to clean up.
+    const [existingWeekInput] = await tx.select().from(salesPlanWeeklyInputs).where(eq(salesPlanWeeklyInputs.weekStartDate, input.weekStartDate));
+
     await tx
       .insert(salesPlanWeeklyInputs)
       .values({
@@ -252,7 +260,9 @@ export async function upsertWeeklyInput(input: UpsertWeeklyInputInput): Promise<
     // week's recipe and no longer is, since the old lines are gone by the
     // time it reads them. Capture what's being removed here, before the
     // wholesale replace, so those SKUs' now-stale rows can be cleaned up too.
-    const previousRecipeLines = await tx.select().from(salesPlanWeeklyRecipeLines).where(eq(salesPlanWeeklyRecipeLines.weeklyInputId, weekInput.id));
+    const previousRecipeLines = existingWeekInput
+      ? await tx.select().from(salesPlanWeeklyRecipeLines).where(eq(salesPlanWeeklyRecipeLines.weeklyInputId, existingWeekInput.id))
+      : [];
     const newSkuIds = new Set(input.recipeLines.map((line) => line.skuId));
     const removedSkuIds = previousRecipeLines.map((line) => line.skuId).filter((skuId) => !newSkuIds.has(skuId));
 
@@ -265,14 +275,14 @@ export async function upsertWeeklyInput(input: UpsertWeeklyInputInput): Promise<
 
     await regenerateSalesPlanForWeek(input.weekStartDate, tx);
 
-    if (removedSkuIds.length > 0) {
+    if (removedSkuIds.length > 0 && existingWeekInput) {
       const weekStart = new Date(input.weekStartDate);
       const weekEnd = new Date(weekStart);
       weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
       const weekDates = enumerateDateStrings(weekStart, weekEnd);
       await tx.delete(salesPlan).where(and(
         inArray(salesPlan.skuId, removedSkuIds),
-        inArray(salesPlan.warehouseId, [weekInput.primaryWarehouseId, weekInput.secondaryWarehouseId]),
+        inArray(salesPlan.warehouseId, [existingWeekInput.primaryWarehouseId, existingWeekInput.secondaryWarehouseId]),
         between(salesPlan.periodDate, input.weekStartDate, weekDates[weekDates.length - 1]),
       ));
     }

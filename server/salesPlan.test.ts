@@ -370,6 +370,32 @@ describe("sales plan/actuals", () => {
       expect(rowsB).toHaveLength(14);
     });
 
+    it("cleans up stale rows under the OLD warehouse pair when a save both reassigns warehouses and drops a SKU", async () => {
+      const skuA = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+      const skuB = await createSku({ sku: "JELLO-MIXER-01", primaryIdentifierType: "sku" });
+      const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+      const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
+      const otherPrimary = await createWarehouse({ code: "FF-FR", name: "Fulfillment FR" });
+      const otherSecondary = await createWarehouse({ code: "MUTUAL-AT", name: "Mutual AT" });
+
+      await upsertWeeklyInput({
+        weekStartDate: "2026-10-05", plannedRevenue: "70000.00", primaryWarehouseId: ff.id, primaryPercent: "70.00", secondaryWarehouseId: mutual.id,
+        recipeLines: [{ skuId: skuA.id, unitsPer1000: "5" }],
+      });
+      await upsertWeeklyInput({
+        weekStartDate: "2026-10-05", plannedRevenue: "70000.00", primaryWarehouseId: otherPrimary.id, primaryPercent: "70.00", secondaryWarehouseId: otherSecondary.id,
+        recipeLines: [{ skuId: skuB.id, unitsPer1000: "2" }],
+      });
+
+      // skuA's original 14 rows lived under (ff, mutual) — the OLD pair — and
+      // must be cleaned up even though the save also moved the week to a
+      // brand-new (otherPrimary, otherSecondary) pair.
+      const rowsA = await db.select().from(salesPlan).where(eq(salesPlan.skuId, skuA.id));
+      expect(rowsA).toHaveLength(0);
+      const rowsB = await db.select().from(salesPlan).where(eq(salesPlan.skuId, skuB.id));
+      expect(rowsB).toHaveLength(14);
+    });
+
     it("rejects saving a week that has already fully elapsed", async () => {
       const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
       const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
