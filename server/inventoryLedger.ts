@@ -76,12 +76,23 @@ export interface RemainingBatch {
   remainingQty: number;
 }
 
+// Known, accepted ordering asymmetry: recordLedgerEvent's negative-stock
+// guard evaluates solvency as of END OF DAY (see endOfDayUtc above), so
+// same-day events are mutually visible to each other's guard check
+// regardless of insertion order — but the query below orders strictly by
+// timestamp (with id as a same-timestamp tiebreaker). A negative adjustment
+// timestamped earlier in the same day than its covering receipt would pass
+// the guard but could then make this function throw "insufficient stock".
+// Not fixed: no live write path in this codebase creates "adjustment" events
+// today (only the migration replay does, and it doesn't hit this ordering) —
+// this is a documented, currently-dormant risk, not an active bug. Revisit
+// if a live "adjustment" write path is ever introduced.
 export async function getRemainingBatches(skuId: number, warehouseId: number): Promise<RemainingBatch[]> {
   const events = await db
     .select()
     .from(inventoryLedger)
     .where(and(eq(inventoryLedger.skuId, skuId), eq(inventoryLedger.warehouseId, warehouseId)))
-    .orderBy(inventoryLedger.date);
+    .orderBy(inventoryLedger.date, inventoryLedger.id);
 
   interface MutableBatch { qty: number; unitCost: number; date: Date; sourceRef: string | null }
   const batches: MutableBatch[] = [];

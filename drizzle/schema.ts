@@ -20,6 +20,8 @@ export const appSettings = mysqlTable("app_settings", {
 });
 export type AppSetting = typeof appSettings.$inferSelect;
 
+export const SKU_IDENTIFIER_TYPES = ["sku", "ssku", "asin", "ean", "fnsku", "name"] as const;
+
 export const skus = mysqlTable(
   "skus",
   {
@@ -30,9 +32,7 @@ export const skus = mysqlTable(
     ean: varchar("ean", { length: 32 }),
     fnsku: varchar("fnsku", { length: 32 }),
     name: varchar("name", { length: 256 }),
-    primaryIdentifierType: mysqlEnum("primaryIdentifierType", [
-      "sku", "ssku", "asin", "ean", "fnsku", "name",
-    ]).notNull(),
+    primaryIdentifierType: mysqlEnum("primaryIdentifierType", SKU_IDENTIFIER_TYPES).notNull(),
     identifierValue: varchar("identifierValue", { length: 256 })
       .notNull()
       .generatedAlwaysAs(

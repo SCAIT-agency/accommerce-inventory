@@ -208,6 +208,13 @@ describe("transformShipments", () => {
     expect(result.shipments).toEqual([]);
     expect(result.skipped[0].reason).toContain("shipment_ref");
   });
+
+  it("quarantines a row missing its warehouse", () => {
+    const rows = [{ shipment_ref: "PO1-W4-Container2", vendor_reference: "", status: "planned", warehouse: "", freight_cost: "", duty_cost: "", cost_currency: "", po_line_item_ref: "x", sku: "JELLO-CAL-500", qty: "1", weight_share: "1.0", value_share: "1.0" }];
+    const result = transformShipments(rows);
+    expect(result.shipments).toEqual([]);
+    expect(result.skipped[0].reason).toContain("warehouse");
+  });
 });
 
 describe("transformPayments", () => {

@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { trpc } from "../lib/trpc";
+import { SKU_IDENTIFIER_TYPES } from "../../../drizzle/schema";
 
 function SkusSection() {
   const utils = trpc.useUtils();
   const skusQuery = trpc.catalog.listSkus.useQuery();
   const [sku, setSku] = useState("");
   const [name, setName] = useState("");
-  const [primaryIdentifierType, setPrimaryIdentifierType] = useState("sku");
+  const [primaryIdentifierType, setPrimaryIdentifierType] = useState<(typeof SKU_IDENTIFIER_TYPES)[number]>("sku");
   const createSku = trpc.catalog.createSku.useMutation({
     onSuccess: () => {
       setSku("");
@@ -31,9 +32,8 @@ function SkusSection() {
       <div>
         <input placeholder="SKU code" value={sku} onChange={(e) => setSku(e.target.value)} />
         <input placeholder="name" value={name} onChange={(e) => setName(e.target.value)} />
-        <select value={primaryIdentifierType} onChange={(e) => setPrimaryIdentifierType(e.target.value)}>
-          <option value="sku">sku</option>
-          <option value="barcode">barcode</option>
+        <select value={primaryIdentifierType} onChange={(e) => setPrimaryIdentifierType(e.target.value as (typeof SKU_IDENTIFIER_TYPES)[number])}>
+          {SKU_IDENTIFIER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
         <button
           disabled={createSku.isPending || (!sku && !name)}

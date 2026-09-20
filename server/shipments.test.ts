@@ -183,12 +183,17 @@ describe("shipments", () => {
 
   it("rejects an invalid shipment status transition", async () => {
     const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
-    await expect(updateShipmentStatus(shipment.id, "delivered", { changedBy: 1 })).rejects.toThrow(/invalid transition/);
+    await expect(updateShipmentStatus(shipment.id, "customs", { changedBy: 1 })).rejects.toThrow(/invalid transition/);
   });
 
   it("rejects transitioning to 'departed' via updateShipmentStatus even though it's listed as a valid transition — that path belongs to markShipmentDeparted only", async () => {
     const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
     await expect(updateShipmentStatus(shipment.id, "departed", { changedBy: 1 })).rejects.toThrow(/markShipmentDeparted/);
+  });
+
+  it("rejects transitioning to 'delivered' via updateShipmentStatus even though it's listed as a valid transition — that path belongs to markShipmentArrived only", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "customs", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
+    await expect(updateShipmentStatus(shipment.id, "delivered", { changedBy: 1 })).rejects.toThrow(/markShipmentArrived/);
   });
 
   it("accepts a valid shipment status transition and logs it", async () => {
@@ -254,7 +259,7 @@ describe("shipments", () => {
   });
 
   it("records an actual arrival date with the real prior value", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "customs", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
     await recordShipmentCosts(
       shipment.id,
       { freightCost: "150.00", dutyCost: "20.00", costCurrency: "USD" },
@@ -344,6 +349,92 @@ describe("shipments", () => {
     expect(receipt?.sourceRef).toBe("PO1-W4-Container6");
     // (90000 * 0.15 EXW + 900 freight * 1.0 share + 100 duty * 1.0 share) / 90000
     expect(parseFloat(receipt?.unitCost ?? "0")).toBeCloseTo((90000 * 0.15 + 900 + 100) / 90000, 4);
+
+    const [updatedShipment] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(updatedShipment.status).toBe("delivered");
+  });
+
+  it("rejects a second markShipmentArrived call on an already-arrived shipment, without doubling the receipt", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container8",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: 1,
+    });
+    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: 1 });
+    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: 1 });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });
+    await updateShipmentStatus(shipment.id, "customs", { changedBy: 1 });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "900.00", dutyCost: "100.00", costCurrency: "USD" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+
+    const arrivalDate = new Date("2026-09-20");
+    await markShipmentArrived(shipment.id, arrivalDate, { changedBy: 1, reasonCategory: "logistics_delay" });
+    const sohAfterFirst = await getSoh(skuId, ffWarehouseId, arrivalDate);
+
+    await expect(
+      markShipmentArrived(shipment.id, arrivalDate, { changedBy: 1, reasonCategory: "logistics_delay" }),
+    ).rejects.toThrow(/invalid transition from delivered to delivered/);
+
+    const sohAfterSecond = await getSoh(skuId, ffWarehouseId, arrivalDate);
+    expect(sohAfterSecond).toBe(sohAfterFirst);
+  });
+
+  it("markShipmentArrived writes two separate correct receipts when a shipment has two line items for the same SKU", async () => {
+    const vendor = await createVendor({ name: "MBS Logistics" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W5",
+      vendorId: vendor.id,
+      lineItems: [
+        { skuId: sku.id, qty: 45000, unitPrice: "0.15", currency: "USD" },
+        { skuId: sku.id, qty: 45000, unitPrice: "0.18", currency: "USD" },
+      ],
+      createdBy: 1,
+    });
+    const withItems = await getPurchaseOrderWithLineItemsHelper(po.id);
+    const [tranche1, tranche2] = withItems.lineItems;
+
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W5-Container1",
+      warehouseId: ffWarehouseId,
+      lineItems: [
+        { poLineItemId: tranche1.id, skuId: sku.id, qty: 45000, weightShare: "0.5", valueShare: "0.5" },
+        { poLineItemId: tranche2.id, skuId: sku.id, qty: 45000, weightShare: "0.5", valueShare: "0.5" },
+      ],
+      createdBy: 1,
+    });
+    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: 1 });
+    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: 1 });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });
+    await updateShipmentStatus(shipment.id, "customs", { changedBy: 1 });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "900.00", dutyCost: "100.00", costCurrency: "USD" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+
+    const arrivalDate = new Date("2026-09-20");
+    await markShipmentArrived(shipment.id, arrivalDate, { changedBy: 1, reasonCategory: "logistics_delay" });
+
+    const events = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+    const receipts = events.filter((e) => e.eventType === "receipt");
+    expect(receipts).toHaveLength(2);
+
+    // Each tranche carries its own freight/duty allocation: 0.5 weightShare of 900 freight (450)
+    // plus 0.5 valueShare of 100 duty (50) = 500, on top of its own EXW price.
+    const expectedCost1 = (45000 * 0.15 + 500) / 45000;
+    const expectedCost2 = (45000 * 0.18 + 500) / 45000;
+    const costs = receipts.map((r) => parseFloat(r.unitCost ?? "0")).sort((a, b) => a - b);
+    expect(costs[0]).toBeCloseTo(Math.min(expectedCost1, expectedCost2), 6);
+    expect(costs[1]).toBeCloseTo(Math.max(expectedCost1, expectedCost2), 6);
+
+    const soh = await getSoh(sku.id, ffWarehouseId, arrivalDate);
+    expect(soh).toBe(90000);
   });
 
   it("markShipmentArrived does not write a partial receipt if getShipmentLandedUnitCost throws", async () => {

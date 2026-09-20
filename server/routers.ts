@@ -7,7 +7,7 @@ import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlan
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation } from "./salesPlan";
-import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES } from "../drizzle/schema";
+import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES } from "../drizzle/schema";
 import { listChangeLog } from "./changeLog";
 
 const reasonCategorySchema = z.enum(REASON_CATEGORIES);
@@ -34,7 +34,7 @@ export const appRouter = router({
   catalog: router({
     listSkus: protectedProcedure.query(() => listSkus()),
     createSku: editorProcedure
-      .input(z.object({ sku: z.string().optional(), name: z.string().optional(), primaryIdentifierType: z.string() }))
+      .input(z.object({ sku: z.string().optional(), name: z.string().optional(), primaryIdentifierType: z.enum(SKU_IDENTIFIER_TYPES) }))
       .mutation(({ input }) => createSku(input as any)),
     listVendors: protectedProcedure.query(() => listVendors()),
     createVendor: editorProcedure.input(z.object({ name: z.string() })).mutation(({ input }) => createVendor(input)),

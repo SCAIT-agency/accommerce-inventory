@@ -89,10 +89,57 @@ describe("getShipmentLandedUnitCost", () => {
       { freightCost: "150.00", dutyCost: "20.00", costCurrency: "EUR" },
       { reasonCategory: "freight_rate_change", changedBy: 1 },
     );
+    const [shipmentLineItem] = await db.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, shipment.id));
 
     const result = await getShipmentLandedUnitCost(shipment.id);
     // (1000 * 0.15 EXW + 150 freight * 1.0 share + 20 duty * 1.0 share) / 1000 units
-    expect(result).toEqual([{ skuId: sku.id, landedUnitCost: (150 + 20.0 + 1000 * 0.15) / 1000 }]);
+    expect(result).toEqual([{ lineItemId: shipmentLineItem.id, skuId: sku.id, landedUnitCost: (150 + 20.0 + 1000 * 0.15) / 1000 }]);
+  });
+
+  it("returns a distinct lineItemId for two line items on one shipment that share the same SKU", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [
+        { skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "EUR" },
+        { skuId: sku.id, qty: 500, unitPrice: "0.20", currency: "EUR" },
+      ],
+      createdBy: 1,
+    });
+    const withItems = await getPurchaseOrderWithLineItems(po.id);
+    const [tranche1, tranche2] = withItems.lineItems;
+
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container9",
+      warehouseId: ff.id,
+      lineItems: [
+        { poLineItemId: tranche1.id, skuId: sku.id, qty: 1000, weightShare: "0.5", valueShare: "0.5" },
+        { poLineItemId: tranche2.id, skuId: sku.id, qty: 500, weightShare: "0.5", valueShare: "0.5" },
+      ],
+      createdBy: 1,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "150.00", dutyCost: "20.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+    const shipmentLines = await db.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, shipment.id));
+    const shipmentLine1 = shipmentLines.find((l) => l.poLineItemId === tranche1.id)!;
+    const shipmentLine2 = shipmentLines.find((l) => l.poLineItemId === tranche2.id)!;
+
+    const result = await getShipmentLandedUnitCost(shipment.id);
+    expect(result).toHaveLength(2);
+    expect(result.every((r) => r.skuId === sku.id)).toBe(true);
+    expect(result[0].lineItemId).not.toBe(result[1].lineItemId);
+
+    const byLineItemId = new Map(result.map((r) => [r.lineItemId, r.landedUnitCost]));
+    // Each tranche's own EXW price plus its own 0.5 weightShare of 150 freight (75)
+    // and 0.5 valueShare of 20 duty (10) = 85 total allocated.
+    expect(byLineItemId.get(shipmentLine1.id)).toBeCloseTo((1000 * 0.15 + 85) / 1000, 6);
+    expect(byLineItemId.get(shipmentLine2.id)).toBeCloseTo((500 * 0.2 + 85) / 500, 6);
   });
 
   it("computes correct per-line landed cost for multiple line items from one batched PO-line query, not one query per line", async () => {

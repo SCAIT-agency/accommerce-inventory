@@ -102,6 +102,12 @@ export async function updateShipmentStatus(
       "which also records the actual depart date and enforces the planned-depart-date precondition.",
     );
   }
+  if (newStatus === "delivered") {
+    throw new Error(
+      "updateShipmentStatus: cannot transition to 'delivered' via this function — use markShipmentArrived, " +
+      "which also records the inventory ledger receipt and enforces the recorded-costs precondition.",
+    );
+  }
   const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
   if (!shipment) {
     throw new Error(`updateShipmentStatus: no shipment found with id ${id}`);
@@ -211,6 +217,9 @@ export async function markShipmentArrived(
   if (!shipment) {
     throw new Error(`markShipmentArrived: no shipment found with id ${id}`);
   }
+  if (!VALID_SHIPMENT_TRANSITIONS[shipment.status].includes("delivered")) {
+    throw new Error(`markShipmentArrived: invalid transition from ${shipment.status} to delivered`);
+  }
   if (shipment.freightCost == null || shipment.dutyCost == null || shipment.costCurrency == null) {
     throw new Error(
       `markShipmentArrived: cannot record receipt for shipment ${id} — freight/duty costs must be recorded first ` +
@@ -219,10 +228,10 @@ export async function markShipmentArrived(
   }
   const landedCosts = await getShipmentLandedUnitCost(id);
   const lines = await db.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, id));
-  const landedCostBySkuId = new Map(landedCosts.map((lc) => [lc.skuId, lc.landedUnitCost]));
+  const landedCostByLineItemId = new Map(landedCosts.map((lc) => [lc.lineItemId, lc.landedUnitCost]));
 
   await db.transaction(async (tx) => {
-    await tx.update(shipments).set({ actualArrivalDate }).where(eq(shipments.id, id));
+    await tx.update(shipments).set({ actualArrivalDate, status: "delivered" }).where(eq(shipments.id, id));
     await logChange({
       entityType: "shipment",
       entityId: id,
@@ -236,7 +245,7 @@ export async function markShipmentArrived(
       changedBy: opts.changedBy,
     }, tx);
     for (const line of lines) {
-      const landedUnitCost = landedCostBySkuId.get(line.skuId);
+      const landedUnitCost = landedCostByLineItemId.get(line.id);
       if (landedUnitCost === undefined) {
         throw new Error(`markShipmentArrived: no landed cost computed for sku ${line.skuId} on shipment ${id}`);
       }
@@ -245,7 +254,7 @@ export async function markShipmentArrived(
         warehouseId: shipment.warehouseId,
         eventType: "receipt",
         qty: line.qty,
-        unitCost: landedUnitCost.toFixed(4),
+        unitCost: landedUnitCost.toFixed(6),
         date: actualArrivalDate,
         sourceRef: shipment.shipmentRef,
       }, tx);

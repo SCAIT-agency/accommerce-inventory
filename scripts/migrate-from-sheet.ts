@@ -285,6 +285,10 @@ export function transformShipments(rows: ShipmentSheetRow[]): { shipments: Trans
       skipped.push({ rowIndex, reason: "missing shipment_ref" });
       return;
     }
+    if (!row.warehouse) {
+      skipped.push({ rowIndex, reason: "missing warehouse" });
+      return;
+    }
     if (!VALID_SHIPMENT_STATUSES.includes(row.status)) {
       skipped.push({ rowIndex, reason: `unrecognized status "${row.status}"` });
       return;

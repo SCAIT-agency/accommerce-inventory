@@ -62,7 +62,7 @@ export function computeFifoCogs(receipts: LandedBatch[], saleEvents: SaleEvent[]
  */
 export async function getShipmentLandedUnitCost(
   shipmentId: number,
-): Promise<{ skuId: number; landedUnitCost: number }[]> {
+): Promise<{ lineItemId: number; skuId: number; landedUnitCost: number }[]> {
   const [shipment] = await db.select().from(shipments).where(eq(shipments.id, shipmentId));
   const lines = await db.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, shipmentId));
 
@@ -104,7 +104,7 @@ export async function getShipmentLandedUnitCost(
     const allocatedFreight = freightCost * parseFloat(line.weightShare);
     const allocatedDuty = dutyCost * parseFloat(line.valueShare);
     const landedUnitCost = (exwTotal + allocatedFreight + allocatedDuty) / line.qty;
-    results.push({ skuId: line.skuId, landedUnitCost });
+    results.push({ lineItemId: line.id, skuId: line.skuId, landedUnitCost });
   }
   return results;
 }
