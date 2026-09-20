@@ -443,6 +443,111 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
   );
 }
 
+interface NewShipmentLineItem {
+  poLineItemId: number;
+  skuId: number;
+  qty: number;
+  weightShare: string;
+  valueShare: string;
+}
+
+function NewLineItemPicker({ onAdd }: { onAdd: (li: NewShipmentLineItem) => void }) {
+  const posQuery = trpc.purchaseOrders.list.useQuery();
+  const [poId, setPoId] = useState("");
+  const poLineItemsQuery = trpc.purchaseOrders.getWithLineItems.useQuery(Number(poId), { enabled: poId !== "" });
+  const [poLineItemId, setPoLineItemId] = useState("");
+  const [qty, setQty] = useState("");
+  const [weightShare, setWeightShare] = useState("1.0");
+  const [valueShare, setValueShare] = useState("1.0");
+
+  if (posQuery.error) return <div>Failed to load purchase orders: {posQuery.error.message}</div>;
+
+  const selectedLineItem = poLineItemsQuery.data?.lineItems.find((li) => li.id === Number(poLineItemId));
+  const canAdd = poId !== "" && poLineItemId !== "" && qty.trim().length > 0 && weightShare.trim().length > 0 && valueShare.trim().length > 0;
+
+  return (
+    <div>
+      <select value={poId} onChange={(e) => { setPoId(e.target.value); setPoLineItemId(""); }}>
+        <option value="">PO…</option>
+        {(posQuery.data ?? []).map((po) => <option key={po.id} value={po.id}>{po.poNumber}</option>)}
+      </select>
+      {poId !== "" && poLineItemsQuery.isLoading && <span>Loading line items…</span>}
+      {poId !== "" && poLineItemsQuery.error && <span>Failed to load line items: {poLineItemsQuery.error.message}</span>}
+      {poId !== "" && poLineItemsQuery.data && (
+        <select value={poLineItemId} onChange={(e) => setPoLineItemId(e.target.value)}>
+          <option value="">Line item…</option>
+          {poLineItemsQuery.data.lineItems.map((li) => (
+            <option key={li.id} value={li.id}>SKU {li.skuId} — qty {li.qty} @ {li.unitPrice} {li.currency}</option>
+          ))}
+        </select>
+      )}
+      <input type="text" placeholder="qty" value={qty} onChange={(e) => setQty(e.target.value)} />
+      <input type="text" placeholder="weight share" value={weightShare} onChange={(e) => setWeightShare(e.target.value)} />
+      <input type="text" placeholder="value share" value={valueShare} onChange={(e) => setValueShare(e.target.value)} />
+      <button
+        disabled={!canAdd}
+        onClick={() => {
+          if (!selectedLineItem) return;
+          onAdd({ poLineItemId: selectedLineItem.id, skuId: selectedLineItem.skuId, qty: Number(qty), weightShare, valueShare });
+          setPoLineItemId("");
+          setQty("");
+        }}
+      >
+        Add line item
+      </button>
+    </div>
+  );
+}
+
+function CreateShipmentForm() {
+  const utils = trpc.useUtils();
+  const warehousesQuery = trpc.catalog.listWarehouses.useQuery();
+  const [shipmentRef, setShipmentRef] = useState("");
+  const [warehouseId, setWarehouseId] = useState("");
+  const [lineItems, setLineItems] = useState<NewShipmentLineItem[]>([]);
+  const createShipment = trpc.shipments.create.useMutation({
+    onSuccess: () => {
+      setShipmentRef("");
+      setWarehouseId("");
+      setLineItems([]);
+      utils.shipments.list.invalidate();
+    },
+  });
+
+  if (warehousesQuery.error) return <div>Failed to load warehouses: {warehousesQuery.error.message}</div>;
+
+  const canCreate = shipmentRef.trim().length > 0 && warehouseId !== "" && lineItems.length > 0;
+
+  return (
+    <div>
+      <h2>New Shipment</h2>
+      <input type="text" placeholder="shipment ref" value={shipmentRef} onChange={(e) => setShipmentRef(e.target.value)} />
+      <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
+        <option value="">Warehouse…</option>
+        {(warehousesQuery.data ?? []).map((w) => <option key={w.id} value={w.id}>{w.code} — {w.name}</option>)}
+      </select>
+      {lineItems.length > 0 && (
+        <ul>
+          {lineItems.map((li, i) => (
+            <li key={i}>
+              SKU {li.skuId} — qty {li.qty} (weight {li.weightShare}, value {li.valueShare}){" "}
+              <button onClick={() => setLineItems((prev) => prev.filter((_, idx) => idx !== i))}>Remove</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <NewLineItemPicker onAdd={(li) => setLineItems((prev) => [...prev, li])} />
+      <button
+        disabled={!canCreate || createShipment.isPending}
+        onClick={() => createShipment.mutate({ shipmentRef, warehouseId: Number(warehouseId), lineItems })}
+      >
+        Create shipment
+      </button>
+      {createShipment.error && <div>Failed to create: {createShipment.error.message}</div>}
+    </div>
+  );
+}
+
 export function ShipmentsPage() {
   const { data: shipmentsList, error, isLoading } = trpc.shipments.list.useQuery();
 
@@ -453,6 +558,7 @@ export function ShipmentsPage() {
     <div>
       <h1>Shipments</h1>
       <p>Each shipment lists the PO line items it carries — one shipment can pool cargo from multiple POs.</p>
+      <CreateShipmentForm />
       <table>
         <thead><tr><th>Ref</th><th>Status</th><th>Line items</th><th>Costs</th></tr></thead>
         <tbody>

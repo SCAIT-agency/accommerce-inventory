@@ -263,6 +263,97 @@ function PoShipmentsSection({ poId }: { poId: number }) {
   );
 }
 
+interface NewPoLineItem {
+  skuId: number;
+  qty: number;
+  unitPrice: string;
+  currency: string;
+}
+
+function NewPoLineItemPicker({ onAdd }: { onAdd: (li: NewPoLineItem) => void }) {
+  const skusQuery = trpc.catalog.listSkus.useQuery();
+  const [skuId, setSkuId] = useState("");
+  const [qty, setQty] = useState("");
+  const [unitPrice, setUnitPrice] = useState("");
+  const [currency, setCurrency] = useState("USD");
+
+  if (skusQuery.error) return <div>Failed to load SKUs: {skusQuery.error.message}</div>;
+
+  const canAdd = skuId !== "" && qty.trim().length > 0 && unitPrice.trim().length > 0 && currency.trim().length > 0;
+
+  return (
+    <div>
+      <select value={skuId} onChange={(e) => setSkuId(e.target.value)}>
+        <option value="">SKU…</option>
+        {(skusQuery.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.sku ?? s.name ?? `#${s.id}`}</option>)}
+      </select>
+      <input type="text" placeholder="qty" value={qty} onChange={(e) => setQty(e.target.value)} />
+      <input type="text" placeholder="unit price" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} />
+      <input type="text" placeholder="currency" value={currency} onChange={(e) => setCurrency(e.target.value)} />
+      <button
+        disabled={!canAdd}
+        onClick={() => {
+          onAdd({ skuId: Number(skuId), qty: Number(qty), unitPrice, currency });
+          setSkuId("");
+          setQty("");
+          setUnitPrice("");
+        }}
+      >
+        Add line item
+      </button>
+    </div>
+  );
+}
+
+function CreatePoForm() {
+  const utils = trpc.useUtils();
+  const vendorsQuery = trpc.catalog.listVendors.useQuery();
+  const [poNumber, setPoNumber] = useState("");
+  const [vendorId, setVendorId] = useState("");
+  const [lineItems, setLineItems] = useState<NewPoLineItem[]>([]);
+  const createPo = trpc.purchaseOrders.create.useMutation({
+    onSuccess: () => {
+      setPoNumber("");
+      setVendorId("");
+      setLineItems([]);
+      utils.purchaseOrders.list.invalidate();
+    },
+  });
+
+  if (vendorsQuery.error) return <div>Failed to load vendors: {vendorsQuery.error.message}</div>;
+
+  const canCreate = poNumber.trim().length > 0 && vendorId !== "" && lineItems.length > 0;
+
+  return (
+    <div>
+      <h2>New Purchase Order</h2>
+      <input type="text" placeholder="PO number" value={poNumber} onChange={(e) => setPoNumber(e.target.value)} />
+      <select value={vendorId} onChange={(e) => setVendorId(e.target.value)}>
+        <option value="">Vendor…</option>
+        {(vendorsQuery.data ?? []).map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+      </select>
+      {lineItems.length > 0 && (
+        <ul>
+          {lineItems.map((li, i) => (
+            <li key={i}>
+              SKU {li.skuId} — qty {li.qty} @ {li.unitPrice} {li.currency}{" "}
+              <button onClick={() => setLineItems((prev) => prev.filter((_, idx) => idx !== i))}>Remove</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <NewPoLineItemPicker onAdd={(li) => setLineItems((prev) => [...prev, li])} />
+      <button
+        disabled={!canCreate || createPo.isPending}
+        onClick={() => createPo.mutate({ poNumber, vendorId: Number(vendorId), lineItems })}
+      >
+        Create PO
+      </button>
+      {createPo.error && <div>Failed to create: {createPo.error.message}</div>}
+    </div>
+  );
+}
+
 export function PurchaseOrdersPage() {
   const { data: pos, isLoading, error, refetch } = trpc.purchaseOrders.list.useQuery();
   const updateDate = trpc.purchaseOrders.updatePlannedReadyDate.useMutation({ onSuccess: () => refetch() });
@@ -277,6 +368,7 @@ export function PurchaseOrdersPage() {
   return (
     <div>
       <h1>Purchase Orders</h1>
+      <CreatePoForm />
       <table>
         <thead><tr><th>PO</th><th>Status</th><th>Planned Ready</th><th>Change date</th><th>Payments</th><th>Shipments</th></tr></thead>
         <tbody>
