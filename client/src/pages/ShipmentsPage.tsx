@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
@@ -183,7 +184,13 @@ function PlannedDepartureControl({ shipment, onUpdated }: { shipment: ShipmentLi
 function StatusTransitionControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
   const updateStatus = trpc.shipments.updateStatus.useMutation({ onSuccess: onUpdated });
   const [form, setForm] = useState<StatusTransitionFormState>(() => defaultStatusTransitionForm());
-  const nextStatuses = VALID_SHIPMENT_TRANSITIONS[shipment.status] ?? [];
+  // "departed" and "delivered" always have a dedicated control (PlannedDepartureControl's
+  // "Mark departed" button, CustomsArrivalControl's "Save arrival date" button) --
+  // offering them here too would render a working-looking option that
+  // updateShipmentStatus (server/shipments.ts) unconditionally rejects.
+  const nextStatuses = (VALID_SHIPMENT_TRANSITIONS[shipment.status] ?? []).filter(
+    (s) => s !== "departed" && s !== "delivered",
+  );
   const noteRequired = form.reasonCategory === "other";
   const canSave = !noteRequired || form.reasonNote.trim().length > 0;
 
@@ -278,7 +285,7 @@ function CustomsArrivalControl({ shipment, onUpdated }: { shipment: ShipmentList
         Save customs status
       </button>
       <button
-        disabled={!canSave || !form.actualArrivalDate || markArrived.isPending}
+        disabled={!canSave || !form.actualArrivalDate || shipment.status !== "customs" || markArrived.isPending}
         onClick={() =>
           markArrived.mutate({
             id: shipment.id,
@@ -290,6 +297,7 @@ function CustomsArrivalControl({ shipment, onUpdated }: { shipment: ShipmentList
       >
         Save arrival date
       </button>
+      {shipment.status !== "customs" && <p>Available once the shipment has reached customs.</p>}
       {(setCustomsStatus.error ?? markArrived.error) && <div>Failed to save: {(setCustomsStatus.error ?? markArrived.error)!.message}</div>}
     </div>
   );
@@ -383,6 +391,7 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
         <div style={{ marginTop: "8px" }}>
           <DepartDateCorrectionControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
         </div>
+        <div style={{ marginTop: "8px" }}><Link to={`/change-log/shipment/${shipment.id}`}>History</Link></div>
       </td>
       <td>
         <ul>

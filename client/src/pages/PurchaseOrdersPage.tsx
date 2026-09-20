@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
@@ -426,6 +427,7 @@ export function PurchaseOrdersPage() {
                 <td>
                   <span className={PO_STATUS_BADGE_CLASS[po.status] ?? DEFAULT_STATUS_BADGE_CLASS}>{po.status}</span>
                   <AdvanceStatusControl po={po} onAdvanced={refetch} />
+                  <div><Link to={`/change-log/purchase_order/${po.id}`}>History</Link></div>
                 </td>
                 <td>{po.plannedReadyDate ? new Date(po.plannedReadyDate).toISOString().slice(0, 10) : "—"}</td>
                 <td>
