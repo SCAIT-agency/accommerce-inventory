@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 
 export function HomePage() {
@@ -8,11 +9,11 @@ export function HomePage() {
     <div>
       <h1>Home</h1>
       <dl>
-        <dt>Active SKUs</dt><dd>{data.activeSkuCount}</dd>
-        <dt>Stockout-risk SKUs</dt><dd>{data.stockoutRiskSkuCount}</dd>
-        <dt>Near-term cash needs (14d)</dt><dd>{data.nearTermCashNeeds.toFixed(2)}</dd>
-        <dt>Overdue payables</dt><dd>{data.overduePayablesIsEstimated ? "≈ " : ""}{data.overduePayablesAmount.toFixed(2)}</dd>
-        <dt>Unmatched transactions</dt><dd>{data.unmatchedTransactionCount}</dd>
+        <dt><Link to="/catalog">Active SKUs</Link></dt><dd>{data.activeSkuCount}</dd>
+        <dt><Link to="/stock">Stockout-risk SKUs</Link></dt><dd>{data.stockoutRiskSkuCount}</dd>
+        <dt><Link to="/money">Near-term cash needs (14d)</Link></dt><dd>{data.nearTermCashNeeds.toFixed(2)}</dd>
+        <dt><Link to="/money">Overdue payables</Link></dt><dd>{data.overduePayablesIsEstimated ? "≈ " : ""}{data.overduePayablesAmount.toFixed(2)}</dd>
+        <dt><Link to="/transactions">Unmatched transactions</Link></dt><dd>{data.unmatchedTransactionCount}</dd>
       </dl>
     </div>
   );
