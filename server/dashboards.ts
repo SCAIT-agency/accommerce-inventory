@@ -9,15 +9,6 @@ import { getDailyCogsForRange } from "./salesPlan";
 import { getShipmentLandedUnitCost } from "./landedCost";
 import { enumerateDateStrings } from "./dates";
 
-// In-code lookup for V1; move to app_settings-driven config when a real
-// client needs to tune these thresholds — out of scope for this task.
-const STOCK_STATUS_THRESHOLDS: { maxDays: number; label: "critical" | "low" | "ok" | "overstock" }[] = [
-  { maxDays: 21, label: "critical" },
-  { maxDays: 45, label: "low" },
-  { maxDays: 90, label: "ok" },
-  { maxDays: Infinity, label: "overstock" },
-];
-
 // shopifyDailyPull only writes a sales_actuals row on days a SKU actually
 // sold, so the denominator must be calendar days in the window — not the
 // number of rows that came back, which would inflate the average (and deflate
@@ -49,10 +40,18 @@ async function getAverageDailySalesForSkus(skuIds: number[], windowDays = 30): P
   return result;
 }
 
-function getStockStatus(daysOfCover: number | null): "critical" | "low" | "ok" | "overstock" | "unknown" {
+// Reorder point = leadTimeDays + safetyStockDays: the days of cover below
+// which a fresh order can no longer arrive before stock runs out, plus the
+// buffer this business already plans around. Per-SKU rather than a fixed
+// bucket, since different SKUs can have genuinely different vendor lead
+// times (skus.leadTimeDays/safetyStockDays, editable per SKU in Catalog).
+function getStockStatus(daysOfCover: number | null, leadTimeDays: number, safetyStockDays: number): "critical" | "low" | "ok" | "overstock" | "unknown" {
   if (daysOfCover === null) return "unknown";
-  const bucket = STOCK_STATUS_THRESHOLDS.find((t) => daysOfCover < t.maxDays);
-  return bucket?.label ?? "overstock";
+  const reorderPoint = leadTimeDays + safetyStockDays;
+  if (daysOfCover < leadTimeDays) return "critical";
+  if (daysOfCover < reorderPoint) return "low";
+  if (daysOfCover < reorderPoint * 3) return "ok";
+  return "overstock";
 }
 
 export async function getHomeSummary() {
@@ -88,7 +87,7 @@ export async function getHomeSummary() {
     for (const w of byWarehouse) {
       const avgDailySales = avgSalesMap.get(`${sku.id}:${w.warehouseId}`) ?? 0;
       const daysOfCover = avgDailySales > 0 ? w.soh / avgDailySales : null;
-      if (daysOfCover !== null && daysOfCover < 21) {
+      if (daysOfCover !== null && daysOfCover < sku.leadTimeDays + sku.safetyStockDays) {
         atRisk = true;
         break;
       }
@@ -118,7 +117,7 @@ export async function getStockDashboard() {
     const enriched = byWarehouse.map((w) => {
       const avgDailySales = avgSalesMap.get(`${sku.id}:${w.warehouseId}`) ?? 0;
       const daysOfCover = avgDailySales > 0 ? w.soh / avgDailySales : null;
-      return { ...w, avgDailySales, daysOfCover, status: getStockStatus(daysOfCover) };
+      return { ...w, avgDailySales, daysOfCover, status: getStockStatus(daysOfCover, sku.leadTimeDays, sku.safetyStockDays) };
     });
     results.push({ skuId: sku.id, sku: sku.sku, byWarehouse: enriched });
   }

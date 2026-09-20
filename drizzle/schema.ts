@@ -48,6 +48,8 @@ export const skus = mysqlTable(
       ),
     status: mysqlEnum("status", ["active", "inactive"]).default("active").notNull(),
     isBundle: boolean("isBundle").default(false).notNull(),
+    leadTimeDays: int("leadTimeDays").default(66).notNull(),
+    safetyStockDays: int("safetyStockDays").default(14).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

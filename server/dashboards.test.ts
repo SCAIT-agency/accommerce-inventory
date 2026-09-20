@@ -309,4 +309,49 @@ describe("dashboards", () => {
     expect(summary.overduePayablesAmount).toBeCloseTo(5000);
     expect(summary.nearTermCashNeeds).toBeCloseTo(2000);
   });
+
+  it("getStockDashboard classifies stockout status using each SKU's own lead time and safety stock, not a fixed threshold", async () => {
+    const shortLeadSku = await createSku({ sku: "JELLO-SHORT-LEAD", primaryIdentifierType: "sku", status: "active", leadTimeDays: 14, safetyStockDays: 7 });
+    const longLeadSku = await createSku({ sku: "JELLO-LONG-LEAD", primaryIdentifierType: "sku", status: "active", leadTimeDays: 66, safetyStockDays: 14 });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    // Both SKUs get identical SOH/sales history: 30 days of cover.
+    for (const sku of [shortLeadSku, longLeadSku]) {
+      await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 300, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO1" });
+      for (let i = 0; i < 30; i++) {
+        await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: daysAgoStr(i), qty: 10, source: "manual" });
+      }
+    }
+    // Both SOH ~= 0 after 30 days of 10/day sales against 300 received -- use a
+    // fresh receipt today so daysOfCover reads a clean ~30 for both.
+    await recordLedgerEvent({ skuId: shortLeadSku.id, warehouseId: ff.id, eventType: "receipt", qty: 300, unitCost: "0.42", date: new Date(), sourceRef: "PO2" });
+    await recordLedgerEvent({ skuId: longLeadSku.id, warehouseId: ff.id, eventType: "receipt", qty: 300, unitCost: "0.42", date: new Date(), sourceRef: "PO2" });
+
+    const stock = await getStockDashboard();
+    const shortRow = stock.find((r) => r.skuId === shortLeadSku.id)?.byWarehouse.find((w) => w.warehouseId === ff.id);
+    const longRow = stock.find((r) => r.skuId === longLeadSku.id)?.byWarehouse.find((w) => w.warehouseId === ff.id);
+
+    // ~30 days of cover: above shortLeadSku's reorder point (14+7=21) -> "ok".
+    // Below longLeadSku's own lead time (66) -> "critical".
+    expect(shortRow?.status).toBe("ok");
+    expect(longRow?.status).toBe("critical");
+  });
+
+  it("getHomeSummary's stockout-risk count uses each SKU's own reorder point, not a fixed 21-day cutoff", async () => {
+    const sku = await createSku({ sku: "JELLO-CUSTOM-LEAD", primaryIdentifierType: "sku", status: "active", leadTimeDays: 40, safetyStockDays: 10 });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 300, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO1" });
+    for (let i = 0; i < 30; i++) {
+      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: daysAgoStr(i), qty: 10, source: "manual" });
+    }
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 300, unitCost: "0.42", date: new Date(), sourceRef: "PO2" });
+    // getAverageDailySalesForSkus divides by a fixed 30-day window regardless
+    // of how many of those days actually had a sale: 30 days x 10/day = 300
+    // total qty -> avgDailySales = 300/30 = 10 exactly. The fresh receipt
+    // brings SOH back to exactly 300, so daysOfCover = 300/10 = 30 exactly --
+    // below this SKU's reorder point (40+10=50) -> at risk, even though 30 is
+    // comfortably above the old fixed 21-day cutoff that code no longer exists.
+    const summary = await getHomeSummary();
+    expect(summary.stockoutRiskSkuCount).toBe(1);
+  });
 });
