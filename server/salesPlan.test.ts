@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { salesPlan, salesActuals, inventoryLedger, skus, warehouses } from "../drizzle/schema";
-import { recordSalesActual, getSalesVolatility, getPlanActualDeviation, getDailyCogs, createSalesPlanEntry } from "./salesPlan";
+import { recordSalesActual, getSalesVolatility, getPlanActualDeviation, getDailyCogs, getDailyCogsForRange, createSalesPlanEntry } from "./salesPlan";
 import { createSku, createWarehouse } from "./db";
 import { recordLedgerEvent } from "./inventoryLedger";
 
@@ -121,6 +121,36 @@ describe("sales plan/actuals", () => {
     // Sept 10 sale (40 units) drains the remaining 20 units of batch 1 (@2.00), then 20 units of batch 2 (@2.50).
     const cogsSept10 = await getDailyCogs(sku.id, ff.id, "2026-09-10");
     expect(cogsSept10).toBeCloseTo(20 * 2.0 + 20 * 2.5, 2);
+  });
+
+  it("computes daily COGS for a whole range in one call via a single forward FIFO pass, not each day in isolation", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.50", date: new Date("2026-09-05"), sourceRef: "PO2" });
+    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-03", qty: 80, source: "manual" });
+    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-10", qty: 40, source: "manual" });
+
+    const result = await getDailyCogsForRange(sku.id, ff.id, [
+      "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06",
+      "2026-09-07", "2026-09-08", "2026-09-09", "2026-09-10",
+    ]);
+
+    expect(result).toHaveLength(8);
+    // Sept 3 sale (80 units) is fully covered by the first batch (@2.00) — the second batch hasn't landed yet.
+    expect(result.find((r) => r.date === "2026-09-03")?.cogs).toBeCloseTo(80 * 2.0, 2);
+    // Sept 10 sale (40 units) drains the remaining 20 units of batch 1 (@2.00), then 20 units of batch 2 (@2.50).
+    expect(result.find((r) => r.date === "2026-09-10")?.cogs).toBeCloseTo(20 * 2.0 + 20 * 2.5, 2);
+    // A day inside the window with no sales must still appear, with zero cost, not be omitted.
+    expect(result.find((r) => r.date === "2026-09-07")?.cogs).toBe(0);
+  });
+
+  it("returns an empty array for an empty dateKeys list, without querying the database", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const result = await getDailyCogsForRange(sku.id, ff.id, []);
+    expect(result).toEqual([]);
   });
 
   it("creates a sales plan entry with a direct insert, no audit trail", async () => {

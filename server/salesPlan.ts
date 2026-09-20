@@ -1,4 +1,4 @@
-import { and, between, desc, eq } from "drizzle-orm";
+import { and, between, desc, eq, lte } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
 import { salesPlan, salesActuals, inventoryLedger } from "../drizzle/schema";
 import { recordLedgerEvent } from "./inventoryLedger";
@@ -123,4 +123,57 @@ export async function getDailyCogs(skuId: number, warehouseId: number, dateKey: 
   const cogsUpToDate = computeFifoCogs(receipts, salesUpToAndIncluding).totalCogs;
   const cogsBeforeDate = computeFifoCogs(receipts, salesBeforeDate).totalCogs;
   return cogsUpToDate - cogsBeforeDate;
+}
+
+/**
+ * Same FIFO semantics as getDailyCogs, computed for a whole date range in one
+ * query and one chronological forward pass instead of one query-plus-two-
+ * full-FIFO-passes per day. Mathematically equivalent to calling getDailyCogs
+ * once per day: consuming sales in chronological order against a single
+ * shared, depleting `batches` array and bucketing each unit's cost by the
+ * sale's own calendar day produces exactly the same per-day figure the old
+ * "cost up to this day minus cost up to the day before" subtraction did,
+ * since by the time a forward pass reaches a given day, the batches
+ * remaining are exactly what "up to the day before" already implied.
+ */
+export async function getDailyCogsForRange(skuId: number, warehouseId: number, dateKeys: string[]): Promise<{ date: string; cogs: number }[]> {
+  if (dateKeys.length === 0) return [];
+
+  const windowEnd = new Date(`${dateKeys[dateKeys.length - 1]}T23:59:59.999Z`);
+  const events = await db
+    .select()
+    .from(inventoryLedger)
+    .where(and(eq(inventoryLedger.skuId, skuId), eq(inventoryLedger.warehouseId, warehouseId), lte(inventoryLedger.date, windowEnd)))
+    .orderBy(inventoryLedger.date);
+
+  const batches: LandedBatch[] = events
+    .filter((e) => e.eventType === "receipt")
+    .map((e) => ({ qty: e.qty, unitCost: parseFloat(e.unitCost ?? "0"), date: e.date }));
+
+  const sales: SaleEvent[] = events
+    .filter((e) => e.eventType === "sale")
+    .map((e) => ({ qty: Math.abs(e.qty), date: e.date }));
+
+  const dailyCogs = new Map<string, number>(dateKeys.map((d) => [d, 0]));
+
+  for (const sale of sales) {
+    const dateKey = sale.date.toISOString().slice(0, 10);
+    let remainingToConsume = sale.qty;
+    let consumedCost = 0;
+    while (remainingToConsume > 0) {
+      const batch = batches.find((b) => b.qty > 0 && b.date <= sale.date);
+      if (!batch) {
+        throw new Error(`insufficient stock: cannot consume ${remainingToConsume} units for sale on ${sale.date.toISOString()}`);
+      }
+      const consumed = Math.min(batch.qty, remainingToConsume);
+      consumedCost += consumed * batch.unitCost;
+      batch.qty -= consumed;
+      remainingToConsume -= consumed;
+    }
+    if (dailyCogs.has(dateKey)) {
+      dailyCogs.set(dateKey, dailyCogs.get(dateKey)! + consumedCost);
+    }
+  }
+
+  return dateKeys.map((date) => ({ date, cogs: dailyCogs.get(date)! }));
 }
