@@ -15,24 +15,36 @@ export function mountAuthRoutes(app: Express) {
       return res.status(400).json({ error: "email and password are required" });
     }
 
-    const result = await attemptLogin(email, password);
-    if (!result.ok) {
-      return res.status(401).json({ error: "invalid email or password" });
+    try {
+      const result = await attemptLogin(email, password);
+      if (!result.ok) {
+        return res.status(401).json({ error: "invalid email or password" });
+      }
+      res.cookie(SESSION_COOKIE, result.token, getSessionCookieOptions());
+      res.json({ ok: true, user: result.user });
+    } catch {
+      res.status(500).json({ error: "login failed" });
     }
-
-    res.cookie(SESSION_COOKIE, result.token, getSessionCookieOptions());
-    res.json({ ok: true, user: result.user });
   });
 
   app.post("/api/auth/logout", async (req: Request, res: Response) => {
-    await performLogout(getCookie(req, SESSION_COOKIE));
+    try {
+      await performLogout(getCookie(req, SESSION_COOKIE));
+    } catch {
+      // Logout must never leave a client stuck — clear the cookie regardless
+      // of whether the tokenVersion bump succeeded.
+    }
     res.clearCookie(SESSION_COOKIE);
     res.json({ ok: true });
   });
 
   app.get("/api/auth/status", async (req: Request, res: Response) => {
-    const session = await resolveSession(getCookie(req, SESSION_COOKIE));
-    if (!session) return res.json({ authenticated: false });
-    res.json({ authenticated: true, userId: session.userId, role: session.role });
+    try {
+      const session = await resolveSession(getCookie(req, SESSION_COOKIE));
+      if (!session) return res.json({ authenticated: false });
+      res.json({ authenticated: true, userId: session.userId, role: session.role });
+    } catch {
+      res.json({ authenticated: false });
+    }
   });
 }
