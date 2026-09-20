@@ -2,6 +2,8 @@ import { eq } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
 import { shipments, shipmentLineItems, type Shipment, SHIPMENT_STATUSES, CUSTOMS_STATUSES } from "../drizzle/schema";
 import { logChange, type ReasonCategory } from "./changeLog";
+import { recordLedgerEvent } from "./inventoryLedger";
+import { getShipmentLandedUnitCost } from "./landedCost";
 
 const VALID_SHIPMENT_TRANSITIONS: Record<(typeof SHIPMENT_STATUSES)[number], (typeof SHIPMENT_STATUSES)[number][]> = {
   planned: ["departed"],
@@ -204,21 +206,50 @@ export async function markShipmentArrived(
   id: number,
   actualArrivalDate: Date,
   opts: { changedBy: number; reasonCategory: ReasonCategory; reasonNote?: string },
-  dbClient: DbClient = db,
 ): Promise<void> {
-  const [shipment] = await dbClient.select().from(shipments).where(eq(shipments.id, id));
-  await dbClient.update(shipments).set({ actualArrivalDate }).where(eq(shipments.id, id));
-  await logChange({
-    entityType: "shipment",
-    entityId: id,
-    field: "actualArrivalDate",
-    // Plain calendar-day string — see updateShipmentPlannedDepartDate's
-    // comment above for why.
-    oldValue: shipment.actualArrivalDate?.toISOString().slice(0, 10) ?? null,
-    newValue: actualArrivalDate.toISOString().slice(0, 10),
-    reasonCategory: opts.reasonCategory,
-    reasonNote: opts.reasonNote,
-    changedBy: opts.changedBy,
+  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
+  if (!shipment) {
+    throw new Error(`markShipmentArrived: no shipment found with id ${id}`);
+  }
+  if (shipment.freightCost == null || shipment.dutyCost == null || shipment.costCurrency == null) {
+    throw new Error(
+      `markShipmentArrived: cannot record receipt for shipment ${id} — freight/duty costs must be recorded first ` +
+      `(recordShipmentCosts) so the ledger receipt carries a real landed cost, not a silent EXW-only placeholder`,
+    );
+  }
+  const landedCosts = await getShipmentLandedUnitCost(id);
+  const lines = await db.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, id));
+  const landedCostBySkuId = new Map(landedCosts.map((lc) => [lc.skuId, lc.landedUnitCost]));
+
+  await db.transaction(async (tx) => {
+    await tx.update(shipments).set({ actualArrivalDate }).where(eq(shipments.id, id));
+    await logChange({
+      entityType: "shipment",
+      entityId: id,
+      field: "actualArrivalDate",
+      // Plain calendar-day string — see updateShipmentPlannedDepartDate's
+      // comment above for why.
+      oldValue: shipment.actualArrivalDate?.toISOString().slice(0, 10) ?? null,
+      newValue: actualArrivalDate.toISOString().slice(0, 10),
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
+    for (const line of lines) {
+      const landedUnitCost = landedCostBySkuId.get(line.skuId);
+      if (landedUnitCost === undefined) {
+        throw new Error(`markShipmentArrived: no landed cost computed for sku ${line.skuId} on shipment ${id}`);
+      }
+      await recordLedgerEvent({
+        skuId: line.skuId,
+        warehouseId: shipment.warehouseId,
+        eventType: "receipt",
+        qty: line.qty,
+        unitCost: landedUnitCost.toFixed(4),
+        date: actualArrivalDate,
+        sourceRef: shipment.shipmentRef,
+      }, tx);
+    }
   });
 }
 

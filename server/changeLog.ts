@@ -1,5 +1,5 @@
 import { and, desc, eq } from "drizzle-orm";
-import { db } from "./dbClient";
+import { db, type DbClient } from "./dbClient";
 import { changeLog, REASON_CATEGORIES } from "../drizzle/schema";
 
 export type ReasonCategory = (typeof REASON_CATEGORIES)[number];
@@ -15,11 +15,11 @@ export interface LogChangeInput {
   changedBy: number;
 }
 
-export async function logChange(input: LogChangeInput): Promise<void> {
+export async function logChange(input: LogChangeInput, dbClient: DbClient = db): Promise<void> {
   if (input.reasonCategory === "other" && !input.reasonNote) {
     throw new Error("reasonNote is required when reasonCategory is 'other'");
   }
-  await db.insert(changeLog).values({
+  await dbClient.insert(changeLog).values({
     entityType: input.entityType,
     entityId: input.entityId,
     field: input.field,
