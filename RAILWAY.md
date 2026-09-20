@@ -29,7 +29,7 @@ design spec's single-tenant-per-client model).
    client directory as static files with an SPA fallback, so one Railway service
    serves both the API and the frontend. There is no separate static host and no
    Vite process in production.
-6. Run `pnpm db:push` once against the production `DATABASE_URL` to create the schema.
+6. Run `pnpm db:migrate` once against the production `DATABASE_URL` to create the schema — **not** `pnpm db:push`. `db:push` runs `drizzle-kit generate` first, which *authors* a migration from whatever `schema.ts` looks like at that moment; if a schema change ever reaches production without its migration having been committed first (a mistake, not something this deploy process should silently paper over), `generate` would create a brand-new migration file at deploy time instead of failing loudly. `db:migrate` only ever *applies* the migration chain already committed to the repo — the correct, non-authoring operation for any environment that isn't a developer's own machine. Every schema change from here on ships as a migration file committed alongside the `schema.ts` change (already this repo's convention — see any prior Backlog Stream's build history) and is applied to production with this same command on every deploy that adds one, not run ad hoc.
 7. **Required one-time bootstrap — create the first user.** Nothing in the
    app creates a `users` row on its own, so until this runs the login screen
    has no account to authenticate against. Run once against the production

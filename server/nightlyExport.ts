@@ -16,6 +16,8 @@ import {
   salesPlan,
   salesActuals,
   changeLog,
+  salesPlanWeeklyInputs,
+  salesPlanWeeklyRecipeLines,
 } from "../drizzle/schema";
 
 export function generateCsvExport(rows: Record<string, unknown>[]): string {
