@@ -15,6 +15,7 @@ export interface CreateShipmentInput {
   shipmentRef: string;
   vendorReference?: string;
   initialStatus?: (typeof SHIPMENT_STATUSES)[number];
+  warehouseId: number;
   /** Migration-only initial values: no audit trail, since a creation-time value
    * isn't a "change" with a prior value — mirrors vendorReference/initialStatus
    * above. Use `recordShipmentCosts` for a live, audited change instead. */
@@ -30,6 +31,7 @@ export async function createShipment(input: CreateShipmentInput, dbClient: DbCli
     shipmentRef: input.shipmentRef,
     vendorReference: input.vendorReference,
     status: input.initialStatus ?? "planned",
+    warehouseId: input.warehouseId,
     freightCost: input.freightCost,
     dutyCost: input.dutyCost,
     costCurrency: input.costCurrency,

@@ -133,6 +133,7 @@ describe("runMigration (widened scope)", () => {
           shipment_ref: "PO1-W4-Container2",
           vendor_reference: "",
           status: "planned",
+          warehouse: "FF-DE",
           freight_cost: "",
           duty_cost: "",
           cost_currency: "",

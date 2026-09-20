@@ -1,0 +1,2 @@
+ALTER TABLE `shipments` ADD `warehouseId` int NOT NULL;--> statement-breakpoint
+ALTER TABLE `shipments` ADD CONSTRAINT `shipments_warehouseId_warehouses_id_fk` FOREIGN KEY (`warehouseId`) REFERENCES `warehouses`(`id`) ON DELETE no action ON UPDATE no action;

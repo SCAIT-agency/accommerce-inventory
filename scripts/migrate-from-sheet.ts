@@ -252,6 +252,7 @@ export interface ShipmentSheetRow {
   shipment_ref: string;
   vendor_reference: string;
   status: string;
+  warehouse: string;
   freight_cost: string;
   duty_cost: string;
   cost_currency: string;
@@ -266,6 +267,7 @@ export interface TransformedShipment {
   shipmentRef: string;
   vendorReference: string | null;
   initialStatus: "planned" | "departed" | "in_transit" | "customs" | "delivered";
+  warehouseCode: string;
   freightCost: string | null;
   dutyCost: string | null;
   costCurrency: string | null;
@@ -306,6 +308,7 @@ export function transformShipments(rows: ShipmentSheetRow[]): { shipments: Trans
         shipmentRef: row.shipment_ref,
         vendorReference: row.vendor_reference || null,
         initialStatus: row.status as TransformedShipment["initialStatus"],
+        warehouseCode: row.warehouse,
         freightCost: row.freight_cost || null,
         dutyCost: row.duty_cost || null,
         costCurrency: row.cost_currency || null,

@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { computeFifoCogs, getShipmentLandedUnitCost } from "./landedCost";
 import { db } from "./dbClient";
-import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, inventoryLedger, payments } from "../drizzle/schema";
-import { createSku, createVendor } from "./db";
+import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, inventoryLedger, payments, warehouses } from "../drizzle/schema";
+import { createSku, createVendor, createWarehouse } from "./db";
 import { createPurchaseOrder, getPurchaseOrderWithLineItems } from "./purchaseOrders";
 import { createShipment, recordShipmentCosts } from "./shipments";
 
@@ -59,6 +59,7 @@ describe("getShipmentLandedUnitCost", () => {
         await tx.delete(inventoryLedger);
         await tx.delete(skus);
         await tx.delete(vendors);
+        await tx.delete(warehouses);
       } finally {
         await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
       }
@@ -76,8 +77,10 @@ describe("getShipmentLandedUnitCost", () => {
     });
     const [lineItem] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
 
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
     const shipment = await createShipment({
       shipmentRef: "PO1-W4-Container2",
+      warehouseId: ff.id,
       lineItems: [{ poLineItemId: lineItem.id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
       createdBy: 1,
     });
@@ -109,8 +112,10 @@ describe("getShipmentLandedUnitCost", () => {
     const lineA = poLines.find((l) => l.skuId === skuA.id)!;
     const lineB = poLines.find((l) => l.skuId === skuB.id)!;
 
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
     const shipment = await createShipment({
       shipmentRef: "PO1-W4-Container3",
+      warehouseId: ff.id,
       lineItems: [
         { poLineItemId: lineA.id, skuId: skuA.id, qty: 1000, weightShare: "0.6", valueShare: "0.6" },
         { poLineItemId: lineB.id, skuId: skuB.id, qty: 500, weightShare: "0.4", valueShare: "0.4" },
@@ -144,8 +149,10 @@ describe("getShipmentLandedUnitCost", () => {
     });
     const [lineItem] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
 
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
     const shipment = await createShipment({
       shipmentRef: "PO1-W4-Container4",
+      warehouseId: ff.id,
       lineItems: [{ poLineItemId: lineItem.id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
       createdBy: 1,
     });
@@ -180,8 +187,10 @@ describe("getShipmentLandedUnitCost", () => {
     });
     const [lineItem] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
 
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
     const shipment = await createShipment({
       shipmentRef: "PO1-W4-Container2",
+      warehouseId: ff.id,
       lineItems: [{ poLineItemId: lineItem.id, skuId: sku.id, qty: 0, weightShare: "1.0", valueShare: "1.0" }],
       createdBy: 1,
     });
@@ -204,8 +213,10 @@ describe("getShipmentLandedUnitCost", () => {
       createdBy: 1,
     });
     const withItems = await getPurchaseOrderWithLineItems(po.id);
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
     const shipment = await createShipment({
       shipmentRef: "PO1-W4-Container1",
+      warehouseId: ff.id,
       lineItems: [{ poLineItemId: withItems.lineItems[0].id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
       createdBy: 1,
     });
@@ -228,8 +239,10 @@ describe("getShipmentLandedUnitCost", () => {
       createdBy: 1,
     });
     const withItems = await getPurchaseOrderWithLineItems(po.id);
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
     const shipment = await createShipment({
       shipmentRef: "PO1-W4-Container1",
+      warehouseId: ff.id,
       lineItems: [{ poLineItemId: withItems.lineItems[0].id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
       createdBy: 1,
     });
@@ -253,8 +266,10 @@ describe("getShipmentLandedUnitCost", () => {
       createdBy: 1,
     });
     const withItems = await getPurchaseOrderWithLineItems(po.id);
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
     const shipment = await createShipment({
       shipmentRef: "PO1-W4-Container1",
+      warehouseId: ff.id,
       lineItems: [{ poLineItemId: withItems.lineItems[0].id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
       createdBy: 1,
     });
@@ -278,8 +293,10 @@ describe("getShipmentLandedUnitCost", () => {
       createdBy: 1,
     });
     const withItems = await getPurchaseOrderWithLineItems(po.id);
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
     const shipment = await createShipment({
       shipmentRef: "PO1-W4-Container1",
+      warehouseId: ff.id,
       lineItems: [{ poLineItemId: withItems.lineItems[0].id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
       createdBy: 1,
     });

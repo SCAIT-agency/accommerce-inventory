@@ -67,6 +67,7 @@ export const appRouter = router({
     create: editorProcedure
       .input(z.object({
         shipmentRef: z.string(),
+        warehouseId: z.number(),
         lineItems: z.array(z.object({ poLineItemId: z.number(), skuId: z.number(), qty: z.number(), weightShare: z.string(), valueShare: z.string() })),
       }))
       .mutation(({ input, ctx }) => createShipment({ ...input, createdBy: ctx.user.id })),

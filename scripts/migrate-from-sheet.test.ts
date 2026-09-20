@@ -187,7 +187,7 @@ describe("transformPurchaseOrders", () => {
 describe("transformShipments", () => {
   it("maps a well-formed row with cost fields and a final historical status", () => {
     const rows = [
-      { shipment_ref: "PO1-W4-Container2", vendor_reference: "MBS-DEBIT-SZDN26080711", status: "delivered", freight_cost: "4200.00", duty_cost: "980.00", cost_currency: "EUR", po_line_item_ref: "PO1-W4::JELLO-CAL-500", sku: "JELLO-CAL-500", qty: "45000", weight_share: "0.5", value_share: "0.5" },
+      { shipment_ref: "PO1-W4-Container2", vendor_reference: "MBS-DEBIT-SZDN26080711", status: "delivered", warehouse: "FF-DE", freight_cost: "4200.00", duty_cost: "980.00", cost_currency: "EUR", po_line_item_ref: "PO1-W4::JELLO-CAL-500", sku: "JELLO-CAL-500", qty: "45000", weight_share: "0.5", value_share: "0.5" },
     ];
     const result = transformShipments(rows);
     expect(result.skipped).toEqual([]);
@@ -195,6 +195,7 @@ describe("transformShipments", () => {
       shipmentRef: "PO1-W4-Container2",
       vendorReference: "MBS-DEBIT-SZDN26080711",
       initialStatus: "delivered",
+      warehouseCode: "FF-DE",
       freightCost: "4200.00",
       dutyCost: "980.00",
       costCurrency: "EUR",
@@ -202,7 +203,7 @@ describe("transformShipments", () => {
   });
 
   it("quarantines a row missing its shipment_ref", () => {
-    const rows = [{ shipment_ref: "", vendor_reference: "", status: "planned", freight_cost: "", duty_cost: "", cost_currency: "", po_line_item_ref: "x", sku: "JELLO-CAL-500", qty: "1", weight_share: "1.0", value_share: "1.0" }];
+    const rows = [{ shipment_ref: "", vendor_reference: "", status: "planned", warehouse: "FF-DE", freight_cost: "", duty_cost: "", cost_currency: "", po_line_item_ref: "x", sku: "JELLO-CAL-500", qty: "1", weight_share: "1.0", value_share: "1.0" }];
     const result = transformShipments(rows);
     expect(result.shipments).toEqual([]);
     expect(result.skipped[0].reason).toContain("shipment_ref");

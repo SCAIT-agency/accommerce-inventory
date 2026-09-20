@@ -173,6 +173,7 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
           shipmentRef: shipment.shipmentRef,
           vendorReference: shipment.vendorReference ?? undefined,
           initialStatus: shipment.initialStatus,
+          warehouseId: await ensureWarehouse(shipment.warehouseCode),
           freightCost: shipment.freightCost ?? undefined,
           dutyCost: shipment.dutyCost ?? undefined,
           costCurrency: shipment.costCurrency ?? undefined,

@@ -116,8 +116,10 @@ describe("dashboards", () => {
       createdBy: 1,
     });
     const withItems = await getPurchaseOrderWithLineItems(po.id);
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
     const shipment = await createShipment({
       shipmentRef: "PO1-W4-Container1",
+      warehouseId: ff.id,
       lineItems: [{ poLineItemId: withItems.lineItems[0].id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
       createdBy: 1,
     });

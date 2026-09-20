@@ -142,6 +142,7 @@ export const shipments = mysqlTable("shipments", {
   status: mysqlEnum("status", SHIPMENT_STATUSES).default("planned").notNull(),
   customsStatus: mysqlEnum("customsStatus", CUSTOMS_STATUSES).default("not_declared").notNull(),
   customsDeclarationLink: varchar("customsDeclarationLink", { length: 512 }),
+  warehouseId: int("warehouseId").notNull().references(() => warehouses.id),
   plannedDepartDate: timestamp("plannedDepartDate"),
   actualDepartDate: timestamp("actualDepartDate"),
   plannedArrivalDate: timestamp("plannedArrivalDate"),
