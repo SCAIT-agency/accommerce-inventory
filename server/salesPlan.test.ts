@@ -153,6 +153,19 @@ describe("sales plan/actuals", () => {
     expect(rows).toHaveLength(1);
   });
 
+  it("creating a sales plan entry twice for the same SKU/warehouse/day updates it in place instead of duplicating", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await createSalesPlanEntry({ skuId: sku.id, warehouseId: ff.id, periodDate: "2026-10-01", plannedQty: 500 });
+    const updated = await createSalesPlanEntry({ skuId: sku.id, warehouseId: ff.id, periodDate: "2026-10-01", plannedQty: 750 });
+
+    expect(updated.plannedQty).toBe(750);
+    const rows = await db.select().from(salesPlan);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].plannedQty).toBe(750);
+  });
+
   it("stores and reads back a sales_actuals date as an exact calendar day, no time-of-day drift", async () => {
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });

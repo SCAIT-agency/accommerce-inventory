@@ -43,6 +43,13 @@
       "when": 1789911826895,
       "tag": "0005_new_wrecker",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1789924907945,
+      "tag": "0006_next_shinko_yamashiro",
+      "breakpoints": true
     }
   ]
 }

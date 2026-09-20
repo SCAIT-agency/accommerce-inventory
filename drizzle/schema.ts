@@ -1,5 +1,5 @@
 import { sql, type SQL } from "drizzle-orm";
-import { date, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index, unique } from "drizzle-orm/mysql-core";
+import { date, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index, unique, foreignKey } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -227,15 +227,52 @@ export const inventoryLedger = mysqlTable(
 export type LedgerEvent = typeof inventoryLedger.$inferSelect;
 export type InsertLedgerEvent = typeof inventoryLedger.$inferInsert;
 
-export const salesPlan = mysqlTable("sales_plan", {
-  id: int("id").autoincrement().primaryKey(),
-  skuId: int("skuId").notNull(),
-  warehouseId: int("warehouseId").notNull(),
-  periodDate: date("periodDate", { mode: "string" }).notNull(),
-  plannedQty: int("plannedQty").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+export const salesPlan = mysqlTable(
+  "sales_plan",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    skuId: int("skuId").notNull(),
+    warehouseId: int("warehouseId").notNull(),
+    periodDate: date("periodDate", { mode: "string" }).notNull(),
+    plannedQty: int("plannedQty").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    skuWarehouseDateUnique: unique("sales_plan_sku_warehouse_date_unique").on(table.skuId, table.warehouseId, table.periodDate),
+  }),
+);
 export type SalesPlanRow = typeof salesPlan.$inferSelect;
+
+export const salesPlanWeeklyInputs = mysqlTable("sales_plan_weekly_inputs", {
+  id: int("id").autoincrement().primaryKey(),
+  weekStartDate: date("weekStartDate", { mode: "string" }).notNull().unique(),
+  plannedRevenue: varchar("plannedRevenue", { length: 32 }).notNull(),
+  primaryWarehouseId: int("primaryWarehouseId").notNull().references(() => warehouses.id),
+  primaryPercent: varchar("primaryPercent", { length: 8 }).notNull(),
+  secondaryWarehouseId: int("secondaryWarehouseId").notNull().references(() => warehouses.id),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type SalesPlanWeeklyInput = typeof salesPlanWeeklyInputs.$inferSelect;
+
+export const salesPlanWeeklyRecipeLines = mysqlTable(
+  "sales_plan_weekly_recipe_lines",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    weeklyInputId: int("weeklyInputId").notNull(),
+    skuId: int("skuId").notNull().references(() => skus.id),
+    unitsPer1000: varchar("unitsPer1000", { length: 16 }).notNull(),
+  },
+  (table) => ({
+    // MySQL's 64-char identifier limit rejects drizzle's default auto-generated
+    // FK name here (75 chars, from the two long table names) — named explicitly instead.
+    weeklyInputFk: foreignKey({
+      columns: [table.weeklyInputId],
+      foreignColumns: [salesPlanWeeklyInputs.id],
+      name: "sales_plan_weekly_recipe_lines_weekly_input_id_fk",
+    }),
+  }),
+);
+export type SalesPlanWeeklyRecipeLine = typeof salesPlanWeeklyRecipeLines.$inferSelect;
 
 export const SALES_ACTUAL_SOURCES = ["shopify_daily_pull", "manual"] as const;
 

@@ -23,8 +23,14 @@ export async function createSalesPlanEntry(
   input: CreateSalesPlanEntryInput,
   dbClient: DbClient = db,
 ): Promise<typeof salesPlan.$inferSelect> {
-  const [result] = await dbClient.insert(salesPlan).values(input);
-  const [row] = await dbClient.select().from(salesPlan).where(eq(salesPlan.id, result.insertId));
+  await dbClient
+    .insert(salesPlan)
+    .values(input)
+    .onDuplicateKeyUpdate({ set: { plannedQty: input.plannedQty } });
+  const [row] = await dbClient
+    .select()
+    .from(salesPlan)
+    .where(and(eq(salesPlan.skuId, input.skuId), eq(salesPlan.warehouseId, input.warehouseId), eq(salesPlan.periodDate, input.periodDate)));
   return row;
 }
 
