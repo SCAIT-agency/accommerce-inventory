@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
+import { warehouseLabel } from "../lib/labels";
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 
@@ -262,7 +263,7 @@ export function StockPage() {
 
   const warehouseLabels = useMemo(() => {
     const map = new Map<number, string>();
-    for (const w of warehousesQuery.data ?? []) map.set(w.id, `${w.code} — ${w.name}`);
+    for (const w of warehousesQuery.data ?? []) map.set(w.id, warehouseLabel(w));
     return map;
   }, [warehousesQuery.data]);
 

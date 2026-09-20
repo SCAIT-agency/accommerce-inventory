@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
+import { skuLabel } from "../lib/labels";
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type ShipmentListItem = RouterOutputs["shipments"]["list"][number];
@@ -347,6 +348,8 @@ function DepartDateCorrectionControl({ shipment, onUpdated }: { shipment: Shipme
 function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
   const { data, error, isLoading, refetch } = trpc.shipments.getWithLineItems.useQuery(shipment.id);
   const utils = trpc.useUtils();
+  const skusQuery = trpc.catalog.listSkus.useQuery();
+  const skusById = new Map((skusQuery.data ?? []).map((s) => [s.id, s]));
   const recordCosts = trpc.shipments.recordCosts.useMutation({
     onSuccess: () => {
       refetch();
@@ -384,7 +387,7 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
       <td>
         <ul>
           {data.lineItems.map((li) => (
-            <li key={li.id}>SKU {li.skuId} — qty {li.qty}</li>
+            <li key={li.id}>{skuLabel(skusById.get(li.skuId) ?? { id: li.skuId })} — qty {li.qty}</li>
           ))}
         </ul>
       </td>
@@ -453,6 +456,8 @@ interface NewShipmentLineItem {
 
 function NewLineItemPicker({ onAdd }: { onAdd: (li: NewShipmentLineItem) => void }) {
   const posQuery = trpc.purchaseOrders.list.useQuery();
+  const skusQuery = trpc.catalog.listSkus.useQuery();
+  const skusById = new Map((skusQuery.data ?? []).map((s) => [s.id, s]));
   const [poId, setPoId] = useState("");
   const poLineItemsQuery = trpc.purchaseOrders.getWithLineItems.useQuery(Number(poId), { enabled: poId !== "" });
   const [poLineItemId, setPoLineItemId] = useState("");
@@ -477,7 +482,7 @@ function NewLineItemPicker({ onAdd }: { onAdd: (li: NewShipmentLineItem) => void
         <select value={poLineItemId} onChange={(e) => setPoLineItemId(e.target.value)}>
           <option value="">Line item…</option>
           {poLineItemsQuery.data.lineItems.map((li) => (
-            <option key={li.id} value={li.id}>SKU {li.skuId} — qty {li.qty} @ {li.unitPrice} {li.currency}</option>
+            <option key={li.id} value={li.id}>{skuLabel(skusById.get(li.skuId) ?? { id: li.skuId })} — qty {li.qty} @ {li.unitPrice} {li.currency}</option>
           ))}
         </select>
       )}
@@ -502,6 +507,8 @@ function NewLineItemPicker({ onAdd }: { onAdd: (li: NewShipmentLineItem) => void
 function CreateShipmentForm() {
   const utils = trpc.useUtils();
   const warehousesQuery = trpc.catalog.listWarehouses.useQuery();
+  const skusQuery = trpc.catalog.listSkus.useQuery();
+  const skusById = new Map((skusQuery.data ?? []).map((s) => [s.id, s]));
   const [shipmentRef, setShipmentRef] = useState("");
   const [warehouseId, setWarehouseId] = useState("");
   const [lineItems, setLineItems] = useState<NewShipmentLineItem[]>([]);
@@ -530,7 +537,7 @@ function CreateShipmentForm() {
         <ul>
           {lineItems.map((li, i) => (
             <li key={i}>
-              SKU {li.skuId} — qty {li.qty} (weight {li.weightShare}, value {li.valueShare}){" "}
+              {skuLabel(skusById.get(li.skuId) ?? { id: li.skuId })} — qty {li.qty} (weight {li.weightShare}, value {li.valueShare}){" "}
               <button onClick={() => setLineItems((prev) => prev.filter((_, idx) => idx !== i))}>Remove</button>
             </li>
           ))}

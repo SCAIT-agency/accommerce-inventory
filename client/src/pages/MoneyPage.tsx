@@ -1,9 +1,6 @@
 import { useMemo, useState } from "react";
 import { trpc } from "../lib/trpc";
-
-function skuLabel(s: { id: number; sku?: string | null; name?: string | null }): string {
-  return s.name || s.sku || `SKU #${s.id}`;
-}
+import { skuLabel } from "../lib/labels";
 
 export function MoneyPage() {
   const [tab, setTab] = useState<"cashflow" | "landed_cost" | "daily_cogs">("cashflow");
@@ -44,6 +41,8 @@ export function MoneyPage() {
   const isLoading = skusQuery.isLoading || warehousesQuery.isLoading || shipmentsQuery.isLoading || moneyQuery.isLoading;
   const data = moneyQuery.data;
   if (isLoading || !data) return <div>Loading…</div>;
+
+  const skusById = new Map((skusQuery.data ?? []).map((s) => [s.id, s]));
 
   return (
     <div>
@@ -124,7 +123,7 @@ export function MoneyPage() {
             <thead><tr><th>SKU</th><th>Landed unit cost</th></tr></thead>
             <tbody>
               {data.landedCost.map((row) => (
-                <tr key={row.skuId}><td>{row.skuId}</td><td>{row.landedUnitCost.toFixed(4)}</td></tr>
+                <tr key={row.skuId}><td>{skuLabel(skusById.get(row.skuId) ?? { id: row.skuId })}</td><td>{row.landedUnitCost.toFixed(4)}</td></tr>
               ))}
             </tbody>
           </table>

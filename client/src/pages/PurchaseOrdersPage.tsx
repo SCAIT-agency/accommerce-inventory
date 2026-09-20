@@ -3,6 +3,7 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
 import { PO_STATUSES } from "../../../drizzle/schema";
+import { skuLabel } from "../lib/labels";
 
 const REASON_CATEGORIES = [
   "production_delay", "artwork_delay", "customs_hold", "logistics_delay",
@@ -309,6 +310,8 @@ function NewPoLineItemPicker({ onAdd }: { onAdd: (li: NewPoLineItem) => void }) 
 function CreatePoForm() {
   const utils = trpc.useUtils();
   const vendorsQuery = trpc.catalog.listVendors.useQuery();
+  const skusQuery = trpc.catalog.listSkus.useQuery();
+  const skusById = new Map((skusQuery.data ?? []).map((s) => [s.id, s]));
   const [poNumber, setPoNumber] = useState("");
   const [vendorId, setVendorId] = useState("");
   const [lineItems, setLineItems] = useState<NewPoLineItem[]>([]);
@@ -337,7 +340,7 @@ function CreatePoForm() {
         <ul>
           {lineItems.map((li, i) => (
             <li key={i}>
-              SKU {li.skuId} — qty {li.qty} @ {li.unitPrice} {li.currency}{" "}
+              {skuLabel(skusById.get(li.skuId) ?? { id: li.skuId })} — qty {li.qty} @ {li.unitPrice} {li.currency}{" "}
               <button onClick={() => setLineItems((prev) => prev.filter((_, idx) => idx !== i))}>Remove</button>
             </li>
           ))}
