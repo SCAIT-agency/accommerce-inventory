@@ -76,6 +76,7 @@ function SalesPlanSection() {
           onChange={(e) => setForm((prev) => ({ ...prev, periodDate: e.target.value }))}
         />
         <input
+          type="text"
           placeholder="planned qty"
           value={form.plannedQty}
           onChange={(e) => setForm((prev) => ({ ...prev, plannedQty: e.target.value }))}

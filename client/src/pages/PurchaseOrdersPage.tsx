@@ -90,11 +90,13 @@ function MarkPaidRow({ payment, onPaid }: { payment: Payment; onPaid: () => void
       Payment #{payment.sequenceNo}: expected {payment.expectedAmount} {payment.currency} on {payment.expectedDate.toString()}
       {" — "}
       <input
+        type="text"
         placeholder="amount"
         value={form.amount}
         onChange={(e) => setForm((prev) => ({ ...prev, amount: e.target.value }))}
       />
       <input
+        type="text"
         placeholder="fx rate"
         value={form.fxRate}
         onChange={(e) => setForm((prev) => ({ ...prev, fxRate: e.target.value }))}
@@ -112,6 +114,7 @@ function MarkPaidRow({ payment, onPaid }: { payment: Payment; onPaid: () => void
       </select>
       {noteRequired && (
         <input
+          type="text"
           placeholder="required note"
           value={form.reasonNote}
           onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
@@ -197,11 +200,13 @@ function PoPaymentsSection({ poId }: { poId: number }) {
       )}
       <div>
         <input
+          type="text"
           placeholder="sequence no"
           value={form.sequenceNo}
           onChange={(e) => setForm((prev) => ({ ...prev, sequenceNo: e.target.value }))}
         />
         <input
+          type="text"
           placeholder="expected amount"
           value={form.expectedAmount}
           onChange={(e) => setForm((prev) => ({ ...prev, expectedAmount: e.target.value }))}
@@ -212,6 +217,7 @@ function PoPaymentsSection({ poId }: { poId: number }) {
           onChange={(e) => setForm((prev) => ({ ...prev, expectedDate: e.target.value }))}
         />
         <input
+          type="text"
           placeholder="currency"
           value={form.currency}
           onChange={(e) => setForm((prev) => ({ ...prev, currency: e.target.value }))}
@@ -299,6 +305,7 @@ export function PurchaseOrdersPage() {
                   </select>
                   {noteRequired && (
                     <input
+                      type="text"
                       placeholder="required note"
                       value={row.reasonNote}
                       onChange={(e) => setRow(po.id, po.plannedReadyDate, { reasonNote: e.target.value })}

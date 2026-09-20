@@ -15,6 +15,7 @@ type ReasonCategory = (typeof REASON_CATEGORIES)[number];
 
 const SHIPMENT_STATUS_BADGE_CLASS: Record<string, string> = {
   delivered: "badge badge-ok",
+  customs: "badge badge-warning",
 };
 const DEFAULT_STATUS_BADGE_CLASS = "badge badge-neutral";
 
@@ -137,6 +138,7 @@ function PlannedDepartureControl({ shipment, onUpdated }: { shipment: ShipmentLi
       </select>
       {noteRequired && (
         <input
+          type="text"
           placeholder="required note"
           value={form.reasonNote}
           onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
@@ -196,6 +198,7 @@ function StatusTransitionControl({ shipment, onUpdated }: { shipment: ShipmentLi
       </select>
       {noteRequired && (
         <input
+          type="text"
           placeholder="required note"
           value={form.reasonNote}
           onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
@@ -254,6 +257,7 @@ function CustomsArrivalControl({ shipment, onUpdated }: { shipment: ShipmentList
       </select>
       {noteRequired && (
         <input
+          type="text"
           placeholder="required note"
           value={form.reasonNote}
           onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
@@ -316,6 +320,7 @@ function DepartDateCorrectionControl({ shipment, onUpdated }: { shipment: Shipme
       </select>
       {noteRequired && (
         <input
+          type="text"
           placeholder="required note"
           value={form.reasonNote}
           onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
@@ -386,16 +391,19 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
       <td>
         <div>Freight: {shipment.freightCost ?? "—"} · Duty: {shipment.dutyCost ?? "—"} {shipment.costCurrency ?? ""}</div>
         <input
+          type="text"
           placeholder="freight cost"
           value={form.freightCost}
           onChange={(e) => setForm((prev) => ({ ...prev, freightCost: e.target.value }))}
         />
         <input
+          type="text"
           placeholder="duty cost"
           value={form.dutyCost}
           onChange={(e) => setForm((prev) => ({ ...prev, dutyCost: e.target.value }))}
         />
         <input
+          type="text"
           placeholder="currency"
           value={form.costCurrency}
           onChange={(e) => setForm((prev) => ({ ...prev, costCurrency: e.target.value }))}
@@ -408,6 +416,7 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
         </select>
         {noteRequired && (
           <input
+            type="text"
             placeholder="required note"
             value={form.reasonNote}
             onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}

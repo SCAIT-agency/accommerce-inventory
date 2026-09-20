@@ -24,9 +24,9 @@
 
   --critical: #b00020;
   --critical-soft: #fbe7ea;
-  --warning: #b36b00;
+  --warning: #8a5300;
   --warning-soft: #fbf0dc;
-  --ok: #1a7f37;
+  --ok: #157030;
   --ok-soft: #e4f3e8;
   --neutral-status: #5a5a5a;
   --neutral-status-soft: #eceef0;
@@ -196,6 +196,10 @@ tbody tr:hover {
 /* Numeric-looking table content reads as data, not prose. */
 td, th {
   font-variant-numeric: tabular-nums;
+}
+
+td {
+  font-family: var(--font-data);
 }
 
 /* --- Forms --------------------------------------------------------------- */
