@@ -6,7 +6,8 @@ const NAV_ITEMS = [
   { to: "/stock", label: "Stock" },
   { to: "/purchase-orders", label: "Purchase Orders" },
   { to: "/shipments", label: "Shipments" },
-  { to: "/money", label: "Money" },
+  { to: "/money", label: "Cost & Cashflow" },
+  { to: "/transactions", label: "Transactions" },
 ];
 
 export function AppNav() {

@@ -12,6 +12,7 @@ import { StockPage } from "./pages/StockPage";
 import { PurchaseOrdersPage } from "./pages/PurchaseOrdersPage";
 import { ShipmentsPage } from "./pages/ShipmentsPage";
 import { MoneyPage } from "./pages/MoneyPage";
+import { TransactionsPage } from "./pages/TransactionsPage";
 import { ChangeLogPage } from "./pages/ChangeLogPage";
 import { InventoryLedgerPage } from "./pages/InventoryLedgerPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -107,6 +108,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
               <Route path="/shipments" element={<ShipmentsPage />} />
               <Route path="/money" element={<MoneyPage />} />
+              <Route path="/transactions" element={<TransactionsPage />} />
               <Route path="/change-log/:entityType/:entityId" element={<ChangeLogRoute />} />
               <Route path="/inventory-ledger/:skuId/:warehouseId" element={<InventoryLedgerRoute />} />
             </Route>
