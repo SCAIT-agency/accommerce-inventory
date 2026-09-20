@@ -73,21 +73,26 @@ export async function updateShipmentPlannedDepartDate(
   newDate: Date,
   opts: { reasonCategory: ReasonCategory; reasonNote?: string; changedBy: number },
 ) {
-  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
-  await db.update(shipments).set({ plannedDepartDate: newDate }).where(eq(shipments.id, id));
-  await logChange({
-    entityType: "shipment",
-    entityId: id,
-    field: "plannedDepartDate",
-    // Plain calendar-day string, matching purchase_orders.plannedReadyDate's
-    // own change_log format — plannedDepartDate is a calendar-day concept
-    // even though the column itself is still `timestamp` (a schema change
-    // is out of scope here; this is a cosmetic audit-trail fix only).
-    oldValue: shipment.plannedDepartDate?.toISOString().slice(0, 10) ?? null,
-    newValue: newDate.toISOString().slice(0, 10),
-    reasonCategory: opts.reasonCategory,
-    reasonNote: opts.reasonNote,
-    changedBy: opts.changedBy,
+  await db.transaction(async (tx) => {
+    const [shipment] = await tx.select().from(shipments).where(eq(shipments.id, id));
+    if (!shipment) {
+      throw new Error(`updateShipmentPlannedDepartDate: no shipment found with id ${id}`);
+    }
+    await tx.update(shipments).set({ plannedDepartDate: newDate }).where(eq(shipments.id, id));
+    await logChange({
+      entityType: "shipment",
+      entityId: id,
+      field: "plannedDepartDate",
+      // Plain calendar-day string, matching purchase_orders.plannedReadyDate's
+      // own change_log format — plannedDepartDate is a calendar-day concept
+      // even though the column itself is still `timestamp` (a schema change
+      // is out of scope here; this is a cosmetic audit-trail fix only).
+      oldValue: shipment.plannedDepartDate?.toISOString().slice(0, 10) ?? null,
+      newValue: newDate.toISOString().slice(0, 10),
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
   });
 }
 
@@ -108,50 +113,54 @@ export async function updateShipmentStatus(
       "which also records the inventory ledger receipt and enforces the recorded-costs precondition.",
     );
   }
-  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
-  if (!shipment) {
-    throw new Error(`updateShipmentStatus: no shipment found with id ${id}`);
-  }
-  if (!VALID_SHIPMENT_TRANSITIONS[shipment.status].includes(newStatus)) {
-    throw new Error(`invalid transition from ${shipment.status} to ${newStatus}`);
-  }
-  await db.update(shipments).set({ status: newStatus }).where(eq(shipments.id, id));
-  await logChange({
-    entityType: "shipment",
-    entityId: id,
-    field: "status",
-    oldValue: shipment.status,
-    newValue: newStatus,
-    reasonCategory: opts.reasonCategory,
-    reasonNote: opts.reasonNote,
-    changedBy: opts.changedBy,
+  await db.transaction(async (tx) => {
+    const [shipment] = await tx.select().from(shipments).where(eq(shipments.id, id));
+    if (!shipment) {
+      throw new Error(`updateShipmentStatus: no shipment found with id ${id}`);
+    }
+    if (!VALID_SHIPMENT_TRANSITIONS[shipment.status].includes(newStatus)) {
+      throw new Error(`invalid transition from ${shipment.status} to ${newStatus}`);
+    }
+    await tx.update(shipments).set({ status: newStatus }).where(eq(shipments.id, id));
+    await logChange({
+      entityType: "shipment",
+      entityId: id,
+      field: "status",
+      oldValue: shipment.status,
+      newValue: newStatus,
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
   });
 }
 
 export async function markShipmentDeparted(id: number, actualDate: Date, opts: { changedBy: number }) {
-  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
-  if (!shipment) {
-    throw new Error(`markShipmentDeparted: no shipment found with id ${id}`);
-  }
-  if (!shipment.plannedDepartDate) {
-    throw new Error("cannot mark departed: no planned depart date set");
-  }
-  if (!VALID_SHIPMENT_TRANSITIONS[shipment.status].includes("departed")) {
-    throw new Error(`invalid transition from ${shipment.status} to departed`);
-  }
-  await db
-    .update(shipments)
-    .set({ actualDepartDate: actualDate, status: "departed" })
-    .where(eq(shipments.id, id));
-  await logChange({
-    entityType: "shipment",
-    entityId: id,
-    field: "actualDepartDate",
-    // Plain calendar-day string — see updateShipmentPlannedDepartDate's
-    // comment above for why.
-    oldValue: shipment.actualDepartDate?.toISOString().slice(0, 10) ?? null,
-    newValue: actualDate.toISOString().slice(0, 10),
-    changedBy: opts.changedBy,
+  await db.transaction(async (tx) => {
+    const [shipment] = await tx.select().from(shipments).where(eq(shipments.id, id));
+    if (!shipment) {
+      throw new Error(`markShipmentDeparted: no shipment found with id ${id}`);
+    }
+    if (!shipment.plannedDepartDate) {
+      throw new Error("cannot mark departed: no planned depart date set");
+    }
+    if (!VALID_SHIPMENT_TRANSITIONS[shipment.status].includes("departed")) {
+      throw new Error(`invalid transition from ${shipment.status} to departed`);
+    }
+    await tx
+      .update(shipments)
+      .set({ actualDepartDate: actualDate, status: "departed" })
+      .where(eq(shipments.id, id));
+    await logChange({
+      entityType: "shipment",
+      entityId: id,
+      field: "actualDepartDate",
+      // Plain calendar-day string — see updateShipmentPlannedDepartDate's
+      // comment above for why.
+      oldValue: shipment.actualDepartDate?.toISOString().slice(0, 10) ?? null,
+      newValue: actualDate.toISOString().slice(0, 10),
+      changedBy: opts.changedBy,
+    }, tx);
   });
 }
 
@@ -160,51 +169,60 @@ export async function recordShipmentCosts(
   costs: { freightCost: string; dutyCost: string; costCurrency: string },
   opts: { reasonCategory: ReasonCategory; reasonNote?: string; changedBy: number },
 ): Promise<Shipment> {
-  const [before] = await db.select().from(shipments).where(eq(shipments.id, id));
-  await db.update(shipments).set(costs).where(eq(shipments.id, id));
+  return db.transaction(async (tx) => {
+    const [before] = await tx.select().from(shipments).where(eq(shipments.id, id));
+    if (!before) {
+      throw new Error(`recordShipmentCosts: no shipment found with id ${id}`);
+    }
+    await tx.update(shipments).set(costs).where(eq(shipments.id, id));
 
-  await logChange({
-    entityType: "shipment",
-    entityId: id,
-    field: "freightCost",
-    oldValue: before.freightCost,
-    newValue: costs.freightCost,
-    reasonCategory: opts.reasonCategory,
-    reasonNote: opts.reasonNote,
-    changedBy: opts.changedBy,
-  });
-  await logChange({
-    entityType: "shipment",
-    entityId: id,
-    field: "dutyCost",
-    oldValue: before.dutyCost,
-    newValue: costs.dutyCost,
-    reasonCategory: opts.reasonCategory,
-    reasonNote: opts.reasonNote,
-    changedBy: opts.changedBy,
-  });
+    await logChange({
+      entityType: "shipment",
+      entityId: id,
+      field: "freightCost",
+      oldValue: before.freightCost,
+      newValue: costs.freightCost,
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
+    await logChange({
+      entityType: "shipment",
+      entityId: id,
+      field: "dutyCost",
+      oldValue: before.dutyCost,
+      newValue: costs.dutyCost,
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
 
-  const [row] = await db.select().from(shipments).where(eq(shipments.id, id));
-  return row;
+    const [row] = await tx.select().from(shipments).where(eq(shipments.id, id));
+    return row;
+  });
 }
 
 export async function setShipmentCustomsStatus(
   id: number,
   newStatus: (typeof CUSTOMS_STATUSES)[number],
   opts: { changedBy: number; reasonCategory: ReasonCategory; reasonNote?: string },
-  dbClient: DbClient = db,
 ): Promise<void> {
-  const [shipment] = await dbClient.select().from(shipments).where(eq(shipments.id, id));
-  await dbClient.update(shipments).set({ customsStatus: newStatus }).where(eq(shipments.id, id));
-  await logChange({
-    entityType: "shipment",
-    entityId: id,
-    field: "customsStatus",
-    oldValue: shipment.customsStatus,
-    newValue: newStatus,
-    reasonCategory: opts.reasonCategory,
-    reasonNote: opts.reasonNote,
-    changedBy: opts.changedBy,
+  await db.transaction(async (tx) => {
+    const [shipment] = await tx.select().from(shipments).where(eq(shipments.id, id));
+    if (!shipment) {
+      throw new Error(`setShipmentCustomsStatus: no shipment found with id ${id}`);
+    }
+    await tx.update(shipments).set({ customsStatus: newStatus }).where(eq(shipments.id, id));
+    await logChange({
+      entityType: "shipment",
+      entityId: id,
+      field: "customsStatus",
+      oldValue: shipment.customsStatus,
+      newValue: newStatus,
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
   });
 }
 
@@ -266,26 +284,30 @@ export async function correctShipmentActualDepartDate(
   id: number,
   newDate: Date,
   opts: { changedBy: number; reasonCategory: ReasonCategory; reasonNote?: string },
-  dbClient: DbClient = db,
 ): Promise<void> {
-  const [shipment] = await dbClient.select().from(shipments).where(eq(shipments.id, id));
-  if (!shipment.actualDepartDate) {
-    throw new Error(
-      "correctShipmentActualDepartDate: no actual depart date is set yet on this shipment — " +
-      "use the normal departure flow to set it for the first time, this function only corrects an existing value",
-    );
-  }
-  await dbClient.update(shipments).set({ actualDepartDate: newDate }).where(eq(shipments.id, id));
-  await logChange({
-    entityType: "shipment",
-    entityId: id,
-    field: "actualDepartDate",
-    // Plain calendar-day string — see updateShipmentPlannedDepartDate's
-    // comment above for why.
-    oldValue: shipment.actualDepartDate.toISOString().slice(0, 10),
-    newValue: newDate.toISOString().slice(0, 10),
-    reasonCategory: opts.reasonCategory,
-    reasonNote: opts.reasonNote,
-    changedBy: opts.changedBy,
+  await db.transaction(async (tx) => {
+    const [shipment] = await tx.select().from(shipments).where(eq(shipments.id, id));
+    if (!shipment) {
+      throw new Error(`correctShipmentActualDepartDate: no shipment found with id ${id}`);
+    }
+    if (!shipment.actualDepartDate) {
+      throw new Error(
+        "correctShipmentActualDepartDate: no actual depart date is set yet on this shipment — " +
+        "use the normal departure flow to set it for the first time, this function only corrects an existing value",
+      );
+    }
+    await tx.update(shipments).set({ actualDepartDate: newDate }).where(eq(shipments.id, id));
+    await logChange({
+      entityType: "shipment",
+      entityId: id,
+      field: "actualDepartDate",
+      // Plain calendar-day string — see updateShipmentPlannedDepartDate's
+      // comment above for why.
+      oldValue: shipment.actualDepartDate.toISOString().slice(0, 10),
+      newValue: newDate.toISOString().slice(0, 10),
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
   });
 }

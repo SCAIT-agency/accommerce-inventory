@@ -181,6 +181,30 @@ describe("shipments", () => {
     await expect(markShipmentDeparted(999999, new Date(), { changedBy: 1 })).rejects.toThrow(/no shipment found with id 999999/);
   });
 
+  it("rejects updating the planned depart date of a nonexistent shipment with a clear error", async () => {
+    await expect(
+      updateShipmentPlannedDepartDate(999999, new Date(), { reasonCategory: "logistics_delay", changedBy: 1 }),
+    ).rejects.toThrow(/no shipment found/);
+  });
+
+  it("rejects recording costs for a nonexistent shipment with a clear error", async () => {
+    await expect(
+      recordShipmentCosts(999999, { freightCost: "100.00", dutyCost: "50.00", costCurrency: "EUR" }, { reasonCategory: "logistics_delay", changedBy: 1 }),
+    ).rejects.toThrow(/no shipment found/);
+  });
+
+  it("rejects setting customs status for a nonexistent shipment with a clear error", async () => {
+    await expect(
+      setShipmentCustomsStatus(999999, "cleared", { reasonCategory: "customs_hold", changedBy: 1 }),
+    ).rejects.toThrow(/no shipment found/);
+  });
+
+  it("rejects correcting the actual depart date for a nonexistent shipment with a clear error", async () => {
+    await expect(
+      correctShipmentActualDepartDate(999999, new Date(), { reasonCategory: "logistics_delay", changedBy: 1 }),
+    ).rejects.toThrow(/no shipment found/);
+  });
+
   it("rejects an invalid shipment status transition", async () => {
     const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
     await expect(updateShipmentStatus(shipment.id, "customs", { changedBy: 1 })).rejects.toThrow(/invalid transition/);
