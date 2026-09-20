@@ -2,7 +2,7 @@
 
 Source: the final whole-branch review after V1's 20 tasks (see [`BUILD-HISTORY.md`](./BUILD-HISTORY.md)), plus the deferred-minor triage that review ran against everything parked during the build. Every item here is a real finding, not a guess — each was independently verified against the actual code, not just asserted.
 
-Grouped into six work streams (A–F). Recommended order: **B → A → E → C → D**, with F riding along with whichever other stream touches the same files. Reasoning: B and A are what make the system honestly comparable against Control Tower during the parallel run; C and D matter most once real client staff and real data volume show up, which comes after that. **B, A, E, and C are done** — D is next.
+Grouped into six work streams (A–F). Recommended order: **B → A → E → C → D**, with F riding along with whichever other stream touches the same files. Reasoning: B and A are what make the system honestly comparable against Control Tower during the parallel run; C and D matter most once real client staff and real data volume show up, which comes after that. **B, E, C, and D are done** — A has one real item still open (see below); remaining work otherwise is F (cleanup, opportunistic) plus the small deferred items each stream surfaced along the way.
 
 Status legend: ✅ done · ⬜ open
 
@@ -61,13 +61,21 @@ Preparatory hardening only — **not** a real migration against real Jello/Accom
 - ⬜ `server/_core/env.test.ts` still uses the `?t=${Date.now()}` cache-busting import suffix that `auth.test.ts` correctly dropped this stream (the sole source of the two harmless `vite:dynamic-import-vars` warnings on every test run) — see the existing `F. Cleanup` section, item 5, for the same underlying pattern.
 - ⬜ `RAILWAY.md` doesn't warn that deploying this stream logs out every pre-existing session at once (old JWTs carry no `tokenVersion` claim, which never matches a real user row's value) — worth a callout in the deploy runbook so whoever deploys it isn't surprised.
 
-## D. Performance
+## D. Performance — ✅ DONE (2026-09-20, see [`BUILD-HISTORY.md`](./BUILD-HISTORY.md) for the full build/review narrative)
 
-Won't matter until real Jello data volume loads — but the review flagged these as the first things that will fall over at ~10K SKUs (the spec's own stated target).
+- ✅ **`getHomeSummary` and `getStockDashboard` no longer issue one query per SKU (or per SKU/warehouse pair).** New `getSohForSkus`/`getAverageDailySalesForSkus` grouped aggregate queries replace the per-item loops — both dashboards now issue a small, constant number of queries (6 and 3 respectively) regardless of active SKU count, verified against the actual code at final review (previously ~40,000 sequential round trips at 10K SKUs / 3 warehouses).
+- ✅ **`getMoneyDashboard`'s Daily COGS path no longer re-reads the entire ledger and re-runs FIFO once per day.** New `getDailyCogsForRange` does one bounded query plus one chronological forward pass for the whole requested window — 1 query total regardless of window length, replacing what was one query plus two full-history FIFO passes per day (120 full recomputations for a 60-day window). Mathematically proven equivalent to the old per-day double-recomputation, independently traced by the task reviewer for the general case (split-batch sales, zero-sale days, sales at the start of history), not just the one test scenario.
+- ✅ **Grouped/aggregate queries now exist for both SOH-by-SKU-and-warehouse and trailing sales** — the third BACKLOG item, closed by the same two new functions above.
+- ✅ Every dashboard's output shape and computed values verified byte-identical to pre-refactor behavior — every pre-existing test in `dashboards.test.ts` diffed directly (not just reviewed) to confirm zero changes, plus new multi-SKU tests proving the batched grouping/keying logic is correct, not just "some plausible number came back."
 
-- ⬜ `getHomeSummary` — sequential per-SKU, per-warehouse loop calling `getAverageDailySales` individually. Unlike `getStockDashboard`, the outer loop isn't even parallelized.
-- ⬜ `getMoneyDashboard`'s Daily COGS path — calls `getDailyCogs` once per day in the window, and **each call re-reads the entire ledger history and runs two full FIFO passes**. A 60-day window is 120 full-history FIFO computations. This is the path most likely to be the first to visibly slow down.
-- ⬜ No grouped/aggregate queries for SOH-by-SKU-and-warehouse or trailing sales — everything is per-SKU round trips today.
+Deliberately not done (see the design doc's Non-Goals): no caching/precomputed tables (staleness-invalidation risk, out of proportion to this system's correctness-first priority), no `IN (...)` chunking (unnecessary at this scale), no query-count/timing tests in the suite (this codebase has no such instrumentation, and a wall-clock test against local loopback MySQL would be unreliable — verification here is structural, a reviewer confirming a loop-with-await became a single grouped query, plus correctness tests against real data).
+
+**New, smaller items surfaced by Stream D's own build — genuinely deferred, not silently dropped:**
+- ⬜ `getDailyCogsForRange`'s contract (`dateKeys` must be sorted ascending; the query's upper bound is derived from the last element) is documented in the implementation plan but not in the function's own JSDoc — an unsorted array wouldn't throw, later dates would just silently return `cogs: 0`. A one-line addition to the doc comment would close this.
+- ⬜ The design's claim that the new forward-pass COGS algorithm has "identical failure behavior" to the old per-day approach is very slightly overstated: the old code's early-return on a sales-free day could mask a genuine insufficient-stock condition elsewhere in history that the new single-pass version will now surface as a thrown error. Judged a strict improvement (surfaces a real ledger inconsistency instead of hiding it) by the final reviewer, not a regression — worth a doc clause, not a code change.
+- ⬜ Relatedly, the new and old COGS computations aren't literally bit-for-bit identical for a long history (different floating-point accumulation order) — numerically equivalent, and the new order is less cancellation-prone, but "byte-identical" in the design doc is imprecise on this specific point.
+- ⬜ Task 1's `getSohForSkus` test uses `arrayContaining` (correctly order-agnostic, since MySQL never guaranteed `GROUP BY` row order) but lost the deleted test's implicit two-item length constraint — adding `toHaveLength(2)` would restore that strength.
+- ⬜ `getShipmentLandedUnitCost` still has an await-in-a-loop (one `poLineItems` lookup per shipment line item), reachable from `getMoneyDashboard` via `shipmentId` — bounded by a single shipment's line count, not SKU count, so correctly outside this stream's three named targets, but now the last such pattern reachable from any dashboard.
 
 ## E. Systemic correctness risks — ✅ DONE (2026-09-19, see [`BUILD-HISTORY.md`](./BUILD-HISTORY.md) for the full build/review narrative)
 
@@ -94,6 +102,7 @@ Won't matter until real Jello data volume loads — but the review flagged these
 - ⬜ No index on `change_log (entity_type, entity_id)` — `listChangeLog` full-scans a table that grows with every cost/date edit. Add once history queries get slow, not urgent today.
 - ⬜ `@vitejs/plugin-react` is a devDependency but never registered in `vite.config.ts` — `pnpm dev` has no Fast Refresh without it (one line to fix).
 - ⬜ Three trivial cosmetic nits in Stream B's CLI scripts: an unused `db` import in `run-parallel-check.mjs`; `run-migration.mjs`'s "Migration failed and rolled back" wording is imprecise for failures that happen before any transaction opens (bad path, missing file, malformed JSON — still fails loudly with a clear reason and correct exit code, just misleading phrasing); a shebang-line inconsistency between the two new scripts and the pre-existing `run-nightly-export.mjs` pattern.
+- ⬜ **`pnpm test` doesn't actually work as a bare, single command** — the README's "Run the test suite with `pnpm test` (single command — no extra flags needed)" is currently inaccurate. Nothing loads `.env` for vitest (no `dotenv` dependency, no `setupFiles` in `vitest.config.ts` — related to, but distinct from, the orphaned-`vitest.setup.ts` item above), so a fresh shell gets `Error: DATABASE_URL is required` on ~16 of 23 test files. Every session in this build history has worked around it by manually running `set -a && source .env && set +a` first; worth either wiring a real `setupFiles` entry or fixing the README's claim to say so explicitly. Surfaced during Stream D's final review, not caused by it.
 
 ---
 
