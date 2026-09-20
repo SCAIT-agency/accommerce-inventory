@@ -89,18 +89,24 @@ export const REASON_CATEGORIES = [
   "other",
 ] as const;
 
-export const changeLog = mysqlTable("change_log", {
-  id: int("id").autoincrement().primaryKey(),
-  entityType: varchar("entityType", { length: 64 }).notNull(),
-  entityId: int("entityId").notNull(),
-  field: varchar("field", { length: 128 }).notNull(),
-  oldValue: text("oldValue"),
-  newValue: text("newValue"),
-  reasonCategory: mysqlEnum("reasonCategory", REASON_CATEGORIES),
-  reasonNote: text("reasonNote"),
-  changedBy: int("changedBy").notNull(),
-  changedAt: timestamp("changedAt").defaultNow().notNull(),
-});
+export const changeLog = mysqlTable(
+  "change_log",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    entityType: varchar("entityType", { length: 64 }).notNull(),
+    entityId: int("entityId").notNull(),
+    field: varchar("field", { length: 128 }).notNull(),
+    oldValue: text("oldValue"),
+    newValue: text("newValue"),
+    reasonCategory: mysqlEnum("reasonCategory", REASON_CATEGORIES),
+    reasonNote: text("reasonNote"),
+    changedBy: int("changedBy").notNull().references(() => users.id),
+    changedAt: timestamp("changedAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    entityTypeIdIdx: index("change_log_entity_type_id_idx").on(table.entityType, table.entityId),
+  }),
+);
 export type ChangeLogEntry = typeof changeLog.$inferSelect;
 
 export const PO_STATUSES = [
@@ -110,12 +116,12 @@ export const PO_STATUSES = [
 export const purchaseOrders = mysqlTable("purchase_orders", {
   id: int("id").autoincrement().primaryKey(),
   poNumber: varchar("poNumber", { length: 64 }).notNull().unique(),
-  vendorId: int("vendorId").notNull(),
+  vendorId: int("vendorId").notNull().references(() => vendors.id),
   vendorReference: varchar("vendorReference", { length: 128 }),
   status: mysqlEnum("status", PO_STATUSES).default("draft").notNull(),
   plannedReadyDate: date("plannedReadyDate", { mode: "string" }),
   notes: text("notes"),
-  createdBy: int("createdBy").notNull(),
+  createdBy: int("createdBy").notNull().references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -153,7 +159,7 @@ export const shipments = mysqlTable("shipments", {
   freightCost: varchar("freightCost", { length: 32 }),
   dutyCost: varchar("dutyCost", { length: 32 }),
   costCurrency: varchar("costCurrency", { length: 8 }),
-  createdBy: int("createdBy").notNull(),
+  createdBy: int("createdBy").notNull().references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -170,21 +176,27 @@ export const shipmentLineItems = mysqlTable("shipment_line_items", {
 });
 export type ShipmentLineItem = typeof shipmentLineItems.$inferSelect;
 
-export const payments = mysqlTable("payments", {
-  id: int("id").autoincrement().primaryKey(),
-  poId: int("poId").references(() => purchaseOrders.id),
-  shipmentId: int("shipmentId").references(() => shipments.id),
-  sequenceNo: int("sequenceNo").notNull(),
-  expectedAmount: varchar("expectedAmount", { length: 32 }).notNull(),
-  expectedDate: timestamp("expectedDate").notNull(),
-  currency: varchar("currency", { length: 8 }).notNull(),
-  paid: boolean("paid").default(false).notNull(),
-  paidAmount: varchar("paidAmount", { length: 32 }),
-  paidDate: timestamp("paidDate"),
-  fxRate: varchar("fxRate", { length: 16 }),
-  baseCurrencyAmount: varchar("baseCurrencyAmount", { length: 32 }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+export const payments = mysqlTable(
+  "payments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    poId: int("poId").references(() => purchaseOrders.id),
+    shipmentId: int("shipmentId").references(() => shipments.id),
+    sequenceNo: int("sequenceNo").notNull(),
+    expectedAmount: varchar("expectedAmount", { length: 32 }).notNull(),
+    expectedDate: timestamp("expectedDate").notNull(),
+    currency: varchar("currency", { length: 8 }).notNull(),
+    paid: boolean("paid").default(false).notNull(),
+    paidAmount: varchar("paidAmount", { length: 32 }),
+    paidDate: timestamp("paidDate"),
+    fxRate: varchar("fxRate", { length: 16 }),
+    baseCurrencyAmount: varchar("baseCurrencyAmount", { length: 32 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    paidExpectedDateIdx: index("payments_paid_expected_date_idx").on(table.paid, table.expectedDate),
+  }),
+);
 export type Payment = typeof payments.$inferSelect;
 
 export const transactions = mysqlTable("transactions", {
@@ -231,8 +243,8 @@ export const salesPlan = mysqlTable(
   "sales_plan",
   {
     id: int("id").autoincrement().primaryKey(),
-    skuId: int("skuId").notNull(),
-    warehouseId: int("warehouseId").notNull(),
+    skuId: int("skuId").notNull().references(() => skus.id),
+    warehouseId: int("warehouseId").notNull().references(() => warehouses.id),
     periodDate: date("periodDate", { mode: "string" }).notNull(),
     plannedQty: int("plannedQty").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -280,8 +292,8 @@ export const salesActuals = mysqlTable(
   "sales_actuals",
   {
     id: int("id").autoincrement().primaryKey(),
-    skuId: int("skuId").notNull(),
-    warehouseId: int("warehouseId").notNull(),
+    skuId: int("skuId").notNull().references(() => skus.id),
+    warehouseId: int("warehouseId").notNull().references(() => warehouses.id),
     date: date("date", { mode: "string" }).notNull(),
     qty: int("qty").notNull(),
     source: mysqlEnum("source", SALES_ACTUAL_SOURCES).notNull(),

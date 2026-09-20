@@ -1,10 +1,16 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { db } from "./dbClient";
-import { changeLog } from "../drizzle/schema";
+import { changeLog, users } from "../drizzle/schema";
 import { logChange, listChangeLog } from "./changeLog";
+import { createUser } from "./db";
+
+let userId: number;
 
 beforeEach(async () => {
   await db.delete(changeLog);
+  await db.delete(users);
+  const user = await createUser({ email: "test@accommerce.example", role: "editor" });
+  userId = user.id;
 });
 
 describe("logChange", () => {
@@ -15,7 +21,7 @@ describe("logChange", () => {
       field: "notes",
       oldValue: "old note",
       newValue: "new note",
-      changedBy: 1,
+      changedBy: userId,
     });
     const entries = await listChangeLog("purchase_order", 1);
     expect(entries).toHaveLength(1);
@@ -31,7 +37,7 @@ describe("logChange", () => {
         oldValue: "2026-09-01",
         newValue: "2026-09-15",
         reasonCategory: "other",
-        changedBy: 1,
+        changedBy: userId,
       }),
     ).rejects.toThrow(/reasonNote is required/);
   });
@@ -44,7 +50,7 @@ describe("logChange", () => {
       oldValue: "2026-09-01",
       newValue: "2026-09-15",
       reasonCategory: "customs_hold",
-      changedBy: 1,
+      changedBy: userId,
     });
     const entries = await listChangeLog("purchase_order", 1);
     expect(entries[0].reasonCategory).toBe("customs_hold");

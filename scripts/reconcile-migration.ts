@@ -1,5 +1,7 @@
+import { eq } from "drizzle-orm";
 import { db } from "../server/dbClient";
-import { createSku, createWarehouse, createVendor, listSkus, listWarehouses, listVendors } from "../server/db";
+import { createSku, createWarehouse, createVendor, createUser, listSkus, listWarehouses, listVendors } from "../server/db";
+import { users } from "../drizzle/schema";
 import { recordLedgerEvent, getSoh } from "../server/inventoryLedger";
 import { createPurchaseOrder, getPurchaseOrderWithLineItems } from "../server/purchaseOrders";
 import { createShipment } from "../server/shipments";
@@ -81,6 +83,19 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
     const poIdByNumber = new Map<string, number>();
     const poLineItemIdByRef = new Map<string, number>(); // "PO_NUMBER::SKU" -> line item id
 
+    // POs/shipments created by this script have no real human actor behind
+    // them (it's a one-time bulk import from a Sheet), but createdBy is a real
+    // FK to users.id — get-or-create a fixed system-user row to attribute them
+    // to, rather than a literal that doesn't correspond to any user.
+    const MIGRATION_USER_EMAIL = "migration@accommerce.system";
+    async function ensureMigrationUser(): Promise<number> {
+      const [existing] = await tx.select().from(users).where(eq(users.email, MIGRATION_USER_EMAIL));
+      if (existing) return existing.id;
+      const created = await createUser({ email: MIGRATION_USER_EMAIL, role: "editor" }, tx);
+      return created.id;
+    }
+    const migrationUserId = await ensureMigrationUser();
+
     async function ensureSku(skuCode: string): Promise<number> {
       let id = skuByCode.get(skuCode);
       if (!id) {
@@ -125,7 +140,7 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
           vendorReference: po.vendorReference ?? undefined,
           initialStatus: po.initialStatus,
           lineItems,
-          createdBy: 1,
+          createdBy: migrationUserId,
         },
         tx,
       );
@@ -178,7 +193,7 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
           dutyCost: shipment.dutyCost ?? undefined,
           costCurrency: shipment.costCurrency ?? undefined,
           lineItems,
-          createdBy: 1,
+          createdBy: migrationUserId,
         },
         tx,
       );

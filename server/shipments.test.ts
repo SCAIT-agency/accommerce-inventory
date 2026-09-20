@@ -1,15 +1,16 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { sql, eq } from "drizzle-orm";
 import { db } from "./dbClient";
-import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments, warehouses } from "../drizzle/schema";
+import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments, warehouses, users } from "../drizzle/schema";
 import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate } from "./shipments";
-import { createSku, createVendor, createWarehouse } from "./db";
+import { createSku, createVendor, createWarehouse, createUser } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { listChangeLog } from "./changeLog";
 import { getSoh } from "./inventoryLedger";
 import { inventoryLedger } from "../drizzle/schema";
 
 let ffWarehouseId: number;
+let userId: number;
 
 beforeEach(async () => {
   // Real FKs now tie these tables together, but each test file only cleans
@@ -34,12 +35,15 @@ beforeEach(async () => {
       await tx.delete(skus);
       await tx.delete(vendors);
       await tx.delete(warehouses);
+      await tx.delete(users);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
     }
   });
   const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
   ffWarehouseId = ff.id;
+  const user = await createUser({ email: "test@accommerce.example", role: "editor" });
+  userId = user.id;
 });
 
 async function seedPoWithLineItem() {
@@ -49,7 +53,7 @@ async function seedPoWithLineItem() {
     poNumber: "PO1-W4",
     vendorId: vendor.id,
     lineItems: [{ skuId: sku.id, qty: 90000, unitPrice: "0.15", currency: "USD" }],
-    createdBy: 1,
+    createdBy: userId,
   });
   const withItems = await getPurchaseOrderWithLineItemsHelper(po.id);
   return { po, lineItemId: withItems.lineItems[0].id, skuId: sku.id };
@@ -65,29 +69,29 @@ describe("shipments", () => {
       shipmentRef: "PO1-W4-Container2",
       warehouseId: ffWarehouseId,
       lineItems: [{ poLineItemId: lineItemId, skuId, qty: 45000, weightShare: "0.5", valueShare: "0.5" }],
-      createdBy: 1,
+      createdBy: userId,
     });
     const withItems = await getShipmentWithLineItems(shipment.id);
     expect(withItems.lineItems[0].weightShare).toBe("0.5");
   });
 
   it("records freight/duty cost on a shipment for later per-line landed-cost allocation", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
     const updated = await recordShipmentCosts(
       shipment.id,
       { freightCost: "4200.00", dutyCost: "980.00", costCurrency: "EUR" },
-      { reasonCategory: "freight_rate_change", changedBy: 1 },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
     );
     expect(updated.freightCost).toBe("4200.00");
     expect(updated.costCurrency).toBe("EUR");
   });
 
   it("logs change_log entries with a required reason when shipment costs are recorded", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
     await recordShipmentCosts(
       shipment.id,
       { freightCost: "4200.00", dutyCost: "980.00", costCurrency: "EUR" },
-      { reasonCategory: "freight_rate_change", changedBy: 1 },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
     );
     const entries = await db.select().from(changeLog);
     expect(entries).toHaveLength(2);
@@ -102,18 +106,18 @@ describe("shipments", () => {
   });
 
   it("blocks marking a shipment departed without a planned depart date first", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
-    await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: 1 })).rejects.toThrow(/planned depart date/);
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: userId })).rejects.toThrow(/planned depart date/);
   });
 
   it("logs actualDepartDate changes in the change_log with correct oldValue", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
     await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-10-05"), {
       reasonCategory: "logistics_delay",
-      changedBy: 1,
+      changedBy: userId,
     });
     const firstActualDate = new Date("2026-10-06");
-    await markShipmentDeparted(shipment.id, firstActualDate, { changedBy: 1 });
+    await markShipmentDeparted(shipment.id, firstActualDate, { changedBy: userId });
 
     const entries = await db.select().from(changeLog);
     const actualDepartureDateEntry = entries.find((e) => e.field === "actualDepartDate");
@@ -123,10 +127,10 @@ describe("shipments", () => {
   });
 
   it("logs a change_log entry with a logistics_delay reason when the planned depart date slips", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
     await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-10-05"), {
       reasonCategory: "logistics_delay",
-      changedBy: 1,
+      changedBy: userId,
     });
     const entries = await db.select().from(changeLog);
     expect(entries[0].reasonCategory).toBe("logistics_delay");
@@ -139,7 +143,7 @@ describe("shipments", () => {
       initialStatus: "delivered",
       warehouseId: ffWarehouseId,
       lineItems: [],
-      createdBy: 1,
+      createdBy: userId,
     });
     expect(shipment.vendorReference).toBe("MBS-DEBIT-SZDN26080711");
     expect(shipment.status).toBe("delivered");
@@ -153,7 +157,7 @@ describe("shipments", () => {
       costCurrency: "EUR",
       warehouseId: ffWarehouseId,
       lineItems: [],
-      createdBy: 1,
+      createdBy: userId,
     });
     const withItems = await getShipmentWithLineItems(shipment.id);
     expect(withItems.freightCost).toBe("4200.00");
@@ -168,61 +172,61 @@ describe("shipments", () => {
         shipmentRef: "PO1-W4-Container2",
         warehouseId: ffWarehouseId,
         lineItems: [{ poLineItemId: 999999, skuId: sku.id, qty: 100, weightShare: "1.0", valueShare: "1.0" }],
-        createdBy: 1,
+        createdBy: userId,
       }),
     ).rejects.toThrow();
   });
 
   it("updateShipmentStatus rejects a nonexistent shipment id with a clear error instead of crashing on a missing row", async () => {
-    await expect(updateShipmentStatus(999999, "in_transit", { changedBy: 1 })).rejects.toThrow(/no shipment found with id 999999/);
+    await expect(updateShipmentStatus(999999, "in_transit", { changedBy: userId })).rejects.toThrow(/no shipment found with id 999999/);
   });
 
   it("markShipmentDeparted rejects a nonexistent shipment id with a clear error instead of crashing on a missing row", async () => {
-    await expect(markShipmentDeparted(999999, new Date(), { changedBy: 1 })).rejects.toThrow(/no shipment found with id 999999/);
+    await expect(markShipmentDeparted(999999, new Date(), { changedBy: userId })).rejects.toThrow(/no shipment found with id 999999/);
   });
 
   it("rejects updating the planned depart date of a nonexistent shipment with a clear error", async () => {
     await expect(
-      updateShipmentPlannedDepartDate(999999, new Date(), { reasonCategory: "logistics_delay", changedBy: 1 }),
+      updateShipmentPlannedDepartDate(999999, new Date(), { reasonCategory: "logistics_delay", changedBy: userId }),
     ).rejects.toThrow(/no shipment found/);
   });
 
   it("rejects recording costs for a nonexistent shipment with a clear error", async () => {
     await expect(
-      recordShipmentCosts(999999, { freightCost: "100.00", dutyCost: "50.00", costCurrency: "EUR" }, { reasonCategory: "logistics_delay", changedBy: 1 }),
+      recordShipmentCosts(999999, { freightCost: "100.00", dutyCost: "50.00", costCurrency: "EUR" }, { reasonCategory: "logistics_delay", changedBy: userId }),
     ).rejects.toThrow(/no shipment found/);
   });
 
   it("rejects setting customs status for a nonexistent shipment with a clear error", async () => {
     await expect(
-      setShipmentCustomsStatus(999999, "cleared", { reasonCategory: "customs_hold", changedBy: 1 }),
+      setShipmentCustomsStatus(999999, "cleared", { reasonCategory: "customs_hold", changedBy: userId }),
     ).rejects.toThrow(/no shipment found/);
   });
 
   it("rejects correcting the actual depart date for a nonexistent shipment with a clear error", async () => {
     await expect(
-      correctShipmentActualDepartDate(999999, new Date(), { reasonCategory: "logistics_delay", changedBy: 1 }),
+      correctShipmentActualDepartDate(999999, new Date(), { reasonCategory: "logistics_delay", changedBy: userId }),
     ).rejects.toThrow(/no shipment found/);
   });
 
   it("rejects an invalid shipment status transition", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
-    await expect(updateShipmentStatus(shipment.id, "customs", { changedBy: 1 })).rejects.toThrow(/invalid transition/);
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await expect(updateShipmentStatus(shipment.id, "customs", { changedBy: userId })).rejects.toThrow(/invalid transition/);
   });
 
   it("rejects transitioning to 'departed' via updateShipmentStatus even though it's listed as a valid transition — that path belongs to markShipmentDeparted only", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
-    await expect(updateShipmentStatus(shipment.id, "departed", { changedBy: 1 })).rejects.toThrow(/markShipmentDeparted/);
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await expect(updateShipmentStatus(shipment.id, "departed", { changedBy: userId })).rejects.toThrow(/markShipmentDeparted/);
   });
 
   it("rejects transitioning to 'delivered' via updateShipmentStatus even though it's listed as a valid transition — that path belongs to markShipmentArrived only", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "customs", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
-    await expect(updateShipmentStatus(shipment.id, "delivered", { changedBy: 1 })).rejects.toThrow(/markShipmentArrived/);
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "customs", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await expect(updateShipmentStatus(shipment.id, "delivered", { changedBy: userId })).rejects.toThrow(/markShipmentArrived/);
   });
 
   it("accepts a valid shipment status transition and logs it", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
-    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: userId });
 
     const updated = await getShipmentWithLineItems(shipment.id);
     expect(updated.status).toBe("in_transit");
@@ -233,8 +237,8 @@ describe("shipments", () => {
   });
 
   it("markShipmentDeparted still rejects a shipment with no planned depart date, via the same transition table", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
-    await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: 1 })).rejects.toThrow(/planned depart date/);
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: userId })).rejects.toThrow(/planned depart date/);
   });
 
   it("markShipmentDeparted rejects an invalid status transition via VALID_SHIPMENT_TRANSITIONS", async () => {
@@ -243,17 +247,17 @@ describe("shipments", () => {
       initialStatus: "in_transit",
       warehouseId: ffWarehouseId,
       lineItems: [],
-      createdBy: 1,
+      createdBy: userId,
     });
     // Set plannedDepartDate so the pre-existing guard passes, but status is in_transit where departed is not allowed
     await db.update(shipments).set({ plannedDepartDate: new Date() }).where(eq(shipments.id, shipment.id));
 
-    await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: 1 })).rejects.toThrow(/invalid transition/);
+    await expect(markShipmentDeparted(shipment.id, new Date(), { changedBy: userId })).rejects.toThrow(/invalid transition/);
   });
 
   it("accepts an optional reason category on a status transition and logs it", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
-    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1, reasonCategory: "logistics_delay", reasonNote: undefined });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: userId, reasonCategory: "logistics_delay", reasonNote: undefined });
 
     const entries = await listChangeLog("shipment", shipment.id);
     expect(entries[0].field).toBe("status");
@@ -261,16 +265,16 @@ describe("shipments", () => {
   });
 
   it("still allows a status transition with no reason category (optional)", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
-    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: userId });
 
     const entries = await listChangeLog("shipment", shipment.id);
     expect(entries[0].reasonCategory).toBeNull();
   });
 
   it("records a customs status change with a required reason category", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
-    await setShipmentCustomsStatus(shipment.id, "held", { changedBy: 1, reasonCategory: "customs_hold" });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await setShipmentCustomsStatus(shipment.id, "held", { changedBy: userId, reasonCategory: "customs_hold" });
 
     const [updated] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
     expect(updated.customsStatus).toBe("held");
@@ -283,14 +287,14 @@ describe("shipments", () => {
   });
 
   it("records an actual arrival date with the real prior value", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "customs", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "customs", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
     await recordShipmentCosts(
       shipment.id,
       { freightCost: "150.00", dutyCost: "20.00", costCurrency: "USD" },
-      { reasonCategory: "freight_rate_change", changedBy: 1 },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
     );
     const arrivalDate = new Date("2026-10-15");
-    await markShipmentArrived(shipment.id, arrivalDate, { changedBy: 1, reasonCategory: "logistics_delay" });
+    await markShipmentArrived(shipment.id, arrivalDate, { changedBy: userId, reasonCategory: "logistics_delay" });
 
     const [updated] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
     expect(updated.actualArrivalDate?.toISOString()).toBe(arrivalDate.toISOString());
@@ -302,11 +306,11 @@ describe("shipments", () => {
   });
 
   it("corrects an already-recorded actual depart date with a required reason category", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", initialStatus: "departed", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
     await db.update(shipments).set({ actualDepartDate: new Date("2026-09-01") }).where(eq(shipments.id, shipment.id));
 
     const correctedDate = new Date("2026-09-03");
-    await correctShipmentActualDepartDate(shipment.id, correctedDate, { changedBy: 1, reasonCategory: "logistics_delay" });
+    await correctShipmentActualDepartDate(shipment.id, correctedDate, { changedBy: userId, reasonCategory: "logistics_delay" });
 
     const [updated] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
     expect(updated.actualDepartDate?.toISOString()).toBe(correctedDate.toISOString());
@@ -317,9 +321,9 @@ describe("shipments", () => {
   });
 
   it("rejects correcting a depart date that was never set — that's a first-time set, not a correction", async () => {
-    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: 1 });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
     await expect(
-      correctShipmentActualDepartDate(shipment.id, new Date("2026-09-03"), { changedBy: 1, reasonCategory: "logistics_delay" }),
+      correctShipmentActualDepartDate(shipment.id, new Date("2026-09-03"), { changedBy: userId, reasonCategory: "logistics_delay" }),
     ).rejects.toThrow();
   });
 
@@ -329,15 +333,15 @@ describe("shipments", () => {
       shipmentRef: "PO1-W4-Container5",
       warehouseId: ffWarehouseId,
       lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
-      createdBy: 1,
+      createdBy: userId,
     });
-    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: 1 });
-    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: 1 });
-    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });
-    await updateShipmentStatus(shipment.id, "customs", { changedBy: 1 });
+    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: userId });
+    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: userId });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: userId });
+    await updateShipmentStatus(shipment.id, "customs", { changedBy: userId });
 
     await expect(
-      markShipmentArrived(shipment.id, new Date("2026-09-20"), { changedBy: 1, reasonCategory: "logistics_delay" }),
+      markShipmentArrived(shipment.id, new Date("2026-09-20"), { changedBy: userId, reasonCategory: "logistics_delay" }),
     ).rejects.toThrow(/freight\/duty costs must be recorded first/);
   });
 
@@ -347,20 +351,20 @@ describe("shipments", () => {
       shipmentRef: "PO1-W4-Container6",
       warehouseId: ffWarehouseId,
       lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
-      createdBy: 1,
+      createdBy: userId,
     });
-    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: 1 });
-    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: 1 });
-    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });
-    await updateShipmentStatus(shipment.id, "customs", { changedBy: 1 });
+    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: userId });
+    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: userId });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: userId });
+    await updateShipmentStatus(shipment.id, "customs", { changedBy: userId });
     await recordShipmentCosts(
       shipment.id,
       { freightCost: "900.00", dutyCost: "100.00", costCurrency: "USD" },
-      { reasonCategory: "freight_rate_change", changedBy: 1 },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
     );
 
     const arrivalDate = new Date("2026-09-20");
-    await markShipmentArrived(shipment.id, arrivalDate, { changedBy: 1, reasonCategory: "logistics_delay" });
+    await markShipmentArrived(shipment.id, arrivalDate, { changedBy: userId, reasonCategory: "logistics_delay" });
 
     const soh = await getSoh(skuId, ffWarehouseId, arrivalDate);
     expect(soh).toBe(90000);
@@ -384,24 +388,24 @@ describe("shipments", () => {
       shipmentRef: "PO1-W4-Container8",
       warehouseId: ffWarehouseId,
       lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
-      createdBy: 1,
+      createdBy: userId,
     });
-    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: 1 });
-    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: 1 });
-    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });
-    await updateShipmentStatus(shipment.id, "customs", { changedBy: 1 });
+    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: userId });
+    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: userId });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: userId });
+    await updateShipmentStatus(shipment.id, "customs", { changedBy: userId });
     await recordShipmentCosts(
       shipment.id,
       { freightCost: "900.00", dutyCost: "100.00", costCurrency: "USD" },
-      { reasonCategory: "freight_rate_change", changedBy: 1 },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
     );
 
     const arrivalDate = new Date("2026-09-20");
-    await markShipmentArrived(shipment.id, arrivalDate, { changedBy: 1, reasonCategory: "logistics_delay" });
+    await markShipmentArrived(shipment.id, arrivalDate, { changedBy: userId, reasonCategory: "logistics_delay" });
     const sohAfterFirst = await getSoh(skuId, ffWarehouseId, arrivalDate);
 
     await expect(
-      markShipmentArrived(shipment.id, arrivalDate, { changedBy: 1, reasonCategory: "logistics_delay" }),
+      markShipmentArrived(shipment.id, arrivalDate, { changedBy: userId, reasonCategory: "logistics_delay" }),
     ).rejects.toThrow(/invalid transition from delivered to delivered/);
 
     const sohAfterSecond = await getSoh(skuId, ffWarehouseId, arrivalDate);
@@ -418,7 +422,7 @@ describe("shipments", () => {
         { skuId: sku.id, qty: 45000, unitPrice: "0.15", currency: "USD" },
         { skuId: sku.id, qty: 45000, unitPrice: "0.18", currency: "USD" },
       ],
-      createdBy: 1,
+      createdBy: userId,
     });
     const withItems = await getPurchaseOrderWithLineItemsHelper(po.id);
     const [tranche1, tranche2] = withItems.lineItems;
@@ -430,20 +434,20 @@ describe("shipments", () => {
         { poLineItemId: tranche1.id, skuId: sku.id, qty: 45000, weightShare: "0.5", valueShare: "0.5" },
         { poLineItemId: tranche2.id, skuId: sku.id, qty: 45000, weightShare: "0.5", valueShare: "0.5" },
       ],
-      createdBy: 1,
+      createdBy: userId,
     });
-    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: 1 });
-    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: 1 });
-    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });
-    await updateShipmentStatus(shipment.id, "customs", { changedBy: 1 });
+    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: userId });
+    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: userId });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: userId });
+    await updateShipmentStatus(shipment.id, "customs", { changedBy: userId });
     await recordShipmentCosts(
       shipment.id,
       { freightCost: "900.00", dutyCost: "100.00", costCurrency: "USD" },
-      { reasonCategory: "freight_rate_change", changedBy: 1 },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
     );
 
     const arrivalDate = new Date("2026-09-20");
-    await markShipmentArrived(shipment.id, arrivalDate, { changedBy: 1, reasonCategory: "logistics_delay" });
+    await markShipmentArrived(shipment.id, arrivalDate, { changedBy: userId, reasonCategory: "logistics_delay" });
 
     const events = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
     const receipts = events.filter((e) => e.eventType === "receipt");
@@ -467,22 +471,22 @@ describe("shipments", () => {
       shipmentRef: "PO1-W4-Container7",
       warehouseId: ffWarehouseId,
       lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
-      createdBy: 1,
+      createdBy: userId,
     });
-    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: 1 });
-    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: 1 });
-    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: 1 });
-    await updateShipmentStatus(shipment.id, "customs", { changedBy: 1 });
+    await updateShipmentPlannedDepartDate(shipment.id, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: userId });
+    await markShipmentDeparted(shipment.id, new Date("2026-09-02"), { changedBy: userId });
+    await updateShipmentStatus(shipment.id, "in_transit", { changedBy: userId });
+    await updateShipmentStatus(shipment.id, "customs", { changedBy: userId });
     // seedPoWithLineItem's PO line is priced in USD; recording costs in EUR
     // creates the currency mismatch getShipmentLandedUnitCost rejects.
     await recordShipmentCosts(
       shipment.id,
       { freightCost: "900.00", dutyCost: "100.00", costCurrency: "EUR" },
-      { reasonCategory: "freight_rate_change", changedBy: 1 },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
     );
 
     await expect(
-      markShipmentArrived(shipment.id, new Date("2026-09-20"), { changedBy: 1, reasonCategory: "logistics_delay" }),
+      markShipmentArrived(shipment.id, new Date("2026-09-20"), { changedBy: userId, reasonCategory: "logistics_delay" }),
     ).rejects.toThrow(/currency/i);
 
     const soh = await getSoh(skuId, ffWarehouseId);

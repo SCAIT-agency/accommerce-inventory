@@ -2,10 +2,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { payments, transactions, purchaseOrders, vendors, changeLog } from "../drizzle/schema";
+import { payments, transactions, purchaseOrders, vendors, changeLog, users } from "../drizzle/schema";
 import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listUnpaidPayments, listTransactions } from "./payments";
-import { createVendor } from "./db";
+import { createVendor, createUser } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
+
+let userId: number;
 
 beforeEach(async () => {
   // Real FKs now tie these tables together, but each test file only cleans
@@ -26,16 +28,19 @@ beforeEach(async () => {
       await tx.delete(payments);
       await tx.delete(purchaseOrders);
       await tx.delete(vendors);
+      await tx.delete(users);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
     }
   });
+  const user = await createUser({ email: "test@accommerce.example", role: "editor" });
+  userId = user.id;
 });
 
 describe("payments and transactions", () => {
   it("creates an expected payment slot unpaid by default", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const payment = await createExpectedPayment({
       poId: po.id,
       sequenceNo: 1,
@@ -48,7 +53,7 @@ describe("payments and transactions", () => {
 
   it("marks a payment paid with an fx_rate captured at the real payment date, computing base-currency amount", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const payment = await createExpectedPayment({
       poId: po.id, sequenceNo: 1, expectedAmount: "30746.70", expectedDate: new Date("2026-09-09"), currency: "USD",
     });
@@ -58,7 +63,7 @@ describe("payments and transactions", () => {
       fxRate: "0.93",
       paidDate: new Date("2026-09-09"),
       reasonCategory: "payment_timing",
-      changedBy: 1,
+      changedBy: userId,
     });
 
     expect(paid.paid).toBe(true);
@@ -67,7 +72,7 @@ describe("payments and transactions", () => {
 
   it("logs change_log entries with real prior values when a payment is marked paid", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const payment = await createExpectedPayment({
       poId: po.id, sequenceNo: 1, expectedAmount: "30746.70", expectedDate: new Date("2026-09-09"), currency: "USD",
     });
@@ -77,7 +82,7 @@ describe("payments and transactions", () => {
       fxRate: "0.93",
       paidDate: new Date("2026-09-09"),
       reasonCategory: "payment_timing",
-      changedBy: 1,
+      changedBy: userId,
     });
 
     const entries = await db.select().from(changeLog);
@@ -107,19 +112,19 @@ describe("payments and transactions", () => {
     expect(unmatched.map((t) => t.id)).toContain(tx.id);
 
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const payment = await createExpectedPayment({
       poId: po.id, sequenceNo: 1, expectedAmount: "30746.70", expectedDate: new Date("2026-09-09"), currency: "USD",
     });
 
-    await matchTransactionToPayment(tx.id, payment.id, { reasonCategory: "payment_timing", changedBy: 1 });
+    await matchTransactionToPayment(tx.id, payment.id, { reasonCategory: "payment_timing", changedBy: userId });
     unmatched = await listUnmatchedTransactions();
     expect(unmatched.map((t) => t.id)).not.toContain(tx.id);
   });
 
   it("marks the payment paid using the transaction's own amount/date/fxRate when matched", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const payment = await createExpectedPayment({
       poId: po.id, sequenceNo: 1, expectedAmount: "30746.70", expectedDate: new Date("2026-09-09"), currency: "USD",
     });
@@ -127,7 +132,7 @@ describe("payments and transactions", () => {
       date: new Date("2026-09-11"), amount: "30700.00", currency: "USD", fxRate: "0.93", counterparty: "Lvmengkang",
     });
 
-    await matchTransactionToPayment(tx.id, payment.id, { reasonCategory: "payment_timing", changedBy: 1 });
+    await matchTransactionToPayment(tx.id, payment.id, { reasonCategory: "payment_timing", changedBy: userId });
 
     const [updated] = await db.select().from(payments).where(sql`${payments.id} = ${payment.id}`);
     expect(updated.paid).toBe(true);
@@ -138,18 +143,18 @@ describe("payments and transactions", () => {
 
   it("does not overwrite an already-paid payment's recorded amount/date when later matched to a transaction", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const payment = await createExpectedPayment({
       poId: po.id, sequenceNo: 1, expectedAmount: "30746.70", expectedDate: new Date("2026-09-09"), currency: "USD",
     });
     await markPaymentPaid(payment.id, {
-      amount: "30746.70", fxRate: "0.93", paidDate: new Date("2026-09-09"), reasonCategory: "payment_timing", changedBy: 1,
+      amount: "30746.70", fxRate: "0.93", paidDate: new Date("2026-09-09"), reasonCategory: "payment_timing", changedBy: userId,
     });
     const tx = await recordTransaction({
       date: new Date("2026-09-11"), amount: "30700.00", currency: "USD", fxRate: "0.95", counterparty: "Lvmengkang",
     });
 
-    await matchTransactionToPayment(tx.id, payment.id, { reasonCategory: "payment_timing", changedBy: 1 });
+    await matchTransactionToPayment(tx.id, payment.id, { reasonCategory: "payment_timing", changedBy: userId });
 
     const [updated] = await db.select().from(payments).where(sql`${payments.id} = ${payment.id}`);
     expect(updated.paidAmount).toBe("30746.70");
@@ -158,52 +163,52 @@ describe("payments and transactions", () => {
 
   it("rejects matching a transaction to a nonexistent payment", async () => {
     const tx = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test" });
-    await expect(matchTransactionToPayment(tx.id, 999999, { reasonCategory: "payment_timing", changedBy: 1 })).rejects.toThrow();
+    await expect(matchTransactionToPayment(tx.id, 999999, { reasonCategory: "payment_timing", changedBy: userId })).rejects.toThrow();
   });
 
   it("rejects matching an already-matched transaction to a different payment", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const payment1 = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date(), currency: "USD" });
     const payment2 = await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "200.00", expectedDate: new Date(), currency: "USD" });
     const tx = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test" });
 
-    await matchTransactionToPayment(tx.id, payment1.id, { reasonCategory: "payment_timing", changedBy: 1 });
-    await expect(matchTransactionToPayment(tx.id, payment2.id, { reasonCategory: "payment_timing", changedBy: 1 })).rejects.toThrow(/already matched/);
+    await matchTransactionToPayment(tx.id, payment1.id, { reasonCategory: "payment_timing", changedBy: userId });
+    await expect(matchTransactionToPayment(tx.id, payment2.id, { reasonCategory: "payment_timing", changedBy: userId })).rejects.toThrow(/already matched/);
   });
 
   it("allows re-matching a transaction to the same payment it's already matched to (idempotent)", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const payment = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date(), currency: "USD" });
     const tx = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test" });
 
-    await matchTransactionToPayment(tx.id, payment.id, { reasonCategory: "payment_timing", changedBy: 1 });
-    await expect(matchTransactionToPayment(tx.id, payment.id, { reasonCategory: "payment_timing", changedBy: 1 })).resolves.not.toThrow();
+    await matchTransactionToPayment(tx.id, payment.id, { reasonCategory: "payment_timing", changedBy: userId });
+    await expect(matchTransactionToPayment(tx.id, payment.id, { reasonCategory: "payment_timing", changedBy: userId })).resolves.not.toThrow();
   });
 
   it("rejects matching a payment that's already matched to a different transaction — no silent double-match", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const payment = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date(), currency: "USD" });
     const txA = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test A" });
     const txB = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test B" });
 
-    await matchTransactionToPayment(txA.id, payment.id, { reasonCategory: "payment_timing", changedBy: 1 });
-    await expect(matchTransactionToPayment(txB.id, payment.id, { reasonCategory: "payment_timing", changedBy: 1 })).rejects.toThrow(/already matched to a different transaction/);
+    await matchTransactionToPayment(txA.id, payment.id, { reasonCategory: "payment_timing", changedBy: userId });
+    await expect(matchTransactionToPayment(txB.id, payment.id, { reasonCategory: "payment_timing", changedBy: userId })).rejects.toThrow(/already matched to a different transaction/);
   });
 
   it("rejects matching a nonexistent transaction with a clear error message", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const payment = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date(), currency: "USD" });
 
-    await expect(matchTransactionToPayment(999999, payment.id, { reasonCategory: "payment_timing", changedBy: 1 })).rejects.toThrow(/no transaction found/);
+    await expect(matchTransactionToPayment(999999, payment.id, { reasonCategory: "payment_timing", changedBy: userId })).rejects.toThrow(/no transaction found/);
   });
 
   it("lists payments for a PO, so they survive a reload instead of only existing in session state", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "200.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
 
@@ -215,10 +220,10 @@ describe("payments and transactions", () => {
 
   it("lists only unpaid expected payments, for the transaction-matching picker", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const unpaid = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
     const toBePaid = await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "200.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
-    await markPaymentPaid(toBePaid.id, { amount: "200.00", fxRate: "1", paidDate: new Date("2026-09-10"), reasonCategory: "payment_timing", changedBy: 1 });
+    await markPaymentPaid(toBePaid.id, { amount: "200.00", fxRate: "1", paidDate: new Date("2026-09-10"), reasonCategory: "payment_timing", changedBy: userId });
 
     const result = await listUnpaidPayments();
     expect(result.map((p) => p.id)).toEqual([unpaid.id]);
@@ -226,11 +231,11 @@ describe("payments and transactions", () => {
 
   it("excludes an unpaid payment that's already matched to a transaction from the matching picker", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const matched = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
     const unmatched = await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "200.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
     const tx = await recordTransaction({ date: new Date(), amount: "100.00", currency: "USD", fxRate: "0.93", counterparty: "Test" });
-    await matchTransactionToPayment(tx.id, matched.id, { reasonCategory: "payment_timing", changedBy: 1 });
+    await matchTransactionToPayment(tx.id, matched.id, { reasonCategory: "payment_timing", changedBy: userId });
 
     const result = await listUnpaidPayments();
     expect(result.map((p) => p.id)).toEqual([unmatched.id]);
@@ -238,7 +243,7 @@ describe("payments and transactions", () => {
 
   it("includes the PO number on each unpaid payment, to disambiguate the matching picker", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
 
     const result = await listUnpaidPayments();
@@ -249,9 +254,9 @@ describe("payments and transactions", () => {
     const tx1 = await recordTransaction({ date: new Date("2026-09-01"), amount: "100.00", currency: "USD", fxRate: "1.0", counterparty: "Vendor A" });
     const tx2 = await recordTransaction({ date: new Date("2026-09-05"), amount: "200.00", currency: "USD", fxRate: "1.0", counterparty: "Vendor B" });
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
     const payment = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "100.00", expectedDate: new Date("2026-09-01"), currency: "USD" });
-    await matchTransactionToPayment(tx1.id, payment.id, { reasonCategory: "payment_timing", changedBy: 1 });
+    await matchTransactionToPayment(tx1.id, payment.id, { reasonCategory: "payment_timing", changedBy: userId });
 
     const result = await listTransactions();
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { db } from "../server/dbClient";
-import { skus, vendors, warehouses, purchaseOrders, poLineItems, shipments, shipmentLineItems, payments, transactions, inventoryLedger } from "../drizzle/schema";
+import { skus, vendors, warehouses, purchaseOrders, poLineItems, shipments, shipmentLineItems, payments, transactions, inventoryLedger, users } from "../drizzle/schema";
 import { runMigration } from "./reconcile-migration";
 
 beforeEach(async () => {
@@ -14,6 +14,9 @@ beforeEach(async () => {
   await db.delete(skus);
   await db.delete(vendors);
   await db.delete(warehouses);
+  // runMigration attributes migrated rows to a get-or-create system user
+  // (createdBy is a real FK now) — clean it up too so each test starts fresh.
+  await db.delete(users);
 });
 
 describe("runMigration (widened scope)", () => {

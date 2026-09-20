@@ -1,10 +1,26 @@
 import { eq } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
-import { skus, vendors, warehouses, appSettings, type InsertSku, type InsertVendor, type InsertWarehouse } from "../drizzle/schema";
+import {
+  skus,
+  vendors,
+  warehouses,
+  appSettings,
+  users,
+  type InsertSku,
+  type InsertVendor,
+  type InsertWarehouse,
+  type InsertUser,
+} from "../drizzle/schema";
 
 export async function createSku(data: Omit<InsertSku, "id">, dbClient: DbClient = db) {
   const [result] = await dbClient.insert(skus).values(data);
   const [row] = await dbClient.select().from(skus).where(eq(skus.id, result.insertId));
+  return row;
+}
+
+export async function createUser(data: Omit<InsertUser, "id">, dbClient: DbClient = db) {
+  const [result] = await dbClient.insert(users).values(data);
+  const [row] = await dbClient.select().from(users).where(eq(users.id, result.insertId));
   return row;
 }
 

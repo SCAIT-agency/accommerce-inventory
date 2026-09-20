@@ -2,11 +2,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { payments, transactions, purchaseOrders, vendors, appSettings } from "../drizzle/schema";
+import { payments, transactions, purchaseOrders, vendors, appSettings, users } from "../drizzle/schema";
 import { getCashflowForecast } from "./cashflow";
-import { createVendor, setAppSetting } from "./db";
+import { createVendor, setAppSetting, createUser } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { createExpectedPayment, markPaymentPaid, recordTransaction } from "./payments";
+
+let userId: number;
 
 beforeEach(async () => {
   // Real FKs now tie these tables together, but each test file only cleans
@@ -27,20 +29,23 @@ beforeEach(async () => {
       await tx.delete(purchaseOrders);
       await tx.delete(vendors);
       await tx.delete(appSettings);
+      await tx.delete(users);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
     }
   });
+  const user = await createUser({ email: "test@accommerce.example", role: "editor" });
+  userId = user.id;
 });
 
 describe("cashflow forecast", () => {
   it("separates planned (expected payments) from actual (matched transactions) outflow per day", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30746.70", expectedDate: new Date("2026-09-09"), currency: "USD" });
     const payment2 = await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "50000.00", expectedDate: new Date("2026-09-20"), currency: "USD" });
-    await markPaymentPaid(payment2.id, { amount: "50000.00", fxRate: "0.93", paidDate: new Date("2026-09-20"), reasonCategory: "payment_timing", changedBy: 1 });
+    await markPaymentPaid(payment2.id, { amount: "50000.00", fxRate: "0.93", paidDate: new Date("2026-09-20"), reasonCategory: "payment_timing", changedBy: userId });
 
     const forecast = await getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"));
 
@@ -54,7 +59,7 @@ describe("cashflow forecast", () => {
 
   it("shows actual outflow on the real paid date even when expectedDate falls outside the queried window", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
 
     const payment = await createExpectedPayment({
       poId: po.id,
@@ -68,7 +73,7 @@ describe("cashflow forecast", () => {
       fxRate: "0.90",
       paidDate: new Date("2026-09-05"),
       reasonCategory: "payment_timing",
-      changedBy: 1,
+      changedBy: userId,
     });
 
     const forecast = await getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"));
@@ -82,7 +87,7 @@ describe("cashflow forecast", () => {
 
   it("sums multiple same-currency planned payments landing on the same day", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30746.70", expectedDate: new Date("2026-09-09"), currency: "USD" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "1253.30", expectedDate: new Date("2026-09-09"), currency: "USD" });
@@ -95,7 +100,7 @@ describe("cashflow forecast", () => {
 
   it("treats differently-cased currency codes as the same currency, not a mixed-currency window", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30000.00", expectedDate: new Date("2026-09-09"), currency: "eur" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });
@@ -110,7 +115,7 @@ describe("cashflow forecast", () => {
 
   it("estimates a EUR-equivalent total using the standard FX rate when one day's planned payments span more than one currency, flagging it as an estimate", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30000.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });
@@ -125,7 +130,7 @@ describe("cashflow forecast", () => {
 
   it("sums same-currency planned payments spread across multiple different days in the range", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30746.70", expectedDate: new Date("2026-09-09"), currency: "USD" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "1253.30", expectedDate: new Date("2026-09-15"), currency: "USD" });
@@ -140,7 +145,7 @@ describe("cashflow forecast", () => {
 
   it("estimates per-day EUR-equivalents when unpaid payments on DIFFERENT days within the same range span more than one currency, only flagging the day whose own amount was converted", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30000.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: new Date("2026-09-15"), currency: "EUR" });
@@ -158,7 +163,7 @@ describe("cashflow forecast", () => {
 
   it("still throws when a mixed-currency window includes a currency with no configured standard FX rate", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "1000.00", expectedDate: new Date("2026-09-09"), currency: "GBP" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "1000.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });
@@ -171,7 +176,7 @@ describe("cashflow forecast", () => {
   it("uses an app_settings override instead of the default standard FX rate when one is configured", async () => {
     await setAppSetting("standard_fx_rate:USD", "0.80");
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "10000.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "5000.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });

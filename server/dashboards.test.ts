@@ -2,14 +2,16 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { skus, warehouses, inventoryLedger, payments, transactions, purchaseOrders, vendors, salesActuals, poLineItems, shipments, shipmentLineItems, appSettings } from "../drizzle/schema";
+import { skus, warehouses, inventoryLedger, payments, transactions, purchaseOrders, vendors, salesActuals, poLineItems, shipments, shipmentLineItems, appSettings, users } from "../drizzle/schema";
 import { getHomeSummary, getStockDashboard } from "./dashboards";
-import { createSku, createWarehouse, createVendor } from "./db";
+import { createSku, createWarehouse, createVendor, createUser } from "./db";
 import { createPurchaseOrder, getPurchaseOrderWithLineItems } from "./purchaseOrders";
 import { createExpectedPayment } from "./payments";
 import { recordLedgerEvent } from "./inventoryLedger";
 import { recordSalesActual } from "./salesPlan";
 import { createShipment, recordShipmentCosts } from "./shipments";
+
+let userId: number;
 
 beforeEach(async () => {
   // Real FKs now tie these tables together, but each test file only cleans
@@ -37,10 +39,13 @@ beforeEach(async () => {
       await tx.delete(skus);
       await tx.delete(warehouses);
       await tx.delete(appSettings);
+      await tx.delete(users);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
     }
   });
+  const user = await createUser({ email: "test@accommerce.example", role: "editor" });
+  userId = user.id;
 });
 
 function daysAgo(n: number): Date {
@@ -69,7 +74,7 @@ describe("dashboards", () => {
 
   it("estimates a EUR-equivalent nearTermCashNeeds using the standard FX rate when unpaid payments on different days within the 14-day window span more than one currency", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30000.00", expectedDate: daysFromNow(2), currency: "USD" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: daysFromNow(9), currency: "EUR" });
@@ -116,7 +121,7 @@ describe("dashboards", () => {
       poNumber: "PO1-W4",
       vendorId: vendor.id,
       lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
-      createdBy: 1,
+      createdBy: userId,
     });
     const withItems = await getPurchaseOrderWithLineItems(po.id);
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
@@ -124,12 +129,12 @@ describe("dashboards", () => {
       shipmentRef: "PO1-W4-Container1",
       warehouseId: ff.id,
       lineItems: [{ poLineItemId: withItems.lineItems[0].id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
-      createdBy: 1,
+      createdBy: userId,
     });
     await recordShipmentCosts(
       shipment.id,
       { freightCost: "100.00", dutyCost: "20.00", costCurrency: "EUR" },
-      { reasonCategory: "freight_rate_change", changedBy: 1 },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
     );
 
     const result = await getMoneyDashboard(new Date("2026-09-01"), new Date("2026-09-30"), { shipmentId: shipment.id });
@@ -295,7 +300,7 @@ describe("dashboards", () => {
 
   it("surfaces unpaid payments past their expected date as overdue payables, separate from the forward-looking near-term window", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
-    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "5000.00", expectedDate: daysAgo(3), currency: "EUR" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "2000.00", expectedDate: daysFromNow(2), currency: "EUR" });
