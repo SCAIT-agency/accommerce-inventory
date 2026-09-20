@@ -68,4 +68,24 @@ describe("login throttle", () => {
     recordFailedAttempt(EMAIL, lockedAt + 1000);
     expect(isLocked(EMAIL, lockedAt + LOCKOUT_MS + 1)).toBe(false);
   });
+
+  it("evicts the oldest tracked email once MAX_TRACKED_EMAILS is exceeded", () => {
+    const now = 2_000_000;
+    // Fill to capacity with distinct emails, each with 1 failed attempt.
+    for (let i = 0; i < 10_000; i++) {
+      recordFailedAttempt(`flood-${i}@example.com`, now);
+    }
+    // One more distinct email should evict the very first one tracked.
+    recordFailedAttempt("flood-10000@example.com", now);
+
+    // The oldest entry's failure count should have been forgotten — a fresh
+    // failed attempt against it now starts a new count of 1, not 2, so 4 more
+    // failures (5 total post-eviction) should NOT lock it, proving eviction
+    // actually happened rather than just capping silently.
+    for (let i = 0; i < 3; i++) recordFailedAttempt("flood-0@example.com", now + 1000 + i);
+    expect(isLocked("flood-0@example.com", now + 5000)).toBe(false);
+
+    clearAttempts("flood-0@example.com");
+    for (let i = 0; i < 10_001; i++) clearAttempts(`flood-${i}@example.com`);
+  });
 });

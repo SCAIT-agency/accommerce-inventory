@@ -6,6 +6,7 @@
 const WINDOW_MS = 15 * 60 * 1000;
 const LOCKOUT_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
+const MAX_TRACKED_EMAILS = 10_000;
 
 interface Entry {
   count: number;
@@ -14,6 +15,13 @@ interface Entry {
 }
 
 const attempts = new Map<string, Entry>();
+
+function evictOldestIfFull(email: string): void {
+  if (attempts.has(email)) return;
+  if (attempts.size < MAX_TRACKED_EMAILS) return;
+  const oldestKey = attempts.keys().next().value;
+  if (oldestKey !== undefined) attempts.delete(oldestKey);
+}
 
 export function isLocked(email: string, now: number = Date.now()): boolean {
   const entry = attempts.get(email);
@@ -46,6 +54,7 @@ export function recordFailedAttempt(email: string, now: number = Date.now()): vo
 
   const current = attempts.get(email);
   if (!current || now - current.windowStart > WINDOW_MS) {
+    evictOldestIfFull(email);
     attempts.set(email, { count: 1, windowStart: now, lockedUntil: null });
     return;
   }
