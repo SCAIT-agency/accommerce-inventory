@@ -396,10 +396,17 @@ as ChangeLog today.
 Every test that creates a shipment (via `createShipment` or a direct
 `db.insert(shipments)`) needs a `warehouseId`. Confirmed by grep — exactly
 3 files touch shipment creation: `server/shipments.test.ts`,
-`server/landedCost.test.ts`, `server/dashboards.test.ts`. All three already
-create/reference a warehouse fixture for other reasons (SOH/ledger tests
-need one regardless), so this is adding one field to an existing fixture
-object in each, not introducing a new fixture.
+`server/landedCost.test.ts`, `server/dashboards.test.ts`. Only
+`dashboards.test.ts` already imports `createWarehouse` and deletes
+`warehouses` in its cleanup (it needs one regardless, for its SOH/ledger
+tests) — its fix is a single new fixture call at its one `createShipment`
+site. `shipments.test.ts` and `landedCost.test.ts` have zero warehouse
+references today and need the import, the cleanup-delete, and a fixture
+call added at every `createShipment` site (~20 in the former, 8 in the
+latter) — real new work, not just extending an existing fixture. The
+TypeScript compiler enforces completeness here: `warehouseId` becomes a
+required field on `CreateShipmentInput`, so `pnpm check` fails loudly at
+every missed call site.
 
 ## 8. Global constraints
 
