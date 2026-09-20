@@ -49,14 +49,23 @@ export function MoneyPage() {
         <button onClick={() => setTab("daily_cogs")}>Daily COGS/Sales</button>
       </div>
       {tab === "cashflow" && (
-        <table>
-          <thead><tr><th>Date</th><th>Planned</th><th>Actual</th></tr></thead>
-          <tbody>
-            {data.cashflow.map((d) => (
-              <tr key={d.date}><td>{d.date}</td><td>{d.plannedOutflow.toFixed(2)}</td><td>{d.actualOutflow.toFixed(2)}</td></tr>
-            ))}
-          </tbody>
-        </table>
+        <>
+          <table>
+            <thead><tr><th>Date</th><th>Planned</th><th>Actual</th></tr></thead>
+            <tbody>
+              {data.cashflow.map((d) => (
+                <tr key={d.date}>
+                  <td>{d.date}</td>
+                  <td>{d.plannedOutflowIsEstimated && "≈ "}{d.plannedOutflow.toFixed(2)}</td>
+                  <td>{d.actualOutflow.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {data.cashflow.some((d) => d.plannedOutflowIsEstimated) && (
+            <p>≈ estimated using a standard FX rate (this period mixes currencies with no locked-in rate yet)</p>
+          )}
+        </>
       )}
       {tab === "daily_cogs" && (
         <table>

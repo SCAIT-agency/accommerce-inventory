@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { skus, warehouses, inventoryLedger, payments, transactions, purchaseOrders, vendors, salesActuals, poLineItems, shipments, shipmentLineItems } from "../drizzle/schema";
+import { skus, warehouses, inventoryLedger, payments, transactions, purchaseOrders, vendors, salesActuals, poLineItems, shipments, shipmentLineItems, appSettings } from "../drizzle/schema";
 import { getHomeSummary, getStockDashboard } from "./dashboards";
 import { createSku, createWarehouse, createVendor } from "./db";
 import { createPurchaseOrder, getPurchaseOrderWithLineItems } from "./purchaseOrders";
@@ -36,6 +36,7 @@ beforeEach(async () => {
       await tx.delete(inventoryLedger);
       await tx.delete(skus);
       await tx.delete(warehouses);
+      await tx.delete(appSettings);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
     }
@@ -66,14 +67,16 @@ describe("dashboards", () => {
     expect(summary).toHaveProperty("nearTermCashNeeds");
   });
 
-  it("throws instead of silently returning a blended nearTermCashNeeds when unpaid payments on different days within the 14-day window span more than one currency", async () => {
+  it("estimates a EUR-equivalent nearTermCashNeeds using the standard FX rate when unpaid payments on different days within the 14-day window span more than one currency", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
     const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30000.00", expectedDate: daysFromNow(2), currency: "USD" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: daysFromNow(9), currency: "EUR" });
 
-    await expect(getHomeSummary()).rejects.toThrow(/cannot aggregate mixed currencies \(USD, EUR\)/);
+    const summary = await getHomeSummary();
+    // 30000 USD * default 0.86 + 10000 EUR (base currency, exact) = 35800
+    expect(summary.nearTermCashNeeds).toBeCloseTo(35800);
   });
 
   it("Stock dashboard reports SOH per warehouse, never blended", async () => {

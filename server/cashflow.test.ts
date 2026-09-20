@@ -2,9 +2,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { payments, transactions, purchaseOrders, vendors } from "../drizzle/schema";
+import { payments, transactions, purchaseOrders, vendors, appSettings } from "../drizzle/schema";
 import { getCashflowForecast } from "./cashflow";
-import { createVendor } from "./db";
+import { createVendor, setAppSetting } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { createExpectedPayment, markPaymentPaid, recordTransaction } from "./payments";
 
@@ -26,6 +26,7 @@ beforeEach(async () => {
       await tx.delete(payments);
       await tx.delete(purchaseOrders);
       await tx.delete(vendors);
+      await tx.delete(appSettings);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
     }
@@ -92,16 +93,19 @@ describe("cashflow forecast", () => {
     expect(day9?.plannedOutflow).toBeCloseTo(32000);
   });
 
-  it("throws instead of silently blending currencies when one day's planned payments span more than one currency", async () => {
+  it("estimates a EUR-equivalent total using the standard FX rate when one day's planned payments span more than one currency, flagging it as an estimate", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
     const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30000.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });
 
-    await expect(getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"))).rejects.toThrow(
-      /cannot aggregate mixed currencies \(USD, EUR\) across 2026-09-01 to 2026-09-30/,
-    );
+    const forecast = await getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"));
+
+    const day9 = forecast.find((f) => f.date === "2026-09-09");
+    // 30000 USD * default 0.86 + 10000 EUR (base currency, exact) = 35800
+    expect(day9?.plannedOutflow).toBeCloseTo(35800);
+    expect(day9?.plannedOutflowIsEstimated).toBe(true);
   });
 
   it("sums same-currency planned payments spread across multiple different days in the range", async () => {
@@ -119,15 +123,47 @@ describe("cashflow forecast", () => {
     expect(forecast.find((f) => f.date === "2026-09-20")?.plannedOutflow).toBeCloseTo(5000);
   });
 
-  it("throws instead of silently blending currencies when unpaid payments on DIFFERENT days within the same range span more than one currency", async () => {
+  it("estimates per-day EUR-equivalents when unpaid payments on DIFFERENT days within the same range span more than one currency, only flagging the day whose own amount was converted", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
     const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
 
     await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30000.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
     await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: new Date("2026-09-15"), currency: "EUR" });
 
+    const forecast = await getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"));
+
+    const day9 = forecast.find((f) => f.date === "2026-09-09");
+    expect(day9?.plannedOutflow).toBeCloseTo(30000 * 0.86);
+    expect(day9?.plannedOutflowIsEstimated).toBe(true);
+
+    const day15 = forecast.find((f) => f.date === "2026-09-15");
+    expect(day15?.plannedOutflow).toBeCloseTo(10000);
+    expect(day15?.plannedOutflowIsEstimated).toBe(false);
+  });
+
+  it("still throws when a mixed-currency window includes a currency with no configured standard FX rate", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+
+    await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "1000.00", expectedDate: new Date("2026-09-09"), currency: "GBP" });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "1000.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });
+
     await expect(getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"))).rejects.toThrow(
-      /cannot aggregate mixed currencies \(USD, EUR\) across 2026-09-01 to 2026-09-30/,
+      /no standard FX rate configured for "GBP"/,
     );
+  });
+
+  it("uses an app_settings override instead of the default standard FX rate when one is configured", async () => {
+    await setAppSetting("standard_fx_rate:USD", "0.80");
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+
+    await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "10000.00", expectedDate: new Date("2026-09-09"), currency: "USD" });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "5000.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });
+
+    const forecast = await getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"));
+
+    const day9 = forecast.find((f) => f.date === "2026-09-09");
+    expect(day9?.plannedOutflow).toBeCloseTo(10000 * 0.80 + 5000);
   });
 });
