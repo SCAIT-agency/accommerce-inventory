@@ -15,7 +15,14 @@ set explicitly ("1-100%, 3, 2" — Operational, then Engineering, then Product).
 5. Add the missing foreign keys and indexes Cherny's review found.
 6. Migrate money/quantity-share columns from `varchar` to `decimal`.
 7. Rename the 5 `.mjs` CLI scripts to `.ts` so `tsc` actually checks them.
-8. Make `payments.history` reachable from the Change Log UI.
+
+**Dropped after verification:** the BACKLOG item "`payments.history` is
+unreachable from the UI" is stale. `PurchaseOrdersPage.tsx:145-165` already
+has a working `PaymentHistory` component (an inline expand/collapse "History"
+button per payment calling `trpc.payments.history.useQuery` directly) — a
+different, already-functional pattern from the shared `/change-log/:entityType/:entityId`
+route, which the original review evidently didn't check for before flagging
+this. No fix needed; nothing in this stream touches it.
 
 Explicitly out of scope (deferred, tracked separately): reversal/correction
 paths for stock/cost/payment data, freight/duty lock-after-arrival, the
@@ -289,24 +296,6 @@ legitimate new finding to fix, not a sign the rename was wrong). This does
 deferred concern — see `docs/2026-09-20-three-lens-architecture-review.md`'s
 Shopify-pull finding) — it only closes the compile-time blind spot.
 
-## 8. Make `payments.history` reachable from the UI
-
-**Current state:** `client/src/main.tsx`'s `ChangeLogRoute` and
-`client/src/pages/ChangeLogPage.tsx` both hardcode the `entityType` union to
-`"purchase_order" | "shipment"` — `payments.history` (a real, tested router
-procedure) has no route or link that can ever reach it.
-
-Fix: widen both to include `"payment"`, following the exact existing
-branching pattern (add a third arm to each ternary/ `enabled` check
-alongside the `purchase_order`/`shipment` ones), and add a link to it from
-wherever a payment row is rendered — `PurchaseOrdersPage.tsx`'s
-`PoPaymentsSection`/`MarkPaidRow` area is where individual payments are
-listed today (confirmed in the Operational-cleanup session's reading of that
-file); add a `<Link to={\`/change-log/payment/${payment.id}\`}>History</Link>`
-per payment row there, matching however `PoShipmentsSection` already links
-to its own shipment's change log (check that existing pattern before adding
-a new one).
-
 ## Testing requirements
 
 - FIFO unification: every existing test for `getRemainingBatches` and
@@ -329,6 +318,3 @@ a new one).
   existing money-related test in the suite passing unchanged.
 - `.mjs` rename: `pnpm check` green, and each renamed script's own existing
   test (where one exists, e.g. `reset-password.test.ts`) still passing.
-- `payments.history` UI: no new backend test needed (procedure already
-  tested); a quick manual/scripted check that the route renders is enough,
-  matching this project's existing frontend-verification bar.
