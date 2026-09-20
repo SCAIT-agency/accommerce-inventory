@@ -1,6 +1,10 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
+
+type RouterOutputs = inferRouterOutputs<AppRouter>;
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   critical: "badge badge-critical",
@@ -117,6 +121,178 @@ function SalesPlanSection({ warehouseFilter }: { warehouseFilter: number | "all"
   );
 }
 
+function weekEndDateStr(weekStartDate: string): string {
+  const d = new Date(weekStartDate);
+  d.setUTCDate(d.getUTCDate() + 6);
+  return d.toISOString().slice(0, 10);
+}
+
+function nextMondays(n: number): string[] {
+  const dates: string[] = [];
+  const today = new Date();
+  const cursor = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const day = cursor.getUTCDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  cursor.setUTCDate(cursor.getUTCDate() + diffToMonday);
+  for (let i = 0; i < n; i++) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 7);
+  }
+  return dates;
+}
+
+type WeeklyInputWithLines = RouterOutputs["salesPlan"]["listWeeklyInputs"][number];
+
+interface WeeklyRecipeLineForm {
+  skuId: string;
+  unitsPer1000: string;
+}
+
+interface WeeklyPlanFormState {
+  plannedRevenue: string;
+  primaryWarehouseId: string;
+  primaryPercent: string;
+  secondaryWarehouseId: string;
+  recipeLines: WeeklyRecipeLineForm[];
+}
+
+function defaultWeeklyPlanForm(existing?: WeeklyInputWithLines): WeeklyPlanFormState {
+  if (!existing) {
+    return { plannedRevenue: "", primaryWarehouseId: "", primaryPercent: "", secondaryWarehouseId: "", recipeLines: [] };
+  }
+  return {
+    plannedRevenue: existing.plannedRevenue,
+    primaryWarehouseId: String(existing.primaryWarehouseId),
+    primaryPercent: existing.primaryPercent,
+    secondaryWarehouseId: String(existing.secondaryWarehouseId),
+    recipeLines: existing.recipeLines.map((l) => ({ skuId: String(l.skuId), unitsPer1000: l.unitsPer1000 })),
+  };
+}
+
+function WeeklyPlanRow({ weekStartDate, existing, skus, warehouses, onSaved }: {
+  weekStartDate: string;
+  existing?: WeeklyInputWithLines;
+  skus: { id: number; sku: string | null; name: string | null }[];
+  warehouses: { id: number; code: string; name: string }[];
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<WeeklyPlanFormState>(() => defaultWeeklyPlanForm(existing));
+  const upsert = trpc.salesPlan.upsertWeeklyInput.useMutation({ onSuccess: onSaved });
+
+  const isPast = weekEndDateStr(weekStartDate) < new Date().toISOString().slice(0, 10);
+
+  if (isPast) {
+    return (
+      <tr>
+        <td>{weekStartDate}</td>
+        <td colSpan={4}>Past — read-only</td>
+      </tr>
+    );
+  }
+
+  const addRecipeLine = () => setForm((prev) => ({ ...prev, recipeLines: [...prev.recipeLines, { skuId: "", unitsPer1000: "" }] }));
+  const updateRecipeLine = (i: number, patch: Partial<WeeklyRecipeLineForm>) =>
+    setForm((prev) => ({ ...prev, recipeLines: prev.recipeLines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)) }));
+  const removeRecipeLine = (i: number) => setForm((prev) => ({ ...prev, recipeLines: prev.recipeLines.filter((_, idx) => idx !== i) }));
+
+  const canSave = form.plannedRevenue.trim().length > 0
+    && form.primaryWarehouseId !== "" && form.secondaryWarehouseId !== "" && form.primaryPercent.trim().length > 0
+    && form.recipeLines.length > 0
+    && form.recipeLines.every((l) => l.skuId !== "" && l.unitsPer1000.trim().length > 0);
+
+  return (
+    <tr>
+      <td>{weekStartDate}</td>
+      <td>
+        <input type="text" placeholder="revenue" value={form.plannedRevenue} onChange={(e) => setForm((prev) => ({ ...prev, plannedRevenue: e.target.value }))} />
+      </td>
+      <td>
+        <select value={form.primaryWarehouseId} onChange={(e) => setForm((prev) => ({ ...prev, primaryWarehouseId: e.target.value }))}>
+          <option value="">Primary…</option>
+          {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code}</option>)}
+        </select>
+        <input type="text" placeholder="primary %" value={form.primaryPercent} onChange={(e) => setForm((prev) => ({ ...prev, primaryPercent: e.target.value }))} />
+        <select value={form.secondaryWarehouseId} onChange={(e) => setForm((prev) => ({ ...prev, secondaryWarehouseId: e.target.value }))}>
+          <option value="">Secondary…</option>
+          {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code}</option>)}
+        </select>
+      </td>
+      <td>
+        {form.recipeLines.map((line, i) => (
+          <div key={i}>
+            <select value={line.skuId} onChange={(e) => updateRecipeLine(i, { skuId: e.target.value })}>
+              <option value="">SKU…</option>
+              {skus.map((s) => <option key={s.id} value={s.id}>{s.sku ?? s.name ?? `#${s.id}`}</option>)}
+            </select>
+            <input type="text" placeholder="units/1000€" value={line.unitsPer1000} onChange={(e) => updateRecipeLine(i, { unitsPer1000: e.target.value })} />
+            <button onClick={() => removeRecipeLine(i)}>Remove</button>
+          </div>
+        ))}
+        <button onClick={addRecipeLine}>Add SKU</button>
+      </td>
+      <td>
+        <button
+          disabled={!canSave || upsert.isPending}
+          onClick={() =>
+            upsert.mutate({
+              weekStartDate: new Date(weekStartDate),
+              plannedRevenue: form.plannedRevenue,
+              primaryWarehouseId: Number(form.primaryWarehouseId),
+              primaryPercent: form.primaryPercent,
+              secondaryWarehouseId: Number(form.secondaryWarehouseId),
+              recipeLines: form.recipeLines.map((l) => ({ skuId: Number(l.skuId), unitsPer1000: l.unitsPer1000 })),
+            })
+          }
+        >
+          Save & regenerate
+        </button>
+        {upsert.error && <div>Failed: {upsert.error.message}</div>}
+      </td>
+    </tr>
+  );
+}
+
+function WeeklySalesPlanSection() {
+  const utils = trpc.useUtils();
+  const warehousesQuery = trpc.catalog.listWarehouses.useQuery();
+  const skusQuery = trpc.catalog.listSkus.useQuery();
+  const weeks = useMemo(() => nextMondays(26), []);
+  const inputsQuery = trpc.salesPlan.listWeeklyInputs.useQuery({
+    from: new Date(weeks[0]),
+    to: new Date(weeks[weeks.length - 1]),
+  });
+
+  const error = warehousesQuery.error ?? skusQuery.error ?? inputsQuery.error;
+  if (error) return <div>Failed to load: {error.message}</div>;
+
+  const isLoading = warehousesQuery.isLoading || skusQuery.isLoading || inputsQuery.isLoading;
+  if (isLoading || !warehousesQuery.data || !skusQuery.data || !inputsQuery.data) return <div>Loading…</div>;
+
+  const inputsByWeek = new Map(inputsQuery.data.map((w) => [w.weekStartDate, w]));
+  const onSaved = () => utils.salesPlan.listWeeklyInputs.invalidate();
+
+  return (
+    <div>
+      <h2>Weekly Sales Plan</h2>
+      <table>
+        <thead><tr><th>Week</th><th>Revenue</th><th>Warehouse split</th><th>Recipe (units/1000€)</th><th></th></tr></thead>
+        <tbody>
+          {weeks.map((week) => (
+            <WeeklyPlanRow
+              key={week}
+              weekStartDate={week}
+              existing={inputsByWeek.get(week)}
+              skus={skusQuery.data}
+              warehouses={warehousesQuery.data}
+              onSaved={onSaved}
+            />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function StockPage() {
   const stockQuery = trpc.dashboards.stock.useQuery();
   const warehousesQuery = trpc.catalog.listWarehouses.useQuery();
@@ -177,6 +353,7 @@ export function StockPage() {
         </tbody>
       </table>
       <SalesPlanSection warehouseFilter={warehouseFilter} />
+      <WeeklySalesPlanSection />
     </div>
   );
 }
