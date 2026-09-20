@@ -32,7 +32,7 @@ try {
 
   // Construct the reconciliation deps with a getMigratedSoh function.
   const deps = {
-    getMigratedSoh: async (sku, warehouseCode) => {
+    getMigratedSoh: async (sku: string, warehouseCode: string) => {
       const skuId = skuByCode.get(sku);
       const warehouseId = warehouseByCode.get(warehouseCode);
       if (!skuId || !warehouseId) {
@@ -49,6 +49,7 @@ try {
   console.log(JSON.stringify(report, null, 2));
   process.exit(report.safeToCutOver ? 0 : 1);
 } catch (err) {
-  console.error("Parallel-run check failed:", err.message);
+  const message = err instanceof Error ? err.message : String(err);
+  console.error("Parallel-run check failed:", message);
   process.exit(1);
 }

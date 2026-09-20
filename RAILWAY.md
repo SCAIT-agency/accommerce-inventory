@@ -51,7 +51,7 @@ design spec's single-tenant-per-client model).
 
    ```bash
    RESET_USER_EMAIL=julian@accommerce.example RESET_USER_PASSWORD=a-new-password \
-     pnpm exec tsx scripts/reset-password.mjs
+     pnpm exec tsx scripts/reset-password.ts
    ```
 
    This also immediately invalidates every session that user currently has
@@ -66,7 +66,7 @@ design spec's single-tenant-per-client model).
    and one-time, not a bug, but worth telling whoever's on the other end of
    that deploy in advance.
 8. Add a Railway Cron Job (Railway → New → Cron Job) running nightly, command:
-   `pnpm exec tsx scripts/run-nightly-export.mjs` (a thin wrapper around
+   `pnpm exec tsx scripts/run-nightly-export.ts` (a thin wrapper around
    `runNightlyExport` — see `server/nightlyExport.ts`), writing to a Railway
    persistent volume mounted at `/data/exports`. Use `tsx`, not plain `node`
    — this repo's extensionless relative imports (`./dbClient`,
@@ -76,7 +76,7 @@ design spec's single-tenant-per-client model).
 ## One-time migration (when a real Control Tower export is ready)
 
 ```bash
-pnpm exec tsx scripts/run-migration.mjs <path-to-exported-sheet-data.json>
+pnpm exec tsx scripts/run-migration.ts <path-to-exported-sheet-data.json>
 ```
 
 Reads a JSON export file (with `ledgerRows`, `poRows`, `shipmentRows`, `paymentRows`, `transactionRows`, `sheetTotals`, and optional `landedCostTotals`) and runs the migration inside a single transaction. Exits 0 with a quarantine summary on success. Exits 1 and rolls back entirely if the reconciliation gate fails (no partial data left behind). Never run against production without first running the parallel-run check below for the agreed comparison period.
@@ -101,7 +101,7 @@ JSON shape:
 ## Daily parallel-run check (during the comparison period, before cutover)
 
 ```bash
-pnpm exec tsx scripts/run-parallel-check.mjs <path-to-todays-sheet-snapshot.json>
+pnpm exec tsx scripts/run-parallel-check.ts <path-to-todays-sheet-snapshot.json>
 ```
 
 Reads today's sheet snapshot (array of `{ sku, warehouseCode, sohFromSheet }`) and verifies that Control Tower's current balances match exactly for every SKU/warehouse pair. Exits 0 (safeToCutOver: true) only when all balances match. Exits 1 if any mismatch is found, printing the detailed report. Control Tower stays the live source of truth until this has passed for the agreed comparison period.
@@ -109,7 +109,7 @@ Reads today's sheet snapshot (array of `{ sku, warehouseCode, sohFromSheet }`) a
 ## Daily Shopify sales import
 
 ```bash
-pnpm exec tsx scripts/run-daily-shopify-pull.mjs <path-to-shopify-export.json>
+pnpm exec tsx scripts/run-daily-shopify-pull.ts <path-to-shopify-export.json>
 ```
 
 Idempotent — re-running for a day/SKU/warehouse combination already imported reports it as skipped (duplicate) rather than double-counting SOH depletion or COGS. Exits 0 even when rows are skipped (skipping is expected, not a failure); exits 1 only on a hard failure (missing file, malformed input, or an unexpected error).
