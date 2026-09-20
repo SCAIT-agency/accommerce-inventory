@@ -1,9 +1,31 @@
 import { useState } from "react";
 import { trpc } from "../lib/trpc";
 
+const REASON_CATEGORIES = [
+  "production_delay",
+  "artwork_delay",
+  "customs_hold",
+  "logistics_delay",
+  "payment_timing",
+  "vendor_price_change",
+  "freight_rate_change",
+  "holiday_capacity",
+  "other",
+] as const;
+type ReasonCategory = (typeof REASON_CATEGORIES)[number];
+
 function MatchTransactionRow({ transaction, unpaidPayments, onMatched }: { transaction: { id: number; amount: string; currency: string; date: Date; counterparty?: string | null }; unpaidPayments: Array<{ id: number; sequenceNo: number; expectedAmount: string; currency: string; poNumber: string | null }>; onMatched: () => void }) {
   const [selectedPaymentId, setSelectedPaymentId] = useState<string>("");
-  const matchTransaction = trpc.payments.matchTransaction.useMutation({ onSuccess: onMatched });
+  const [reasonCategory, setReasonCategory] = useState<ReasonCategory>("payment_timing");
+  const [reasonNote, setReasonNote] = useState("");
+  const matchTransaction = trpc.payments.matchTransaction.useMutation({
+    onSuccess: () => {
+      setSelectedPaymentId("");
+      setReasonNote("");
+      onMatched();
+    },
+  });
+  const noteRequired = reasonCategory === "other";
 
   return (
     <>
@@ -13,9 +35,22 @@ function MatchTransactionRow({ transaction, unpaidPayments, onMatched }: { trans
           <option key={p.id} value={p.id}>{p.poNumber ?? "no PO"} — #{p.sequenceNo} — {p.expectedAmount} {p.currency}</option>
         ))}
       </select>
+      <select value={reasonCategory} onChange={(e) => setReasonCategory(e.target.value as ReasonCategory)}>
+        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {noteRequired && (
+        <input placeholder="reason note (required)" value={reasonNote} onChange={(e) => setReasonNote(e.target.value)} />
+      )}
       <button
-        disabled={!selectedPaymentId || matchTransaction.isPending}
-        onClick={() => matchTransaction.mutate({ transactionId: transaction.id, paymentId: Number(selectedPaymentId) })}
+        disabled={!selectedPaymentId || (noteRequired && !reasonNote.trim()) || matchTransaction.isPending}
+        onClick={() =>
+          matchTransaction.mutate({
+            transactionId: transaction.id,
+            paymentId: Number(selectedPaymentId),
+            reasonCategory,
+            reasonNote: reasonNote.trim() || undefined,
+          })
+        }
       >
         Match
       </button>

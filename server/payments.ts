@@ -18,21 +18,23 @@ export async function createExpectedPayment(input: CreateExpectedPaymentInput, d
   return row;
 }
 
-export async function markPaymentPaid(
-  id: number,
-  opts: {
-    amount: string;
-    fxRate: string;
-    paidDate: Date;
-    reasonCategory: ReasonCategory;
-    reasonNote?: string;
-    changedBy: number;
-  },
-): Promise<Payment> {
-  const [before] = await db.select().from(payments).where(eq(payments.id, id));
+export interface MarkPaymentPaidOpts {
+  amount: string;
+  fxRate: string;
+  paidDate: Date;
+  reasonCategory: ReasonCategory;
+  reasonNote?: string;
+  changedBy: number;
+}
+
+async function markPaymentPaidCore(id: number, opts: MarkPaymentPaidOpts, dbClient: DbClient): Promise<Payment> {
+  const [before] = await dbClient.select().from(payments).where(eq(payments.id, id));
+  if (!before) {
+    throw new Error(`markPaymentPaid: no payment found with id ${id}`);
+  }
   const baseCurrencyAmount = (parseFloat(opts.amount) * parseFloat(opts.fxRate)).toFixed(2);
 
-  await db
+  await dbClient
     .update(payments)
     .set({
       paid: true,
@@ -52,7 +54,7 @@ export async function markPaymentPaid(
     reasonCategory: opts.reasonCategory,
     reasonNote: opts.reasonNote,
     changedBy: opts.changedBy,
-  });
+  }, dbClient);
   await logChange({
     entityType: "payment",
     entityId: id,
@@ -62,7 +64,7 @@ export async function markPaymentPaid(
     reasonCategory: opts.reasonCategory,
     reasonNote: opts.reasonNote,
     changedBy: opts.changedBy,
-  });
+  }, dbClient);
   await logChange({
     entityType: "payment",
     entityId: id,
@@ -72,10 +74,14 @@ export async function markPaymentPaid(
     reasonCategory: opts.reasonCategory,
     reasonNote: opts.reasonNote,
     changedBy: opts.changedBy,
-  });
+  }, dbClient);
 
-  const [row] = await db.select().from(payments).where(eq(payments.id, id));
+  const [row] = await dbClient.select().from(payments).where(eq(payments.id, id));
   return row;
+}
+
+export async function markPaymentPaid(id: number, opts: MarkPaymentPaidOpts): Promise<Payment> {
+  return db.transaction((tx) => markPaymentPaidCore(id, opts, tx));
 }
 
 export interface RecordTransactionInput {
@@ -93,26 +99,58 @@ export async function recordTransaction(input: RecordTransactionInput, dbClient:
   return row;
 }
 
-export async function matchTransactionToPayment(transactionId: number, paymentId: number): Promise<void> {
-  const [tx] = await db.select().from(transactions).where(eq(transactions.id, transactionId));
-  if (!tx) {
-    throw new Error(`matchTransactionToPayment: no transaction found with id ${transactionId}`);
-  }
-  const [existingMatch] = await db
-    .select()
-    .from(transactions)
-    .where(and(eq(transactions.matchedPaymentId, paymentId), ne(transactions.id, transactionId)));
-  if (existingMatch) {
-    throw new Error(
-      `matchTransactionToPayment: payment ${paymentId} is already matched to a different transaction (id ${existingMatch.id}) — cannot match transaction ${transactionId} to it`,
-    );
-  }
-  if (tx.matchedPaymentId !== null && tx.matchedPaymentId !== paymentId) {
-    throw new Error(
-      `transaction ${transactionId} is already matched to payment ${tx.matchedPaymentId} — cannot re-match to payment ${paymentId}`,
-    );
-  }
-  await db.update(transactions).set({ matchedPaymentId: paymentId }).where(eq(transactions.id, transactionId));
+export interface MatchTransactionOpts {
+  reasonCategory: ReasonCategory;
+  reasonNote?: string;
+  changedBy: number;
+}
+
+export async function matchTransactionToPayment(
+  transactionId: number,
+  paymentId: number,
+  opts: MatchTransactionOpts,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [txRow] = await tx.select().from(transactions).where(eq(transactions.id, transactionId));
+    if (!txRow) {
+      throw new Error(`matchTransactionToPayment: no transaction found with id ${transactionId}`);
+    }
+    const [existingMatch] = await tx
+      .select()
+      .from(transactions)
+      .where(and(eq(transactions.matchedPaymentId, paymentId), ne(transactions.id, transactionId)));
+    if (existingMatch) {
+      throw new Error(
+        `matchTransactionToPayment: payment ${paymentId} is already matched to a different transaction (id ${existingMatch.id}) — cannot match transaction ${transactionId} to it`,
+      );
+    }
+    if (txRow.matchedPaymentId !== null && txRow.matchedPaymentId !== paymentId) {
+      throw new Error(
+        `transaction ${transactionId} is already matched to payment ${txRow.matchedPaymentId} — cannot re-match to payment ${paymentId}`,
+      );
+    }
+
+    await tx.update(transactions).set({ matchedPaymentId: paymentId }).where(eq(transactions.id, transactionId));
+
+    const [payment] = await tx.select().from(payments).where(eq(payments.id, paymentId));
+    if (!payment) {
+      throw new Error(`matchTransactionToPayment: no payment found with id ${paymentId}`);
+    }
+    if (!payment.paid) {
+      await markPaymentPaidCore(
+        paymentId,
+        {
+          amount: txRow.amount,
+          fxRate: txRow.fxRate,
+          paidDate: txRow.date,
+          reasonCategory: opts.reasonCategory,
+          reasonNote: opts.reasonNote,
+          changedBy: opts.changedBy,
+        },
+        tx,
+      );
+    }
+  });
 }
 
 export async function listUnmatchedTransactions(): Promise<Transaction[]> {

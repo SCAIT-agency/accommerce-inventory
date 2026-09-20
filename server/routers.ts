@@ -213,8 +213,19 @@ export const appRouter = router({
       }))
       .mutation(({ input }) => recordTransaction(input)),
     matchTransaction: editorProcedure
-      .input(z.object({ transactionId: z.number(), paymentId: z.number() }))
-      .mutation(({ input }) => matchTransactionToPayment(input.transactionId, input.paymentId)),
+      .input(z.object({
+        transactionId: z.number(),
+        paymentId: z.number(),
+        reasonCategory: reasonCategorySchema,
+        reasonNote: z.string().optional(),
+      }))
+      .mutation(({ input, ctx }) =>
+        matchTransactionToPayment(input.transactionId, input.paymentId, {
+          reasonCategory: input.reasonCategory,
+          reasonNote: input.reasonNote,
+          changedBy: ctx.user.id,
+        }),
+      ),
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("payment", input)),
   }),
   salesPlan: router({
