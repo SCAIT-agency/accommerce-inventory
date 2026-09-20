@@ -134,6 +134,10 @@ describe("inventory ledger", () => {
 
     const result = await getSohForSkus([skuA.id, skuB.id, skuC.id]);
 
+    // arrayContaining (order-agnostic, since MySQL never guarantees GROUP BY
+    // row order) plus an explicit length check — arrayContaining alone
+    // wouldn't catch a spurious extra warehouse entry for skuA.
+    expect(result.get(skuA.id)).toHaveLength(2);
     expect(result.get(skuA.id)).toEqual(
       expect.arrayContaining([
         { warehouseId: ff.id, soh: 1000 },

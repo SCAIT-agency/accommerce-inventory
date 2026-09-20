@@ -104,6 +104,23 @@ export async function getPlanActualDeviation(skuId: number, warehouseId: number,
  * this day minus cost up to the day before" subtraction did, since by the
  * time a forward pass reaches a given day, the batches remaining are exactly
  * what "up to the day before" already implied.
+ *
+ * Two caveats on "exactly the same": (1) failure behavior is very slightly
+ * different — the old per-day approach silently returned 0 for a day with no
+ * sales at all, which could mask a genuine insufficient-stock condition
+ * elsewhere in history; this single-pass version will surface that as a
+ * thrown error instead, which is more correct, not a regression, but is a
+ * real behavior change. (2) the two are numerically equivalent but not
+ * literally bit-for-bit identical for a long history, since floating-point
+ * accumulation order differs (direct running total here vs. subtracting two
+ * large cumulative sums before) — this version's order is less
+ * cancellation-prone, not less precise.
+ *
+ * `dateKeys` must be sorted ascending (the query's upper bound is derived
+ * from its last element) and contain no duplicates — enumerateDateStrings,
+ * this function's only caller, already guarantees both; an out-of-order or
+ * duplicate array won't throw, it will just silently produce a wrong
+ * per-day breakdown for the affected date(s).
  */
 export async function getDailyCogsForRange(skuId: number, warehouseId: number, dateKeys: string[]): Promise<{ date: string; cogs: number }[]> {
   if (dateKeys.length === 0) return [];

@@ -92,6 +92,83 @@ describe("getShipmentLandedUnitCost", () => {
     expect(result).toEqual([{ skuId: sku.id, landedUnitCost: (150 + 20.0 + 1000 * 0.15) / 1000 }]);
   });
 
+  it("computes correct per-line landed cost for multiple line items from one batched PO-line query, not one query per line", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const skuA = await createSku({ sku: "JELLO-MULTI-A", primaryIdentifierType: "sku" });
+    const skuB = await createSku({ sku: "JELLO-MULTI-B", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [
+        { skuId: skuA.id, qty: 1000, unitPrice: "0.15", currency: "EUR" },
+        { skuId: skuB.id, qty: 500, unitPrice: "0.30", currency: "EUR" },
+      ],
+      createdBy: 1,
+    });
+    const poLines = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+    const lineA = poLines.find((l) => l.skuId === skuA.id)!;
+    const lineB = poLines.find((l) => l.skuId === skuB.id)!;
+
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container3",
+      lineItems: [
+        { poLineItemId: lineA.id, skuId: skuA.id, qty: 1000, weightShare: "0.6", valueShare: "0.6" },
+        { poLineItemId: lineB.id, skuId: skuB.id, qty: 500, weightShare: "0.4", valueShare: "0.4" },
+      ],
+      createdBy: 1,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "150.00", dutyCost: "20.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+
+    const result = await getShipmentLandedUnitCost(shipment.id);
+
+    const resultA = result.find((r) => r.skuId === skuA.id);
+    const resultB = result.find((r) => r.skuId === skuB.id);
+    // A: (1000*0.15 EXW + 150*0.6 freight + 20*0.6 duty) / 1000
+    expect(resultA?.landedUnitCost).toBeCloseTo((1000 * 0.15 + 150 * 0.6 + 20 * 0.6) / 1000, 6);
+    // B: (500*0.30 EXW + 150*0.4 freight + 20*0.4 duty) / 500
+    expect(resultB?.landedUnitCost).toBeCloseTo((500 * 0.3 + 150 * 0.4 + 20 * 0.4) / 500, 6);
+  });
+
+  it("throws a clear error instead of crashing when a shipment line item references a PO line item that doesn't exist", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "EUR" }],
+      createdBy: 1,
+    });
+    const [lineItem] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container4",
+      lineItems: [{ poLineItemId: lineItem.id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: 1,
+    });
+    // Delete the PO line item the shipment line still references — an
+    // orphaned FK shouldn't be possible via the app's own mutations, but the
+    // lookup must fail loudly with a clear message rather than crash on an
+    // undefined PO line if it ever happens (e.g. bad migrated data).
+    // Bypassing the FK constraint here is the only way to construct this
+    // otherwise-impossible-via-the-app state to test the defensive check.
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
+      try {
+        await tx.delete(poLineItems).where(eq(poLineItems.id, lineItem.id));
+      } finally {
+        await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
+      }
+    });
+
+    await expect(getShipmentLandedUnitCost(shipment.id)).rejects.toThrow(
+      new RegExp(`no PO line item found with id ${lineItem.id}`),
+    );
+  });
+
   it("throws instead of dividing by zero when a shipment line item has qty 0", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });

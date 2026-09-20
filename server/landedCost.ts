@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems } from "../drizzle/schema";
 
@@ -69,12 +69,26 @@ export async function getShipmentLandedUnitCost(
   const freightCost = parseFloat(shipment.freightCost ?? "0");
   const dutyCost = parseFloat(shipment.dutyCost ?? "0");
 
+  // One query for every line's PO line item, instead of one query per line —
+  // this is bounded by a single shipment's own line count (not SKU count
+  // across the whole catalog), but it's the same N+1 shape the rest of this
+  // stream closed elsewhere, and it's reachable from a dashboard.
+  const poLineIds = lines.map((line) => line.poLineItemId);
+  const poLinesById = new Map(
+    poLineIds.length === 0
+      ? []
+      : (await db.select().from(poLineItems).where(inArray(poLineItems.id, poLineIds))).map((pl) => [pl.id, pl]),
+  );
+
   const results = [];
   for (const line of lines) {
     if (line.qty <= 0) {
       throw new Error(`shipment line item ${line.id} has invalid qty ${line.qty}, cannot compute landed unit cost`);
     }
-    const [poLine] = await db.select().from(poLineItems).where(eq(poLineItems.id, line.poLineItemId));
+    const poLine = poLinesById.get(line.poLineItemId);
+    if (!poLine) {
+      throw new Error(`getShipmentLandedUnitCost: no PO line item found with id ${line.poLineItemId} (shipment ${shipmentId}, line item ${line.id})`);
+    }
     if (shipment.costCurrency != null && poLine.currency !== shipment.costCurrency) {
       throw new Error(
         `getShipmentLandedUnitCost: currency mismatch on shipment ${shipmentId}, line item ${line.id} — ` +
