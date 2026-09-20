@@ -2,7 +2,7 @@
 
 Source: the final whole-branch review after V1's 20 tasks (see [`BUILD-HISTORY.md`](./BUILD-HISTORY.md)), plus the deferred-minor triage that review ran against everything parked during the build. Every item here is a real finding, not a guess — each was independently verified against the actual code, not just asserted.
 
-Grouped into six work streams (A–F). Recommended order: **B → A → E → C → D**, with F riding along with whichever other stream touches the same files. Reasoning: B and A are what make the system honestly comparable against Control Tower during the parallel run; C and D matter most once real client staff and real data volume show up, which comes after that. **B, A, and E are done** — C is next.
+Grouped into six work streams (A–F). Recommended order: **B → A → E → C → D**, with F riding along with whichever other stream touches the same files. Reasoning: B and A are what make the system honestly comparable against Control Tower during the parallel run; C and D matter most once real client staff and real data volume show up, which comes after that. **B, A, E, and C are done** — D is next.
 
 Status legend: ✅ done · ⬜ open
 
@@ -42,14 +42,24 @@ Preparatory hardening only — **not** a real migration against real Jello/Accom
 - ⬜ `run-migration.mjs` doesn't validate the input JSON's shape before use (a missing key produces a raw `Cannot read properties of undefined` reported as a generic failure).
 - ⬜ `run-parallel-check.mjs`'s `getMigratedSoh` returns `0` for a completely unknown SKU/warehouse, which reads as "clean match" for a sheet row that also expects 0 rather than as "this SKU doesn't exist in the migrated DB at all" — a real gap vs. an empty one look the same.
 
-## C. Security hardening
+## C. Security hardening — ✅ DONE (2026-09-20, see [`BUILD-HISTORY.md`](./BUILD-HISTORY.md) for the full build/review narrative)
 
-Matters most once anyone other than Artem is actually operating the deployed instance.
+- ✅ **The role split is now a real access boundary.** The shared `APP_PASSWORD` identity-picker flow is retired; real per-user credentials (`users.passwordHash`) mean each of the SCAIT editor and client viewer accounts can only ever authenticate as themselves.
+- ✅ **Session revocation via a `tokenVersion` counter.** Session lifetime dropped from 365 days to 30; a session JWT is checked against the user row's `tokenVersion` on every use, so sign-out or a password reset invalidates it immediately rather than leaving a captured token valid for a year.
+- ✅ **A real sign-out control** exists in the UI and calls `POST /api/auth/logout`, which bumps `tokenVersion` server-side (not just clearing the browser cookie).
+- ✅ **Per-email login throttle** (`server/_core/loginThrottle.ts`) — 5 failed attempts locks an email out for 15 minutes.
+- ✅ Provisioning has a real, documented path: `scripts/seed-first-user.ts` for the first user, `scripts/resetPassword.ts`/`scripts/reset-password.mjs` for a lost password.
+- ✅ The final whole-branch review of this stream found and fixed 1 Critical + 4 Important issues: the Critical was the login throttle keying its lockout on the raw, case-sensitive email string, letting an attacker bypass the 5-attempt limit entirely via case permutation of the same address (fixed by normalizing every email to lowercase, consistently, at every lookup/storage point); the four Important fixes were an unbounded-growth memory-exhaustion path in the throttle's tracking map, missing anti-enumeration/cookie-attribute HTTP-level test coverage, silent (unlogged) catch blocks on all three auth routes, and this backlog/README documentation lagging the actual shipped state.
 
-- ⬜ **The role split isn't a real access boundary.** One shared `APP_PASSWORD` gates the identity list; anyone who knows it can select the `editor` identity and get full write access. The spec's intent (editor = the one SCAIT account with write access, viewer = client-side read-only) is expressible in the schema but not enforced by the login flow as built.
-- ⬜ **Year-long session tokens, no revocation.** `SESSION_COOKIE` lives 365 days with no `jti`/blocklist; `POST /api/auth/logout` only clears the client cookie, so a captured token stays valid for a year regardless.
-- ⬜ **No sign-out UI.** `/api/auth/logout` exists server-side; nothing in the client calls it. Combined with the year-long token and multi-identity design, there's no in-app way to switch identity or sign out on a shared machine.
-- ⬜ Hand-rolled auth on top of `jose` — the spec's stated intent was "a standard session-based library (not built in-house)." Worth a deliberate decision on whether to replace it or explicitly accept the current approach.
+**New, smaller items surfaced by Stream C's own build — genuinely deferred, not silently dropped:**
+- ⬜ The 30-day session lifetime is declared as two independent constants (`server/_core/auth.ts`'s `THIRTY_DAYS_MS`, `server/_core/cookies.ts`'s `maxAge` literal) with nothing tying them together — they agree today but nothing prevents future drift. A single shared exported constant would close this.
+- ⬜ `/api/auth/status` returns `{authenticated:false}` on a transient DB error, indistinguishable from a real logout from the client's perspective — a distinct response (e.g. a 503) would let the client show "temporarily unavailable" instead of silently bouncing a signed-in user to `/login`.
+- ⬜ `main.tsx`'s `RequireAuth` checks auth status once on mount, not on every subsequent request — after this stream made mid-session revocation a real, expected event (logout elsewhere, a password reset), a revoked session renders "Failed to load: UNAUTHORIZED" on every guarded page instead of redirecting to `/login`, until the user navigates in a way that remounts the guard.
+- ⬜ `queryClient` (react-query) isn't cleared on sign-out, so a shared machine's next signed-in user briefly sees the previous user's cached dashboard data before the first refetch completes. Immaterial today (all roles see identical data), but sign-out on a shared machine is exactly the scenario this stream added.
+- ⬜ `LoginPage.tsx`'s email/password inputs have no `autoComplete` hints, so password managers won't reliably offer to save/fill a per-user credential now that one exists.
+- ⬜ `scripts/resetPassword.ts` is camelCase while the rest of `scripts/` is kebab-case — a naming inconsistency, not a functional issue.
+- ⬜ `server/_core/env.test.ts` still uses the `?t=${Date.now()}` cache-busting import suffix that `auth.test.ts` correctly dropped this stream (the sole source of the two harmless `vite:dynamic-import-vars` warnings on every test run) — see the existing `F. Cleanup` section, item 5, for the same underlying pattern.
+- ⬜ `RAILWAY.md` doesn't warn that deploying this stream logs out every pre-existing session at once (old JWTs carry no `tokenVersion` claim, which never matches a real user row's value) — worth a callout in the deploy runbook so whoever deploys it isn't surprised.
 
 ## D. Performance
 
