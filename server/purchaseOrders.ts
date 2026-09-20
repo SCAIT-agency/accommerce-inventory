@@ -57,20 +57,25 @@ export async function updatePurchaseOrderStatus(
   newStatus: (typeof PO_STATUSES)[number],
   opts: { reasonCategory?: ReasonCategory; reasonNote?: string; changedBy: number },
 ) {
-  const [po] = await db.select().from(purchaseOrders).where(eq(purchaseOrders.id, id));
-  if (!VALID_TRANSITIONS[po.status].includes(newStatus)) {
-    throw new Error(`invalid transition from ${po.status} to ${newStatus}`);
-  }
-  await db.update(purchaseOrders).set({ status: newStatus }).where(eq(purchaseOrders.id, id));
-  await logChange({
-    entityType: "purchase_order",
-    entityId: id,
-    field: "status",
-    oldValue: po.status,
-    newValue: newStatus,
-    reasonCategory: opts.reasonCategory,
-    reasonNote: opts.reasonNote,
-    changedBy: opts.changedBy,
+  await db.transaction(async (tx) => {
+    const [po] = await tx.select().from(purchaseOrders).where(eq(purchaseOrders.id, id));
+    if (!po) {
+      throw new Error(`updatePurchaseOrderStatus: no purchase order found with id ${id}`);
+    }
+    if (!VALID_TRANSITIONS[po.status].includes(newStatus)) {
+      throw new Error(`invalid transition from ${po.status} to ${newStatus}`);
+    }
+    await tx.update(purchaseOrders).set({ status: newStatus }).where(eq(purchaseOrders.id, id));
+    await logChange({
+      entityType: "purchase_order",
+      entityId: id,
+      field: "status",
+      oldValue: po.status,
+      newValue: newStatus,
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
   });
 }
 
@@ -79,16 +84,21 @@ export async function updatePurchaseOrderPlannedReadyDate(
   newDate: string,
   opts: { reasonCategory: ReasonCategory; reasonNote?: string; changedBy: number },
 ) {
-  const [po] = await db.select().from(purchaseOrders).where(eq(purchaseOrders.id, id));
-  await db.update(purchaseOrders).set({ plannedReadyDate: newDate }).where(eq(purchaseOrders.id, id));
-  await logChange({
-    entityType: "purchase_order",
-    entityId: id,
-    field: "plannedReadyDate",
-    oldValue: po.plannedReadyDate ?? null,
-    newValue: newDate,
-    reasonCategory: opts.reasonCategory,
-    reasonNote: opts.reasonNote,
-    changedBy: opts.changedBy,
+  await db.transaction(async (tx) => {
+    const [po] = await tx.select().from(purchaseOrders).where(eq(purchaseOrders.id, id));
+    if (!po) {
+      throw new Error(`updatePurchaseOrderPlannedReadyDate: no purchase order found with id ${id}`);
+    }
+    await tx.update(purchaseOrders).set({ plannedReadyDate: newDate }).where(eq(purchaseOrders.id, id));
+    await logChange({
+      entityType: "purchase_order",
+      entityId: id,
+      field: "plannedReadyDate",
+      oldValue: po.plannedReadyDate ?? null,
+      newValue: newDate,
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
   });
 }

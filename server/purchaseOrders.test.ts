@@ -97,4 +97,16 @@ describe("purchase orders", () => {
     expect(po.status).toBe("draft");
     expect(po.vendorReference).toBeNull();
   });
+
+  it("rejects updating the status of a nonexistent purchase order with a clear error", async () => {
+    await expect(
+      updatePurchaseOrderStatus(999999, "confirmed", { changedBy: 1 }),
+    ).rejects.toThrow(/no purchase order found/);
+  });
+
+  it("rejects updating the planned ready date of a nonexistent purchase order with a clear error", async () => {
+    await expect(
+      updatePurchaseOrderPlannedReadyDate(999999, "2026-10-01", { reasonCategory: "logistics_delay", changedBy: 1 }),
+    ).rejects.toThrow(/no purchase order found/);
+  });
 });
