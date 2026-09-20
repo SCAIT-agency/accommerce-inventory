@@ -8,7 +8,7 @@ import { getCashflowForecast } from "./cashflow";
 import { getDailyCogsForRange } from "./salesPlan";
 import { getShipmentLandedUnitCost } from "./landedCost";
 
-function enumerateDateStrings(from: Date, to: Date): string[] {
+export function enumerateDateStrings(from: Date, to: Date): string[] {
   const dates: string[] = [];
   const cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
   const end = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()));

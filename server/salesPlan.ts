@@ -1,7 +1,8 @@
-import { and, between, desc, eq, lte } from "drizzle-orm";
+import { and, between, desc, eq, inArray, lte } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
-import { salesPlan, salesActuals, inventoryLedger } from "../drizzle/schema";
+import { salesPlan, salesActuals, inventoryLedger, salesPlanWeeklyInputs, salesPlanWeeklyRecipeLines } from "../drizzle/schema";
 import { recordLedgerEvent } from "./inventoryLedger";
+import { enumerateDateStrings } from "./dashboards";
 import type { LandedBatch, SaleEvent } from "./landedCost";
 
 export interface CreateSalesPlanEntryInput {
@@ -168,4 +169,125 @@ export async function getDailyCogsForRange(skuId: number, warehouseId: number, d
   }
 
   return dateKeys.map((date) => ({ date, cogs: dailyCogs.get(date)! }));
+}
+
+export async function regenerateSalesPlanForWeek(weekStartDate: string, dbClient: DbClient = db): Promise<void> {
+  const [weekInput] = await dbClient.select().from(salesPlanWeeklyInputs).where(eq(salesPlanWeeklyInputs.weekStartDate, weekStartDate));
+  if (!weekInput) {
+    throw new Error(`regenerateSalesPlanForWeek: no weekly input found for week starting ${weekStartDate}`);
+  }
+
+  const weekStart = new Date(weekStartDate);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
+  const weekDates = enumerateDateStrings(weekStart, weekEnd);
+  const lastDayOfWeek = weekDates[weekDates.length - 1];
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (lastDayOfWeek < todayStr) {
+    throw new Error(`regenerateSalesPlanForWeek: week starting ${weekStartDate} is entirely in the past — planning only applies to the current week or later`);
+  }
+
+  const recipeLines = await dbClient.select().from(salesPlanWeeklyRecipeLines).where(eq(salesPlanWeeklyRecipeLines.weeklyInputId, weekInput.id));
+  const dailyRevenue = parseFloat(weekInput.plannedRevenue) / 7;
+  const primaryPct = parseFloat(weekInput.primaryPercent) / 100;
+
+  const rowsToInsert: { skuId: number; warehouseId: number; periodDate: string; plannedQty: number }[] = [];
+  const skuIds = recipeLines.map((line) => line.skuId);
+
+  for (const date of weekDates) {
+    for (const line of recipeLines) {
+      const rawUnits = (dailyRevenue / 1000) * parseFloat(line.unitsPer1000);
+      const totalUnitsRounded = Math.round(rawUnits);
+      const primaryUnits = Math.round(totalUnitsRounded * primaryPct);
+      const secondaryUnits = totalUnitsRounded - primaryUnits;
+      rowsToInsert.push({ skuId: line.skuId, warehouseId: weekInput.primaryWarehouseId, periodDate: date, plannedQty: primaryUnits });
+      rowsToInsert.push({ skuId: line.skuId, warehouseId: weekInput.secondaryWarehouseId, periodDate: date, plannedQty: secondaryUnits });
+    }
+  }
+
+  if (skuIds.length > 0) {
+    await dbClient.delete(salesPlan).where(and(
+      inArray(salesPlan.skuId, skuIds),
+      inArray(salesPlan.warehouseId, [weekInput.primaryWarehouseId, weekInput.secondaryWarehouseId]),
+      between(salesPlan.periodDate, weekStartDate, lastDayOfWeek),
+    ));
+  }
+  if (rowsToInsert.length > 0) {
+    await dbClient.insert(salesPlan).values(rowsToInsert);
+  }
+}
+
+export interface UpsertWeeklyInputInput {
+  weekStartDate: string;
+  plannedRevenue: string;
+  primaryWarehouseId: number;
+  primaryPercent: string;
+  secondaryWarehouseId: number;
+  recipeLines: { skuId: number; unitsPer1000: string }[];
+}
+
+export async function upsertWeeklyInput(input: UpsertWeeklyInputInput): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(salesPlanWeeklyInputs)
+      .values({
+        weekStartDate: input.weekStartDate,
+        plannedRevenue: input.plannedRevenue,
+        primaryWarehouseId: input.primaryWarehouseId,
+        primaryPercent: input.primaryPercent,
+        secondaryWarehouseId: input.secondaryWarehouseId,
+      })
+      .onDuplicateKeyUpdate({
+        set: {
+          plannedRevenue: input.plannedRevenue,
+          primaryWarehouseId: input.primaryWarehouseId,
+          primaryPercent: input.primaryPercent,
+          secondaryWarehouseId: input.secondaryWarehouseId,
+        },
+      });
+    const [weekInput] = await tx.select().from(salesPlanWeeklyInputs).where(eq(salesPlanWeeklyInputs.weekStartDate, input.weekStartDate));
+
+    // regenerateSalesPlanForWeek only clears sales_plan rows for SKUs in the
+    // recipe it's given — it has no way to know a SKU used to be in this
+    // week's recipe and no longer is, since the old lines are gone by the
+    // time it reads them. Capture what's being removed here, before the
+    // wholesale replace, so those SKUs' now-stale rows can be cleaned up too.
+    const previousRecipeLines = await tx.select().from(salesPlanWeeklyRecipeLines).where(eq(salesPlanWeeklyRecipeLines.weeklyInputId, weekInput.id));
+    const newSkuIds = new Set(input.recipeLines.map((line) => line.skuId));
+    const removedSkuIds = previousRecipeLines.map((line) => line.skuId).filter((skuId) => !newSkuIds.has(skuId));
+
+    await tx.delete(salesPlanWeeklyRecipeLines).where(eq(salesPlanWeeklyRecipeLines.weeklyInputId, weekInput.id));
+    if (input.recipeLines.length > 0) {
+      await tx.insert(salesPlanWeeklyRecipeLines).values(
+        input.recipeLines.map((line) => ({ weeklyInputId: weekInput.id, skuId: line.skuId, unitsPer1000: line.unitsPer1000 })),
+      );
+    }
+
+    await regenerateSalesPlanForWeek(input.weekStartDate, tx);
+
+    if (removedSkuIds.length > 0) {
+      const weekStart = new Date(input.weekStartDate);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
+      const weekDates = enumerateDateStrings(weekStart, weekEnd);
+      await tx.delete(salesPlan).where(and(
+        inArray(salesPlan.skuId, removedSkuIds),
+        inArray(salesPlan.warehouseId, [weekInput.primaryWarehouseId, weekInput.secondaryWarehouseId]),
+        between(salesPlan.periodDate, input.weekStartDate, weekDates[weekDates.length - 1]),
+      ));
+    }
+  });
+}
+
+export async function listWeeklyInputs(from: string, to: string): Promise<(typeof salesPlanWeeklyInputs.$inferSelect & { recipeLines: (typeof salesPlanWeeklyRecipeLines.$inferSelect)[] })[]> {
+  const weekInputs = await db.select().from(salesPlanWeeklyInputs).where(between(salesPlanWeeklyInputs.weekStartDate, from, to));
+  if (weekInputs.length === 0) return [];
+
+  const weekInputIds = weekInputs.map((w) => w.id);
+  const allRecipeLines = await db.select().from(salesPlanWeeklyRecipeLines).where(inArray(salesPlanWeeklyRecipeLines.weeklyInputId, weekInputIds));
+
+  return weekInputs.map((weekInput) => ({
+    ...weekInput,
+    recipeLines: allRecipeLines.filter((line) => line.weeklyInputId === weekInput.id),
+  }));
 }
