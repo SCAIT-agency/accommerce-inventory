@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { salesPlan, salesActuals, inventoryLedger, skus, warehouses, salesPlanWeeklyInputs, salesPlanWeeklyRecipeLines } from "../drizzle/schema";
 import {
@@ -394,6 +394,39 @@ describe("sales plan/actuals", () => {
       expect(rowsA).toHaveLength(0);
       const rowsB = await db.select().from(salesPlan).where(eq(salesPlan.skuId, skuB.id));
       expect(rowsB).toHaveLength(14);
+    });
+
+    it("cleans up stale rows under the OLD warehouse pair when a save reassigns warehouses but keeps the same SKU", async () => {
+      const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+      const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+      const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
+      const otherPrimary = await createWarehouse({ code: "FF-FR", name: "Fulfillment FR" });
+      const otherSecondary = await createWarehouse({ code: "MUTUAL-AT", name: "Mutual AT" });
+
+      await upsertWeeklyInput({
+        weekStartDate: "2026-10-05", plannedRevenue: "70000.00", primaryWarehouseId: ff.id, primaryPercent: "70.00", secondaryWarehouseId: mutual.id,
+        recipeLines: [{ skuId: sku.id, unitsPer1000: "5" }],
+      });
+      await upsertWeeklyInput({
+        weekStartDate: "2026-10-05", plannedRevenue: "70000.00", primaryWarehouseId: otherPrimary.id, primaryPercent: "70.00", secondaryWarehouseId: otherSecondary.id,
+        recipeLines: [{ skuId: sku.id, unitsPer1000: "5" }],
+      });
+
+      // The SKU never left the recipe — only the warehouse pair changed —
+      // so its old rows under (ff, mutual) must still be cleaned up instead
+      // of sitting alongside the fresh rows under the new pair (which would
+      // double-count the SKU across two warehouses).
+      const rowsUnderOldPair = await db.select().from(salesPlan).where(and(
+        eq(salesPlan.skuId, sku.id),
+        inArray(salesPlan.warehouseId, [ff.id, mutual.id]),
+      ));
+      expect(rowsUnderOldPair).toHaveLength(0);
+
+      const rowsUnderNewPair = await db.select().from(salesPlan).where(and(
+        eq(salesPlan.skuId, sku.id),
+        inArray(salesPlan.warehouseId, [otherPrimary.id, otherSecondary.id]),
+      ));
+      expect(rowsUnderNewPair).toHaveLength(14);
     });
 
     it("rejects saving a week that has already fully elapsed", async () => {
