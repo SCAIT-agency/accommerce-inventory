@@ -72,7 +72,7 @@ describe("shipments", () => {
       createdBy: userId,
     });
     const withItems = await getShipmentWithLineItems(shipment.id);
-    expect(withItems.lineItems[0].weightShare).toBe("0.5");
+    expect(withItems.lineItems[0].weightShare).toBe("0.500000");
   });
 
   it("records freight/duty cost on a shipment for later per-line landed-cost allocation", async () => {
@@ -82,7 +82,7 @@ describe("shipments", () => {
       { freightCost: "4200.00", dutyCost: "980.00", costCurrency: "EUR" },
       { reasonCategory: "freight_rate_change", changedBy: userId },
     );
-    expect(updated.freightCost).toBe("4200.00");
+    expect(updated.freightCost).toBe("4200.0000");
     expect(updated.costCurrency).toBe("EUR");
   });
 
@@ -160,8 +160,8 @@ describe("shipments", () => {
       createdBy: userId,
     });
     const withItems = await getShipmentWithLineItems(shipment.id);
-    expect(withItems.freightCost).toBe("4200.00");
-    expect(withItems.dutyCost).toBe("980.00");
+    expect(withItems.freightCost).toBe("4200.0000");
+    expect(withItems.dutyCost).toBe("980.0000");
     expect(withItems.costCurrency).toBe("EUR");
   });
 

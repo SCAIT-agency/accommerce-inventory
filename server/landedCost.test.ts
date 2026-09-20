@@ -226,7 +226,7 @@ describe("getShipmentLandedUnitCost", () => {
     await expect(getShipmentLandedUnitCost(shipment.id)).rejects.toThrow(/invalid qty/);
   });
 
-  it("rejects a non-numeric weightShare instead of silently computing NaN", async () => {
+  it("rejects a non-numeric weightShare at write time, since the column is now decimal", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
     const po = await createPurchaseOrder({
@@ -237,19 +237,20 @@ describe("getShipmentLandedUnitCost", () => {
     });
     const [lineItem] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
-    const shipment = await createShipment({
-      shipmentRef: "PO1-W4-Container2",
-      warehouseId: ff.id,
-      lineItems: [{ poLineItemId: lineItem.id, skuId: sku.id, qty: 1000, weightShare: "abc", valueShare: "1.0" }],
-      createdBy: userId,
-    });
-    await recordShipmentCosts(
-      shipment.id,
-      { freightCost: "150.00", dutyCost: "20.00", costCurrency: "EUR" },
-      { reasonCategory: "freight_rate_change", changedBy: userId },
-    );
 
-    await expect(getShipmentLandedUnitCost(shipment.id)).rejects.toThrow(/invalid weightShare/);
+    // weightShare/valueShare became `decimal` columns (varchar -> decimal
+    // migration), so MySQL itself now rejects a non-numeric value at insert
+    // time -- the app-level guard in getShipmentLandedUnitCost that this test
+    // used to exercise is unreachable for this case now that the schema is
+    // the guard.
+    await expect(
+      createShipment({
+        shipmentRef: "PO1-W4-Container2",
+        warehouseId: ff.id,
+        lineItems: [{ poLineItemId: lineItem.id, skuId: sku.id, qty: 1000, weightShare: "abc", valueShare: "1.0" }],
+        createdBy: userId,
+      }),
+    ).rejects.toThrow();
   });
 
   it("rejects a shipment whose line items' weightShare doesn't sum to 1, instead of silently over- or under-allocating freight", async () => {

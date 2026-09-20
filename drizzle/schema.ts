@@ -1,5 +1,5 @@
 import { sql, type SQL } from "drizzle-orm";
-import { date, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index, unique, foreignKey } from "drizzle-orm/mysql-core";
+import { date, decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index, unique, foreignKey } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -132,7 +132,7 @@ export const poLineItems = mysqlTable("po_line_items", {
   poId: int("poId").notNull().references(() => purchaseOrders.id),
   skuId: int("skuId").notNull().references(() => skus.id),
   qty: int("qty").notNull(),
-  unitPrice: varchar("unitPrice", { length: 32 }).notNull(),
+  unitPrice: decimal("unitPrice", { precision: 18, scale: 4, mode: "string" }).notNull(),
   currency: varchar("currency", { length: 8 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
@@ -156,8 +156,8 @@ export const shipments = mysqlTable("shipments", {
   /** Total freight/duty for the whole shipment, in `costCurrency` — allocated to
    * individual SKU lines via each shipment_line_items row's weightShare/valueShare.
    * Nullable: not every shipment has a real invoice yet at creation time. */
-  freightCost: varchar("freightCost", { length: 32 }),
-  dutyCost: varchar("dutyCost", { length: 32 }),
+  freightCost: decimal("freightCost", { precision: 18, scale: 4, mode: "string" }),
+  dutyCost: decimal("dutyCost", { precision: 18, scale: 4, mode: "string" }),
   costCurrency: varchar("costCurrency", { length: 8 }),
   createdBy: int("createdBy").notNull().references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -171,8 +171,8 @@ export const shipmentLineItems = mysqlTable("shipment_line_items", {
   poLineItemId: int("poLineItemId").notNull().references(() => poLineItems.id),
   skuId: int("skuId").notNull().references(() => skus.id),
   qty: int("qty").notNull(),
-  weightShare: varchar("weightShare", { length: 16 }).notNull(),
-  valueShare: varchar("valueShare", { length: 16 }).notNull(),
+  weightShare: decimal("weightShare", { precision: 9, scale: 6, mode: "string" }).notNull(),
+  valueShare: decimal("valueShare", { precision: 9, scale: 6, mode: "string" }).notNull(),
 });
 export type ShipmentLineItem = typeof shipmentLineItems.$inferSelect;
 
@@ -183,14 +183,14 @@ export const payments = mysqlTable(
     poId: int("poId").references(() => purchaseOrders.id),
     shipmentId: int("shipmentId").references(() => shipments.id),
     sequenceNo: int("sequenceNo").notNull(),
-    expectedAmount: varchar("expectedAmount", { length: 32 }).notNull(),
+    expectedAmount: decimal("expectedAmount", { precision: 18, scale: 4, mode: "string" }).notNull(),
     expectedDate: timestamp("expectedDate").notNull(),
     currency: varchar("currency", { length: 8 }).notNull(),
     paid: boolean("paid").default(false).notNull(),
-    paidAmount: varchar("paidAmount", { length: 32 }),
+    paidAmount: decimal("paidAmount", { precision: 18, scale: 4, mode: "string" }),
     paidDate: timestamp("paidDate"),
-    fxRate: varchar("fxRate", { length: 16 }),
-    baseCurrencyAmount: varchar("baseCurrencyAmount", { length: 32 }),
+    fxRate: decimal("fxRate", { precision: 12, scale: 6, mode: "string" }),
+    baseCurrencyAmount: decimal("baseCurrencyAmount", { precision: 18, scale: 4, mode: "string" }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => ({
@@ -202,9 +202,9 @@ export type Payment = typeof payments.$inferSelect;
 export const transactions = mysqlTable("transactions", {
   id: int("id").autoincrement().primaryKey(),
   date: timestamp("date").notNull(),
-  amount: varchar("amount", { length: 32 }).notNull(),
+  amount: decimal("amount", { precision: 18, scale: 4, mode: "string" }).notNull(),
   currency: varchar("currency", { length: 8 }).notNull(),
-  fxRate: varchar("fxRate", { length: 16 }).notNull(),
+  fxRate: decimal("fxRate", { precision: 12, scale: 6, mode: "string" }).notNull(),
   counterparty: varchar("counterparty", { length: 256 }),
   description: text("description"),
   matchedPaymentId: int("matchedPaymentId").references(() => payments.id),
@@ -222,7 +222,7 @@ export const inventoryLedger = mysqlTable(
     warehouseId: int("warehouseId").notNull().references(() => warehouses.id),
     eventType: mysqlEnum("eventType", LEDGER_EVENT_TYPES).notNull(),
     qty: int("qty").notNull(),
-    unitCost: varchar("unitCost", { length: 32 }),
+    unitCost: decimal("unitCost", { precision: 18, scale: 6, mode: "string" }),
     // fsp: 3 (millisecond precision) matches what JS Date actually carries.
     // Default second-level precision rounds (not truncates) on insert, which
     // can flip the ordering of two events timestamped milliseconds apart
@@ -258,9 +258,9 @@ export type SalesPlanRow = typeof salesPlan.$inferSelect;
 export const salesPlanWeeklyInputs = mysqlTable("sales_plan_weekly_inputs", {
   id: int("id").autoincrement().primaryKey(),
   weekStartDate: date("weekStartDate", { mode: "string" }).notNull().unique(),
-  plannedRevenue: varchar("plannedRevenue", { length: 32 }).notNull(),
+  plannedRevenue: decimal("plannedRevenue", { precision: 18, scale: 4, mode: "string" }).notNull(),
   primaryWarehouseId: int("primaryWarehouseId").notNull().references(() => warehouses.id),
-  primaryPercent: varchar("primaryPercent", { length: 8 }).notNull(),
+  primaryPercent: decimal("primaryPercent", { precision: 7, scale: 4, mode: "string" }).notNull(),
   secondaryWarehouseId: int("secondaryWarehouseId").notNull().references(() => warehouses.id),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -272,7 +272,7 @@ export const salesPlanWeeklyRecipeLines = mysqlTable(
     id: int("id").autoincrement().primaryKey(),
     weeklyInputId: int("weeklyInputId").notNull(),
     skuId: int("skuId").notNull().references(() => skus.id),
-    unitsPer1000: varchar("unitsPer1000", { length: 16 }).notNull(),
+    unitsPer1000: decimal("unitsPer1000", { precision: 12, scale: 4, mode: "string" }).notNull(),
   },
   (table) => ({
     // MySQL's 64-char identifier limit rejects drizzle's default auto-generated

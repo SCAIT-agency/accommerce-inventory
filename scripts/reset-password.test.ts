@@ -1,6 +1,6 @@
 // scripts/reset-password.test.ts
 import { describe, it, expect, beforeEach } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../server/dbClient";
 import { users } from "../drizzle/schema";
 import { hashPassword, verifyPassword } from "../server/_core/passwords";
@@ -9,7 +9,19 @@ import { resetPassword } from "./reset-password-core";
 const EMAIL = "julian@accommerce.example";
 
 beforeEach(async () => {
-  await db.delete(users);
+  // Real FKs tie other tables to users now (purchase_orders.createdBy,
+  // shipments.createdBy, change_log.changedBy) -- a row left behind by
+  // another test file's last test (no afterAll anywhere in this suite) can
+  // otherwise block this delete regardless of file order. Disabling FK
+  // checks for the cleanup makes this file's reset order-independent again.
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
+    try {
+      await tx.delete(users);
+    } finally {
+      await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
+    }
+  });
 });
 
 describe("resetPassword", () => {

@@ -67,7 +67,7 @@ describe("payments and transactions", () => {
     });
 
     expect(paid.paid).toBe(true);
-    expect(paid.baseCurrencyAmount).toBe("28594.43");
+    expect(paid.baseCurrencyAmount).toBe("28594.4300");
   });
 
   it("logs change_log entries with real prior values when a payment is marked paid", async () => {
@@ -136,9 +136,9 @@ describe("payments and transactions", () => {
 
     const [updated] = await db.select().from(payments).where(sql`${payments.id} = ${payment.id}`);
     expect(updated.paid).toBe(true);
-    expect(updated.paidAmount).toBe("30700.00");
-    expect(updated.fxRate).toBe("0.93");
-    expect(updated.baseCurrencyAmount).toBe((30700 * 0.93).toFixed(2));
+    expect(updated.paidAmount).toBe("30700.0000");
+    expect(updated.fxRate).toBe("0.930000");
+    expect(updated.baseCurrencyAmount).toBe((30700 * 0.93).toFixed(4));
   });
 
   it("does not overwrite an already-paid payment's recorded amount/date when later matched to a transaction", async () => {
@@ -157,8 +157,8 @@ describe("payments and transactions", () => {
     await matchTransactionToPayment(tx.id, payment.id, { reasonCategory: "payment_timing", changedBy: userId });
 
     const [updated] = await db.select().from(payments).where(sql`${payments.id} = ${payment.id}`);
-    expect(updated.paidAmount).toBe("30746.70");
-    expect(updated.fxRate).toBe("0.93");
+    expect(updated.paidAmount).toBe("30746.7000");
+    expect(updated.fxRate).toBe("0.930000");
   });
 
   it("rejects matching a transaction to a nonexistent payment", async () => {
