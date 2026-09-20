@@ -19,24 +19,47 @@ import { LoginPage } from "./pages/LoginPage";
 // sign in. Checked once when the guarded layout mounts; it stays mounted
 // across navigations between guarded routes, so this is not per-page.
 function RequireAuth() {
-  const [status, setStatus] = useState<"checking" | "authenticated" | "anonymous">("checking");
+  const [status, setStatus] = useState<"checking" | "authenticated" | "anonymous" | "unavailable">("checking");
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/auth/status", { credentials: "include" })
-      .then((res) => res.json())
-      .then((data) => {
-        if (!cancelled) setStatus(data.authenticated ? "authenticated" : "anonymous");
-      })
-      .catch(() => {
-        if (!cancelled) setStatus("anonymous");
-      });
+
+    function checkStatus() {
+      fetch("/api/auth/status", { credentials: "include" })
+        .then(async (res) => {
+          if (cancelled) return;
+          if (res.status === 503) {
+            // A transient failure on the very first check blocks entry with
+            // a clear message; the same failure on a later periodic
+            // re-check must not kick an already-authenticated user out —
+            // leave their current status alone and try again next tick.
+            setStatus((prev) => (prev === "checking" ? "unavailable" : prev));
+            return;
+          }
+          const data = await res.json();
+          setStatus(data.authenticated ? "authenticated" : "anonymous");
+        })
+        .catch(() => {
+          setStatus((prev) => (prev === "checking" ? "anonymous" : prev));
+        });
+    }
+
+    checkStatus();
+    // Mid-session revocation (sign-out elsewhere, a password reset) is a
+    // real, expected event now that sessions carry a tokenVersion — without
+    // a periodic re-check, a revoked session renders "Failed to load:
+    // UNAUTHORIZED" on every guarded page instead of redirecting to /login,
+    // until the user happens to navigate in a way that remounts this guard.
+    const intervalId = setInterval(checkStatus, 5 * 60 * 1000);
+
     return () => {
       cancelled = true;
+      clearInterval(intervalId);
     };
   }, []);
 
   if (status === "checking") return <div>Checking sign-in…</div>;
+  if (status === "unavailable") return <div>Temporarily unavailable — please try again shortly.</div>;
   if (status === "anonymous") return <Navigate to="/login" replace />;
   return (
     <>

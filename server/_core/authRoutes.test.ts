@@ -55,13 +55,17 @@ describe("authRoutes fail closed on an unexpected loginFlow error", () => {
     expect(await res.json()).toEqual({ error: "login failed" });
   });
 
-  it("GET /api/auth/status returns {authenticated:false} instead of crashing when resolveSession throws", async () => {
+  it("GET /api/auth/status returns 503 instead of crashing or claiming {authenticated:false} when resolveSession throws", async () => {
     vi.mocked(resolveSession).mockRejectedValue(new Error("db exploded"));
 
     const res = await fetch(`${baseUrl}/api/auth/status`);
 
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ authenticated: false });
+    // A thrown error is a check failure, not "you are signed out" — those
+    // must be distinguishable so the client doesn't bounce a signed-in user
+    // to /login over a transient blip. 200 {authenticated:false} would hide
+    // that distinction from the client entirely.
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "temporarily unavailable" });
   });
 
   it("POST /api/auth/logout still returns 200 ok instead of crashing when performLogout throws", async () => {

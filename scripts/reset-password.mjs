@@ -9,7 +9,7 @@
 //
 //   RESET_USER_EMAIL=julian@accommerce.example RESET_USER_PASSWORD=new-password \
 //     pnpm exec tsx scripts/reset-password.mjs
-import { resetPassword } from "./resetPassword.ts";
+import { resetPassword } from "./reset-password-core.ts";
 
 const email = process.env.RESET_USER_EMAIL;
 const password = process.env.RESET_USER_PASSWORD;

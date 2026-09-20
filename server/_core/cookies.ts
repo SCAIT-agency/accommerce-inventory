@@ -1,3 +1,5 @@
+import { THIRTY_DAYS_MS } from "./auth";
+
 export const SESSION_COOKIE = "accommerce_session";
 
 export function getSessionCookieOptions() {
@@ -5,7 +7,7 @@ export function getSessionCookieOptions() {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax" as const,
-    maxAge: 30 * 24 * 60 * 60 * 1000,
+    maxAge: THIRTY_DAYS_MS,
     path: "/",
   };
 }

@@ -46,8 +46,14 @@ export function mountAuthRoutes(app: Express) {
       if (!session) return res.json({ authenticated: false });
       res.json({ authenticated: true, userId: session.userId, role: session.role });
     } catch (err) {
+      // A thrown error here (as opposed to resolveSession's own null return
+      // for a missing/invalid/revoked token) means the check itself failed
+      // — e.g. a DB blip — not that the user is genuinely unauthenticated.
+      // A distinct 503 lets the client tell "please retry" apart from "you
+      // are signed out", instead of silently bouncing a signed-in user to
+      // the login page over a transient failure.
       console.error("GET /api/auth/status failed:", err instanceof Error ? err.message : err);
-      res.json({ authenticated: false });
+      res.status(503).json({ error: "temporarily unavailable" });
     }
   });
 }

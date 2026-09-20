@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../server/dbClient";
 import { users } from "../drizzle/schema";
 import { hashPassword, verifyPassword } from "../server/_core/passwords";
-import { resetPassword } from "./resetPassword";
+import { resetPassword } from "./reset-password-core";
 
 const EMAIL = "julian@accommerce.example";
 

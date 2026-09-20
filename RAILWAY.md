@@ -56,6 +56,15 @@ design spec's single-tenant-per-client model).
 
    This also immediately invalidates every session that user currently has
    — see `docs/2026-09-20-security-hardening-design.md` Section 4.
+
+   **Redeploying the security-hardening release logs out every existing
+   session at once.** Old session tokens carry no `tokenVersion` claim,
+   which never matches a real user row's value (`tokenVersion` always
+   starts at 0), so every signed-in user is treated as unauthenticated the
+   next time they load the app after this deploy — everyone (editor and
+   viewers alike) needs to sign in again with their real password. Expected
+   and one-time, not a bug, but worth telling whoever's on the other end of
+   that deploy in advance.
 8. Add a Railway Cron Job (Railway → New → Cron Job) running nightly, command:
    `pnpm exec tsx scripts/run-nightly-export.mjs` (a thin wrapper around
    `runNightlyExport` — see `server/nightlyExport.ts`), writing to a Railway

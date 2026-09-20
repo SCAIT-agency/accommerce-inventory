@@ -1,4 +1,4 @@
-// scripts/resetPassword.ts
+// scripts/reset-password-core.ts
 //
 // Core logic for scripts/reset-password.mjs, factored out into its own
 // plain-TypeScript file so it can be unit-tested directly against the real

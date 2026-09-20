@@ -2,7 +2,9 @@
 import { SignJWT, jwtVerify } from "jose";
 import { ENV } from "./env";
 
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+// Also the source of truth for the session cookie's own maxAge (cookies.ts)
+// — one exported constant so the two can't silently drift apart.
+export const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 function getSecretKey(): Uint8Array {
   return new TextEncoder().encode(ENV.sessionSecret);

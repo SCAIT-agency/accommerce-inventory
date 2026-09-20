@@ -43,6 +43,7 @@ export function LoginPage() {
             type="email"
             value={email}
             autoFocus
+            autoComplete="username"
             onChange={(e) => setEmail(e.target.value)}
           />
         </label>
@@ -51,6 +52,7 @@ export function LoginPage() {
           <input
             type="password"
             value={password}
+            autoComplete="current-password"
             onChange={(e) => setPassword(e.target.value)}
           />
         </label>
