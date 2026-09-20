@@ -1,11 +1,11 @@
-import { and, eq, gte } from "drizzle-orm";
+import { and, gte, inArray, sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { salesActuals } from "../drizzle/schema";
 import { listSkus } from "./db";
-import { getSohByWarehouse } from "./inventoryLedger";
+import { getSohForSkus } from "./inventoryLedger";
 import { listUnmatchedTransactions } from "./payments";
 import { getCashflowForecast } from "./cashflow";
-import { getDailyCogs } from "./salesPlan";
+import { getDailyCogsForRange } from "./salesPlan";
 import { getShipmentLandedUnitCost } from "./landedCost";
 
 function enumerateDateStrings(from: Date, to: Date): string[] {
@@ -32,21 +32,31 @@ const STOCK_STATUS_THRESHOLDS: { maxDays: number; label: "critical" | "low" | "o
 // sold, so the denominator must be calendar days in the window — not the
 // number of rows that came back, which would inflate the average (and deflate
 // days-of-cover) by the ratio of selling-days to calendar-days.
-async function getAverageDailySales(skuId: number, warehouseId: number, windowDays = 30): Promise<number> {
+//
+// One grouped query for every requested SKU at once, keyed by the composite
+// string `${skuId}:${warehouseId}` (matching this codebase's existing
+// composite-key convention, e.g. the migration reconciliation code's
+// `${poNumber}::${sku}` keys) — replaces what used to be one query per
+// SKU/warehouse pair.
+async function getAverageDailySalesForSkus(skuIds: number[], windowDays = 30): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (skuIds.length === 0) return result;
+
   const windowStart = new Date(Date.now() - windowDays * 86400000).toISOString().slice(0, 10);
   const rows = await db
-    .select()
+    .select({
+      skuId: salesActuals.skuId,
+      warehouseId: salesActuals.warehouseId,
+      totalQty: sql<number>`CAST(COALESCE(SUM(${salesActuals.qty}), 0) AS SIGNED)`,
+    })
     .from(salesActuals)
-    .where(
-      and(
-        eq(salesActuals.skuId, skuId),
-        eq(salesActuals.warehouseId, warehouseId),
-        gte(salesActuals.date, windowStart),
-      ),
-    );
-  if (rows.length === 0) return 0;
-  const totalQty = rows.reduce((sum, r) => sum + r.qty, 0);
-  return totalQty / windowDays;
+    .where(and(inArray(salesActuals.skuId, skuIds), gte(salesActuals.date, windowStart)))
+    .groupBy(salesActuals.skuId, salesActuals.warehouseId);
+
+  for (const row of rows) {
+    result.set(`${row.skuId}:${row.warehouseId}`, row.totalQty / windowDays);
+  }
+  return result;
 }
 
 function getStockStatus(daysOfCover: number | null): "critical" | "low" | "ok" | "overstock" | "unknown" {
@@ -57,16 +67,20 @@ function getStockStatus(daysOfCover: number | null): "critical" | "low" | "ok" |
 
 export async function getHomeSummary() {
   const activeSkus = await listSkus("active");
+  const skuIds = activeSkus.map((s) => s.id);
   const unmatched = await listUnmatchedTransactions();
   const forecast = await getCashflowForecast(new Date(), new Date(Date.now() + 14 * 86400000));
   const nearTermCashNeeds = forecast.reduce((sum, d) => sum + d.plannedOutflow, 0);
 
+  const sohMap = await getSohForSkus(skuIds);
+  const avgSalesMap = await getAverageDailySalesForSkus(skuIds);
+
   let stockoutRiskSkuCount = 0;
   for (const sku of activeSkus) {
-    const byWarehouse = await getSohByWarehouse(sku.id);
+    const byWarehouse = sohMap.get(sku.id) ?? [];
     let atRisk = false;
     for (const w of byWarehouse) {
-      const avgDailySales = await getAverageDailySales(sku.id, w.warehouseId);
+      const avgDailySales = avgSalesMap.get(`${sku.id}:${w.warehouseId}`) ?? 0;
       const daysOfCover = avgDailySales > 0 ? w.soh / avgDailySales : null;
       if (daysOfCover !== null && daysOfCover < 21) {
         atRisk = true;
@@ -86,16 +100,18 @@ export async function getHomeSummary() {
 
 export async function getStockDashboard() {
   const activeSkus = await listSkus("active");
+  const skuIds = activeSkus.map((s) => s.id);
+  const sohMap = await getSohForSkus(skuIds);
+  const avgSalesMap = await getAverageDailySalesForSkus(skuIds);
+
   const results = [];
   for (const sku of activeSkus) {
-    const byWarehouse = await getSohByWarehouse(sku.id);
-    const enriched = await Promise.all(
-      byWarehouse.map(async (w) => {
-        const avgDailySales = await getAverageDailySales(sku.id, w.warehouseId);
-        const daysOfCover = avgDailySales > 0 ? w.soh / avgDailySales : null;
-        return { ...w, avgDailySales, daysOfCover, status: getStockStatus(daysOfCover) };
-      }),
-    );
+    const byWarehouse = sohMap.get(sku.id) ?? [];
+    const enriched = byWarehouse.map((w) => {
+      const avgDailySales = avgSalesMap.get(`${sku.id}:${w.warehouseId}`) ?? 0;
+      const daysOfCover = avgDailySales > 0 ? w.soh / avgDailySales : null;
+      return { ...w, avgDailySales, daysOfCover, status: getStockStatus(daysOfCover) };
+    });
     results.push({ skuId: sku.id, sku: sku.sku, byWarehouse: enriched });
   }
   return results;
@@ -112,12 +128,7 @@ export async function getMoneyDashboard(
   let dailyCogs: { date: string; cogs: number }[] = [];
   if (opts?.skuId && opts?.warehouseId) {
     const dateKeys = enumerateDateStrings(from, to);
-    dailyCogs = await Promise.all(
-      dateKeys.map(async (dateKey) => ({
-        date: dateKey,
-        cogs: await getDailyCogs(opts.skuId!, opts.warehouseId!, dateKey),
-      })),
-    );
+    dailyCogs = await getDailyCogsForRange(opts.skuId, opts.warehouseId, dateKeys);
   }
 
   let landedCost: { skuId: number; landedUnitCost: number }[] = [];

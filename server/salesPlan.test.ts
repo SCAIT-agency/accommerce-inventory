@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { salesPlan, salesActuals, inventoryLedger, skus, warehouses } from "../drizzle/schema";
-import { recordSalesActual, getSalesVolatility, getPlanActualDeviation, getDailyCogs, getDailyCogsForRange, createSalesPlanEntry } from "./salesPlan";
+import { recordSalesActual, getSalesVolatility, getPlanActualDeviation, getDailyCogsForRange, createSalesPlanEntry } from "./salesPlan";
 import { createSku, createWarehouse } from "./db";
 import { recordLedgerEvent } from "./inventoryLedger";
 
@@ -103,24 +103,6 @@ describe("sales plan/actuals", () => {
 
     const deviation = await getPlanActualDeviation(sku.id, ff.id, "2026-09-09", "2026-09-09");
     expect(deviation).toEqual([{ date: "2026-09-09", planned: 1000, actual: 1162, deviation: 162 }]);
-  });
-
-  it("computes daily COGS via FIFO consumption across the full ledger history, not each day in isolation", async () => {
-    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
-    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
-
-    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
-    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.50", date: new Date("2026-09-05"), sourceRef: "PO2" });
-    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-03", qty: 80, source: "manual" });
-    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-10", qty: 40, source: "manual" });
-
-    // Sept 3 sale (80 units) is fully covered by the first batch (@2.00) — the second batch hasn't landed yet.
-    const cogsSept3 = await getDailyCogs(sku.id, ff.id, "2026-09-03");
-    expect(cogsSept3).toBeCloseTo(80 * 2.0, 2);
-
-    // Sept 10 sale (40 units) drains the remaining 20 units of batch 1 (@2.00), then 20 units of batch 2 (@2.50).
-    const cogsSept10 = await getDailyCogs(sku.id, ff.id, "2026-09-10");
-    expect(cogsSept10).toBeCloseTo(20 * 2.0 + 20 * 2.5, 2);
   });
 
   it("computes daily COGS for a whole range in one call via a single forward FIFO pass, not each day in isolation", async () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { inventoryLedger, skus, warehouses } from "../drizzle/schema";
-import { recordLedgerEvent, getSoh, getSohByWarehouse, getSohForSkus } from "./inventoryLedger";
+import { recordLedgerEvent, getSoh, getSohForSkus } from "./inventoryLedger";
 import { createSku, createWarehouse } from "./db";
 
 beforeEach(async () => {
@@ -39,21 +39,6 @@ describe("inventory ledger", () => {
 
     expect(await getSoh(sku.id, ff.id)).toBe(800);
     expect(await getSoh(sku.id, ff.id, new Date("2026-09-02"))).toBe(880);
-  });
-
-  it("never blends two warehouses into one SOH figure", async () => {
-    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
-    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
-    const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
-
-    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1-W1" });
-    await recordLedgerEvent({ skuId: sku.id, warehouseId: mutual.id, eventType: "receipt", qty: 300, unitCost: "0.45", date: new Date("2026-09-01"), sourceRef: "PO1-Local" });
-
-    const byWarehouse = await getSohByWarehouse(sku.id);
-    expect(byWarehouse).toEqual([
-      { warehouseId: ff.id, soh: 1000 },
-      { warehouseId: mutual.id, soh: 300 },
-    ]);
   });
 
   it("rejects a sale event that would drive SOH below zero", async () => {

@@ -58,15 +58,3 @@ export async function getSohForSkus(skuIds: number[]): Promise<Map<number, { war
   }
   return result;
 }
-
-export async function getSohByWarehouse(skuId: number): Promise<{ warehouseId: number; soh: number }[]> {
-  const rows = await db
-    .select({
-      warehouseId: inventoryLedger.warehouseId,
-      soh: sql<number>`CAST(COALESCE(SUM(${inventoryLedger.qty}), 0) AS SIGNED)`,
-    })
-    .from(inventoryLedger)
-    .where(eq(inventoryLedger.skuId, skuId))
-    .groupBy(inventoryLedger.warehouseId);
-  return rows;
-}

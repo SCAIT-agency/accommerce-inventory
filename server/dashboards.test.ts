@@ -215,4 +215,60 @@ describe("dashboards", () => {
     expect(wh?.daysOfCover).toBeNull();
     expect(wh?.status).toBe("unknown");
   });
+
+  it("computes correct per-SKU stock figures for many SKUs from one batched query round, not per-SKU queries", async () => {
+    const skuA = await createSku({ sku: "JELLO-MULTI-A", primaryIdentifierType: "sku", status: "active" });
+    const skuB = await createSku({ sku: "JELLO-MULTI-B", primaryIdentifierType: "sku", status: "active" });
+    const skuC = await createSku({ sku: "JELLO-MULTI-C", primaryIdentifierType: "sku", status: "active" }); // no ledger history
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
+
+    await recordLedgerEvent({ skuId: skuA.id, warehouseId: ff.id, eventType: "receipt", qty: 500, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-A-FF" });
+    await recordLedgerEvent({ skuId: skuA.id, warehouseId: mutual.id, eventType: "receipt", qty: 200, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-A-MUTUAL" });
+    await recordLedgerEvent({ skuId: skuB.id, warehouseId: ff.id, eventType: "receipt", qty: 300, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-B-FF" });
+
+    for (let i = 0; i < 10; i++) {
+      await recordSalesActual({ skuId: skuA.id, warehouseId: ff.id, date: daysAgoStr(i), qty: 5, source: "manual" });
+    }
+
+    const stock = await getStockDashboard();
+
+    const rowA = stock.find((r) => r.skuId === skuA.id);
+    const ffA = rowA?.byWarehouse.find((w) => w.warehouseId === ff.id);
+    const mutualA = rowA?.byWarehouse.find((w) => w.warehouseId === mutual.id);
+    expect(ffA?.soh).toBe(450); // 500 - 50 sold
+    expect(ffA?.avgDailySales).toBeCloseTo(50 / 30);
+    expect(mutualA?.soh).toBe(200);
+    expect(mutualA?.avgDailySales).toBe(0); // no sales recorded in this warehouse
+
+    const rowB = stock.find((r) => r.skuId === skuB.id);
+    const ffB = rowB?.byWarehouse.find((w) => w.warehouseId === ff.id);
+    expect(ffB?.soh).toBe(300);
+    expect(ffB?.avgDailySales).toBe(0);
+
+    const rowC = stock.find((r) => r.skuId === skuC.id);
+    expect(rowC?.byWarehouse).toEqual([]); // no ledger history at all -> empty byWarehouse, not omitted from results
+  });
+
+  it("counts stockout risk across many SKUs from one batched query round, not per-SKU queries", async () => {
+    const riskSku = await createSku({ sku: "JELLO-RISK", primaryIdentifierType: "sku", status: "active" });
+    const safeSku = await createSku({ sku: "JELLO-SAFE", primaryIdentifierType: "sku", status: "active" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    // riskSku: SOH 100 (400 received - 300 sold), sell 10/day -> daysOfCover 10 (< 21 -> at risk)
+    await recordLedgerEvent({ skuId: riskSku.id, warehouseId: ff.id, eventType: "receipt", qty: 400, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-RISK" });
+    for (let i = 0; i < 30; i++) {
+      await recordSalesActual({ skuId: riskSku.id, warehouseId: ff.id, date: daysAgoStr(i), qty: 10, source: "manual" });
+    }
+
+    // safeSku: SOH 970, sell 1/day -> daysOfCover 970 (not at risk)
+    await recordLedgerEvent({ skuId: safeSku.id, warehouseId: ff.id, eventType: "receipt", qty: 1000, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-SAFE" });
+    for (let i = 0; i < 30; i++) {
+      await recordSalesActual({ skuId: safeSku.id, warehouseId: ff.id, date: daysAgoStr(i), qty: 1, source: "manual" });
+    }
+
+    const summary = await getHomeSummary();
+    expect(summary.activeSkuCount).toBe(2);
+    expect(summary.stockoutRiskSkuCount).toBe(1);
+  });
 });

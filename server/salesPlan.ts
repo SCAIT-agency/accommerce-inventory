@@ -2,7 +2,7 @@ import { and, between, desc, eq, lte } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
 import { salesPlan, salesActuals, inventoryLedger } from "../drizzle/schema";
 import { recordLedgerEvent } from "./inventoryLedger";
-import { computeFifoCogs, type LandedBatch, type SaleEvent } from "./landedCost";
+import type { LandedBatch, SaleEvent } from "./landedCost";
 
 export interface CreateSalesPlanEntryInput {
   skuId: number;
@@ -90,51 +90,20 @@ export async function getPlanActualDeviation(skuId: number, warehouseId: number,
 }
 
 /**
- * Daily COGS at `date` = cumulative FIFO cost of everything sold through `date`,
- * minus cumulative FIFO cost of everything sold through the day before. Computing
- * each day in isolation against the full (un-depleted) receipt set would double-count
- * batches already consumed by earlier sales — this is the same class of bug the real
- * Jello buildDailyCogs() clamp had (it didn't gate on whether a batch had actually
- * landed by the date being evaluated).
- */
-export async function getDailyCogs(skuId: number, warehouseId: number, dateKey: string): Promise<number> {
-  const events = await db
-    .select()
-    .from(inventoryLedger)
-    .where(and(eq(inventoryLedger.skuId, skuId), eq(inventoryLedger.warehouseId, warehouseId)))
-    .orderBy(inventoryLedger.date);
-
-  // Calendar-day comparison, not a raw timestamp <=: sale-derived ledger events
-  // are now anchored at end-of-day (23:59:59.999), so a same-day sale would
-  // fail a naive `e.date <= date` check against a midnight-anchored `date` arg.
-  const receipts: LandedBatch[] = events
-    .filter((e) => e.eventType === "receipt" && e.date.toISOString().slice(0, 10) <= dateKey)
-    .map((e) => ({ qty: e.qty, unitCost: parseFloat(e.unitCost ?? "0"), date: e.date }));
-
-  const salesUpToAndIncluding: SaleEvent[] = events
-    .filter((e) => e.eventType === "sale" && e.date.toISOString().slice(0, 10) <= dateKey)
-    .map((e) => ({ qty: Math.abs(e.qty), date: e.date }));
-  const salesBeforeDate: SaleEvent[] = salesUpToAndIncluding.filter(
-    (s) => s.date.toISOString().slice(0, 10) !== dateKey,
-  );
-
-  if (salesUpToAndIncluding.length === salesBeforeDate.length) return 0;
-
-  const cogsUpToDate = computeFifoCogs(receipts, salesUpToAndIncluding).totalCogs;
-  const cogsBeforeDate = computeFifoCogs(receipts, salesBeforeDate).totalCogs;
-  return cogsUpToDate - cogsBeforeDate;
-}
-
-/**
- * Same FIFO semantics as getDailyCogs, computed for a whole date range in one
+ * Same FIFO semantics as the old day-by-day approach (daily COGS at `date` =
+ * cumulative FIFO cost of everything sold through `date`, minus cumulative
+ * FIFO cost of everything sold through the day before — computing each day in
+ * isolation against the full un-depleted receipt set would double-count
+ * batches already consumed by earlier sales, the same class of bug the real
+ * Jello buildDailyCogs() clamp had), computed for a whole date range in one
  * query and one chronological forward pass instead of one query-plus-two-
- * full-FIFO-passes per day. Mathematically equivalent to calling getDailyCogs
- * once per day: consuming sales in chronological order against a single
- * shared, depleting `batches` array and bucketing each unit's cost by the
- * sale's own calendar day produces exactly the same per-day figure the old
- * "cost up to this day minus cost up to the day before" subtraction did,
- * since by the time a forward pass reaches a given day, the batches
- * remaining are exactly what "up to the day before" already implied.
+ * full-FIFO-passes per day. Mathematically equivalent to computing each day
+ * that way: consuming sales in chronological order against a single shared,
+ * depleting `batches` array and bucketing each unit's cost by the sale's own
+ * calendar day produces exactly the same per-day figure the old "cost up to
+ * this day minus cost up to the day before" subtraction did, since by the
+ * time a forward pass reaches a given day, the batches remaining are exactly
+ * what "up to the day before" already implied.
  */
 export async function getDailyCogsForRange(skuId: number, warehouseId: number, dateKeys: string[]): Promise<{ date: string; cogs: number }[]> {
   if (dateKeys.length === 0) return [];
