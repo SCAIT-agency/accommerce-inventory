@@ -59,6 +59,83 @@ function MatchTransactionRow({ transaction, unpaidPayments, onMatched }: { trans
   );
 }
 
+interface NewTransactionFormState {
+  date: string;
+  amount: string;
+  currency: string;
+  fxRate: string;
+  counterparty: string;
+  description: string;
+}
+
+function defaultNewTransactionForm(): NewTransactionFormState {
+  return { date: new Date().toISOString().slice(0, 10), amount: "", currency: "USD", fxRate: "1", counterparty: "", description: "" };
+}
+
+function RecordTransactionForm({ onRecorded }: { onRecorded: () => void }) {
+  const [form, setForm] = useState<NewTransactionFormState>(defaultNewTransactionForm);
+  const recordTransaction = trpc.payments.recordTransaction.useMutation({
+    onSuccess: () => {
+      setForm(defaultNewTransactionForm());
+      onRecorded();
+    },
+  });
+  const canSave = form.amount.trim().length > 0 && form.currency.trim().length > 0 && form.fxRate.trim().length > 0;
+
+  return (
+    <div>
+      <h2>Record a bank transaction</h2>
+      <input type="date" value={form.date} onChange={(e) => setForm((prev) => ({ ...prev, date: e.target.value }))} />
+      <input
+        type="text"
+        placeholder="amount"
+        value={form.amount}
+        onChange={(e) => setForm((prev) => ({ ...prev, amount: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="currency"
+        value={form.currency}
+        onChange={(e) => setForm((prev) => ({ ...prev, currency: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="fx rate to EUR"
+        value={form.fxRate}
+        onChange={(e) => setForm((prev) => ({ ...prev, fxRate: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="counterparty"
+        value={form.counterparty}
+        onChange={(e) => setForm((prev) => ({ ...prev, counterparty: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="description"
+        value={form.description}
+        onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+      />
+      <button
+        disabled={!canSave || recordTransaction.isPending}
+        onClick={() =>
+          recordTransaction.mutate({
+            date: new Date(form.date),
+            amount: form.amount,
+            currency: form.currency,
+            fxRate: form.fxRate,
+            counterparty: form.counterparty.trim() || undefined,
+            description: form.description.trim() || undefined,
+          })
+        }
+      >
+        Record transaction
+      </button>
+      {recordTransaction.error && <div>Failed to record: {recordTransaction.error.message}</div>}
+    </div>
+  );
+}
+
 export function TransactionsPage() {
   const utils = trpc.useUtils();
   const transactionsQuery = trpc.payments.listTransactions.useQuery();
@@ -79,6 +156,7 @@ export function TransactionsPage() {
   return (
     <div>
       <h1>Transactions</h1>
+      <RecordTransactionForm onRecorded={onMatched} />
       <table>
         <thead><tr><th>Date</th><th>Amount</th><th>Counterparty</th><th>Status</th></tr></thead>
         <tbody>

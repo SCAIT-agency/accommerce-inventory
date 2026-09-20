@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
+import { PO_STATUSES } from "../../../drizzle/schema";
 
 const REASON_CATEGORIES = [
   "production_delay", "artwork_delay", "customs_hold", "logistics_delay",
@@ -354,6 +355,46 @@ function CreatePoForm() {
   );
 }
 
+function AdvanceStatusControl({ po, onAdvanced }: { po: { id: number; status: (typeof PO_STATUSES)[number] }; onAdvanced: () => void }) {
+  const [reasonCategory, setReasonCategory] = useState<ReasonCategory>("logistics_delay");
+  const [reasonNote, setReasonNote] = useState("");
+  const updateStatus = trpc.purchaseOrders.updateStatus.useMutation({
+    onSuccess: () => {
+      setReasonNote("");
+      onAdvanced();
+    },
+  });
+  const nextStatus = PO_STATUSES[PO_STATUSES.indexOf(po.status) + 1];
+  const noteRequired = reasonCategory === "other";
+
+  if (!nextStatus) return null;
+
+  return (
+    <div>
+      <select value={reasonCategory} onChange={(e) => setReasonCategory(e.target.value as ReasonCategory)}>
+        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {noteRequired && (
+        <input placeholder="required note" value={reasonNote} onChange={(e) => setReasonNote(e.target.value)} />
+      )}
+      <button
+        disabled={(noteRequired && !reasonNote.trim()) || updateStatus.isPending}
+        onClick={() =>
+          updateStatus.mutate({
+            id: po.id,
+            newStatus: nextStatus,
+            reasonCategory,
+            reasonNote: noteRequired ? reasonNote : undefined,
+          })
+        }
+      >
+        Advance to {nextStatus}
+      </button>
+      {updateStatus.error && <div>Failed to advance: {updateStatus.error.message}</div>}
+    </div>
+  );
+}
+
 export function PurchaseOrdersPage() {
   const { data: pos, isLoading, error, refetch } = trpc.purchaseOrders.list.useQuery();
   const updateDate = trpc.purchaseOrders.updatePlannedReadyDate.useMutation({ onSuccess: () => refetch() });
@@ -379,7 +420,10 @@ export function PurchaseOrdersPage() {
             return (
               <tr key={po.id}>
                 <td>{po.poNumber}</td>
-                <td><span className={PO_STATUS_BADGE_CLASS[po.status] ?? DEFAULT_STATUS_BADGE_CLASS}>{po.status}</span></td>
+                <td>
+                  <span className={PO_STATUS_BADGE_CLASS[po.status] ?? DEFAULT_STATUS_BADGE_CLASS}>{po.status}</span>
+                  <AdvanceStatusControl po={po} onAdvanced={refetch} />
+                </td>
                 <td>{po.plannedReadyDate?.toString() ?? "—"}</td>
                 <td>
                   <input
