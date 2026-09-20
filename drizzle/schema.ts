@@ -6,6 +6,8 @@ export const users = mysqlTable("users", {
   email: varchar("email", { length: 320 }).notNull().unique(),
   role: mysqlEnum("role", ["editor", "viewer"]).notNull(),
   managerId: int("managerId"),
+  passwordHash: varchar("passwordHash", { length: 255 }),
+  tokenVersion: int("tokenVersion").notNull().default(0),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type User = typeof users.$inferSelect;

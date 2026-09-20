@@ -29,6 +29,13 @@
       "when": 1789839857571,
       "tag": "0003_aspiring_slayback",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1789890712400,
+      "tag": "0004_dapper_celestials",
+      "breakpoints": true
     }
   ]
 }
