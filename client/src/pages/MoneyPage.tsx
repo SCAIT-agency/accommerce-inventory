@@ -68,14 +68,18 @@ export function MoneyPage() {
         </>
       )}
       {tab === "daily_cogs" && (
-        <table>
-          <thead><tr><th>Date</th><th>COGS</th></tr></thead>
-          <tbody>
-            {data.dailyCogs.map((d) => (
-              <tr key={d.date}><td>{d.date}</td><td>{d.cogs.toFixed(2)}</td></tr>
-            ))}
-          </tbody>
-        </table>
+        data.dailyCogsError ? (
+          <div>Failed to compute daily COGS: {data.dailyCogsError}</div>
+        ) : (
+          <table>
+            <thead><tr><th>Date</th><th>COGS</th></tr></thead>
+            <tbody>
+              {data.dailyCogs.map((d) => (
+                <tr key={d.date}><td>{d.date}</td><td>{d.cogs.toFixed(2)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        )
       )}
       {tab === "landed_cost" && (
         data.landedCostError ? (

@@ -93,6 +93,21 @@ describe("cashflow forecast", () => {
     expect(day9?.plannedOutflow).toBeCloseTo(32000);
   });
 
+  it("treats differently-cased currency codes as the same currency, not a mixed-currency window", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });
+
+    await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "30000.00", expectedDate: new Date("2026-09-09"), currency: "eur" });
+    await createExpectedPayment({ poId: po.id, sequenceNo: 2, expectedAmount: "10000.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });
+
+    const forecast = await getCashflowForecast(new Date("2026-09-01"), new Date("2026-09-30"));
+
+    const day9 = forecast.find((f) => f.date === "2026-09-09");
+    // Same currency once normalized — summed exactly, not converted/estimated.
+    expect(day9?.plannedOutflow).toBeCloseTo(40000);
+    expect(day9?.plannedOutflowIsEstimated).toBe(false);
+  });
+
   it("estimates a EUR-equivalent total using the standard FX rate when one day's planned payments span more than one currency, flagging it as an estimate", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
     const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: 1 });

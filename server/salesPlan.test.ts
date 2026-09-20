@@ -155,6 +155,45 @@ describe("sales plan/actuals", () => {
     expect(result).toEqual([]);
   });
 
+  it("a negative adjustment consumes FIFO stock ahead of a later sale, without being counted as Daily COGS itself", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    // A 30-unit write-off/correction on Sept 3 consumes from the oldest batch first, same as a sale would.
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "adjustment", qty: -30, unitCost: null, date: new Date("2026-09-03"), sourceRef: "manual-shrinkage" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.50", date: new Date("2026-09-04"), sourceRef: "PO2" });
+    // A sale of 90 straddles the two batches only if the adjustment already
+    // consumed 30 of the first — this is what actually distinguishes "the
+    // adjustment was applied" from "the adjustment was silently ignored"
+    // (which would instead consume all 90 from the still-full first batch).
+    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-05", qty: 90, source: "manual" });
+
+    const result = await getDailyCogsForRange(sku.id, ff.id, ["2026-09-03", "2026-09-04", "2026-09-05"]);
+
+    // The adjustment itself contributes no Daily COGS — it isn't a sale.
+    expect(result.find((r) => r.date === "2026-09-03")?.cogs).toBe(0);
+    // First batch has only 70 left (100 - 30) after the adjustment: the 90-unit
+    // sale takes 70 @2.00 plus 20 @2.50 = 190, not 90 @2.00 = 180 (which is
+    // what it would be if the adjustment had been ignored, as it was pre-fix).
+    expect(result.find((r) => r.date === "2026-09-05")?.cogs).toBeCloseTo(70 * 2.0 + 20 * 2.5, 2);
+  });
+
+  it("a positive adjustment becomes its own batch, consumable by a later sale at its own cost", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 50, unitCost: "2.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    // A 30-unit found-stock correction on Sept 2, at its own recorded cost.
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "adjustment", qty: 30, unitCost: "1.90", date: new Date("2026-09-02"), sourceRef: "manual-recount" });
+    await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: "2026-09-05", qty: 70, source: "manual" });
+
+    const result = await getDailyCogsForRange(sku.id, ff.id, ["2026-09-05"]);
+
+    // 50 units from the @2.00 receipt, then 20 of the 30 @1.90 adjustment units.
+    expect(result.find((r) => r.date === "2026-09-05")?.cogs).toBeCloseTo(50 * 2.0 + 20 * 1.9, 2);
+  });
+
   it("creates a sales plan entry with a direct insert, no audit trail", async () => {
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });

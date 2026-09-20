@@ -116,9 +116,14 @@ export async function getMoneyDashboard(
   const unmatched = await listUnmatchedTransactions();
 
   let dailyCogs: { date: string; cogs: number }[] = [];
+  let dailyCogsError: string | null = null;
   if (opts?.skuId && opts?.warehouseId) {
     const dateKeys = enumerateDateStrings(from, to);
-    dailyCogs = await getDailyCogsForRange(opts.skuId, opts.warehouseId, dateKeys);
+    try {
+      dailyCogs = await getDailyCogsForRange(opts.skuId, opts.warehouseId, dateKeys);
+    } catch (err) {
+      dailyCogsError = err instanceof Error ? err.message : String(err);
+    }
   }
 
   let landedCost: { skuId: number; landedUnitCost: number }[] = [];
@@ -131,5 +136,5 @@ export async function getMoneyDashboard(
     }
   }
 
-  return { cashflow, unmatchedTransactions: unmatched, dailyCogs, landedCost, landedCostError };
+  return { cashflow, unmatchedTransactions: unmatched, dailyCogs, dailyCogsError, landedCost, landedCostError };
 }

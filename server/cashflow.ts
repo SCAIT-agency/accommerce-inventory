@@ -2,7 +2,6 @@
 import { and, between, eq, isNotNull } from "drizzle-orm";
 import { db } from "./dbClient";
 import { payments } from "../drizzle/schema";
-import { listUnmatchedTransactions } from "./payments";
 import { getAppSetting } from "./db";
 
 export interface CashflowDay {
@@ -26,6 +25,15 @@ const BASE_CURRENCY = "EUR";
 const DEFAULT_STANDARD_FX_RATES: Record<string, string> = {
   USD: "0.86",
 };
+
+// Currency codes are freeform text at input time (no enum/normalization at
+// write time) — normalize to uppercase before comparing/grouping so "eur"
+// and "EUR" are recognized as the same currency instead of triggering a
+// spurious mixed-currency estimate (or missing a real standard-rate default
+// keyed by the uppercase code).
+function normalizeCurrency(currency: string): string {
+  return currency.toUpperCase();
+}
 
 async function getStandardFxRate(currency: string): Promise<number> {
   if (currency === BASE_CURRENCY) return 1;
@@ -64,7 +72,7 @@ export async function getCashflowForecast(from: Date, to: Date): Promise<Cashflo
     .from(payments)
     .where(and(eq(payments.paid, false), between(payments.expectedDate, from, to)));
 
-  const distinctCurrencies = new Set(plannedRows.map((row) => row.currency));
+  const distinctCurrencies = new Set(plannedRows.map((row) => normalizeCurrency(row.currency)));
   const mixedCurrencies = distinctCurrencies.size > 1;
   let rateByCurrency: Map<string, number> | null = null;
   if (mixedCurrencies) {
@@ -80,8 +88,9 @@ export async function getCashflowForecast(from: Date, to: Date): Promise<Cashflo
     if (!mixedCurrencies) {
       entry.plannedOutflow += parseFloat(row.expectedAmount);
     } else {
-      entry.plannedOutflow += parseFloat(row.expectedAmount) * rateByCurrency!.get(row.currency)!;
-      if (row.currency !== BASE_CURRENCY) entry.plannedOutflowIsEstimated = true;
+      const currency = normalizeCurrency(row.currency);
+      entry.plannedOutflow += parseFloat(row.expectedAmount) * rateByCurrency!.get(currency)!;
+      if (currency !== BASE_CURRENCY) entry.plannedOutflowIsEstimated = true;
     }
     byDate.set(dateKey, entry);
   }
@@ -102,5 +111,3 @@ export async function getCashflowForecast(from: Date, to: Date): Promise<Cashflo
 
   return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
-
-export { listUnmatchedTransactions };

@@ -14,37 +14,24 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   unknown: "badge badge-unknown",
 };
 
-interface SalesPlanFormState {
-  skuId: string;
-  warehouseId: string;
-  periodDate: string;
-  plannedQty: string;
-}
-
-function defaultSalesPlanForm(): SalesPlanFormState {
-  return { skuId: "", warehouseId: "", periodDate: new Date().toISOString().slice(0, 10), plannedQty: "" };
-}
-
-function SalesPlanSection({ warehouseFilter }: { warehouseFilter: number | "all" }) {
-  const utils = trpc.useUtils();
+// Read-only plan-vs-actual report. There is deliberately no manual
+// "add a plan entry" form here anymore — it wrote into the same sales_plan
+// rows the Weekly Sales Plan generator below owns, and regenerateSalesPlanForWeek
+// unconditionally replaces every row for a week's recipe SKUs, so a manual
+// entry for any SKU in that week's recipe was silently destroyed on the next
+// save with no warning either direction. Planning now happens exclusively
+// through the weekly generator; this section only reports against whatever
+// it produced.
+function SalesPlanReportSection({ warehouseFilter }: { warehouseFilter: number | "all" }) {
   const skusQuery = trpc.catalog.listSkus.useQuery();
   const warehousesQuery = trpc.catalog.listWarehouses.useQuery();
-  const [form, setForm] = useState<SalesPlanFormState>(() => ({
-    ...defaultSalesPlanForm(),
-    warehouseId: warehouseFilter === "all" ? "" : String(warehouseFilter),
-  }));
-  const createEntry = trpc.salesPlan.create.useMutation({
-    onSuccess: () => {
-      setForm(defaultSalesPlanForm());
-      utils.salesPlan.planActualDeviation.invalidate();
-      utils.salesPlan.volatility.invalidate();
-    },
-  });
+  const [skuId, setSkuId] = useState("");
+  const [warehouseId, setWarehouseId] = useState(warehouseFilter === "all" ? "" : String(warehouseFilter));
 
   const catalogError = skusQuery.error ?? warehousesQuery.error;
 
-  const selectedSkuId = form.skuId ? Number(form.skuId) : undefined;
-  const selectedWarehouseId = form.warehouseId ? Number(form.warehouseId) : undefined;
+  const selectedSkuId = skuId ? Number(skuId) : undefined;
+  const selectedWarehouseId = warehouseId ? Number(warehouseId) : undefined;
 
   // 30-day window ending today, matching the convention used for MoneyPage's cashflow window.
   const { from, to } = useMemo(
@@ -61,48 +48,20 @@ function SalesPlanSection({ warehouseFilter }: { warehouseFilter: number | "all"
     { enabled: selectedSkuId !== undefined && selectedWarehouseId !== undefined },
   );
 
-  const canCreate = selectedSkuId !== undefined && selectedWarehouseId !== undefined
-    && form.plannedQty.trim().length > 0;
-
   if (catalogError) return <div>Failed to load catalogs: {catalogError.message}</div>;
 
   return (
     <div>
-      <h2>Sales Plan</h2>
+      <h2>Plan vs Actual</h2>
       <div>
-        <select value={form.skuId} onChange={(e) => setForm((prev) => ({ ...prev, skuId: e.target.value }))}>
+        <select value={skuId} onChange={(e) => setSkuId(e.target.value)}>
           <option value="">SKU…</option>
           {(skusQuery.data ?? []).map((sku) => <option key={sku.id} value={sku.id}>{sku.sku ?? sku.name ?? `#${sku.id}`}</option>)}
         </select>
-        <select value={form.warehouseId} onChange={(e) => setForm((prev) => ({ ...prev, warehouseId: e.target.value }))}>
+        <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
           <option value="">Warehouse…</option>
           {(warehousesQuery.data ?? []).map((w) => <option key={w.id} value={w.id}>{w.code} — {w.name}</option>)}
         </select>
-        <input
-          type="date"
-          value={form.periodDate}
-          onChange={(e) => setForm((prev) => ({ ...prev, periodDate: e.target.value }))}
-        />
-        <input
-          type="text"
-          placeholder="planned qty"
-          value={form.plannedQty}
-          onChange={(e) => setForm((prev) => ({ ...prev, plannedQty: e.target.value }))}
-        />
-        <button
-          disabled={!canCreate || createEntry.isPending}
-          onClick={() =>
-            createEntry.mutate({
-              skuId: selectedSkuId!,
-              warehouseId: selectedWarehouseId!,
-              periodDate: new Date(form.periodDate),
-              plannedQty: Number(form.plannedQty),
-            })
-          }
-        >
-          Add plan entry
-        </button>
-        {createEntry.error && <div>Failed to save: {createEntry.error.message}</div>}
       </div>
       {selectedSkuId !== undefined && selectedWarehouseId !== undefined && (
         <div>
@@ -355,7 +314,7 @@ export function StockPage() {
           )}
         </tbody>
       </table>
-      <SalesPlanSection warehouseFilter={warehouseFilter} />
+      <SalesPlanReportSection warehouseFilter={warehouseFilter} />
       <WeeklySalesPlanSection />
     </div>
   );

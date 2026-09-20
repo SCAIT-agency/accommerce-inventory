@@ -250,6 +250,69 @@ describe("getShipmentLandedUnitCost", () => {
     await expect(getShipmentLandedUnitCost(shipment.id)).rejects.toThrow(/invalid qty/);
   });
 
+  it("rejects a non-numeric weightShare instead of silently computing NaN", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "EUR" }],
+      createdBy: 1,
+    });
+    const [lineItem] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container2",
+      warehouseId: ff.id,
+      lineItems: [{ poLineItemId: lineItem.id, skuId: sku.id, qty: 1000, weightShare: "abc", valueShare: "1.0" }],
+      createdBy: 1,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "150.00", dutyCost: "20.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+
+    await expect(getShipmentLandedUnitCost(shipment.id)).rejects.toThrow(/invalid weightShare/);
+  });
+
+  it("rejects a shipment whose line items' weightShare doesn't sum to 1, instead of silently over- or under-allocating freight", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const skuA = await createSku({ sku: "JELLO-MULTI-A", primaryIdentifierType: "sku" });
+    const skuB = await createSku({ sku: "JELLO-MULTI-B", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [
+        { skuId: skuA.id, qty: 1000, unitPrice: "0.15", currency: "EUR" },
+        { skuId: skuB.id, qty: 500, unitPrice: "0.30", currency: "EUR" },
+      ],
+      createdBy: 1,
+    });
+    const poLines = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+    const lineA = poLines.find((l) => l.skuId === skuA.id)!;
+    const lineB = poLines.find((l) => l.skuId === skuB.id)!;
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container3",
+      warehouseId: ff.id,
+      // Both lines left at the "1.0" default — a common real-world mistake
+      // (see design discussion) that would otherwise double-allocate freight.
+      lineItems: [
+        { poLineItemId: lineA.id, skuId: skuA.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" },
+        { poLineItemId: lineB.id, skuId: skuB.id, qty: 500, weightShare: "1.0", valueShare: "1.0" },
+      ],
+      createdBy: 1,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "150.00", dutyCost: "20.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: 1 },
+    );
+
+    await expect(getShipmentLandedUnitCost(shipment.id)).rejects.toThrow(/weightShare sums to 2/);
+  });
+
   it("rejects computing landed cost when the PO line's currency doesn't match the shipment's cost currency", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });

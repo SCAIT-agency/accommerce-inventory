@@ -2,21 +2,39 @@ import { useState } from "react";
 import { trpc } from "../lib/trpc";
 import { SKU_IDENTIFIER_TYPES } from "../../../drizzle/schema";
 
+// The 4 non-sku/non-name identifier types have no dedicated field on this
+// form — sku/name double as free reference fields for those, and this one
+// input carries the actual primary identifier value.
+const OTHER_IDENTIFIER_TYPES = new Set<(typeof SKU_IDENTIFIER_TYPES)[number]>(["ssku", "asin", "ean", "fnsku"]);
+
 function SkusSection() {
   const utils = trpc.useUtils();
   const skusQuery = trpc.catalog.listSkus.useQuery();
   const [sku, setSku] = useState("");
   const [name, setName] = useState("");
+  const [otherIdentifierValue, setOtherIdentifierValue] = useState("");
   const [primaryIdentifierType, setPrimaryIdentifierType] = useState<(typeof SKU_IDENTIFIER_TYPES)[number]>("sku");
   const createSku = trpc.catalog.createSku.useMutation({
     onSuccess: () => {
       setSku("");
       setName("");
+      setOtherIdentifierValue("");
       utils.catalog.listSkus.invalidate();
     },
   });
 
   if (skusQuery.error) return <div>Failed to load SKUs: {skusQuery.error.message}</div>;
+
+  const needsOtherIdentifier = OTHER_IDENTIFIER_TYPES.has(primaryIdentifierType);
+  // Must require the field matching the SELECTED type, not just "either
+  // field" — picking "sku" but only filling Name (or vice versa) would
+  // otherwise submit with the primary identifier's own column empty, which
+  // fails the same NOT NULL constraint this form exists to satisfy.
+  const canCreate = needsOtherIdentifier
+    ? otherIdentifierValue.trim().length > 0
+    : primaryIdentifierType === "sku"
+      ? sku.trim().length > 0
+      : name.trim().length > 0;
 
   return (
     <div>
@@ -35,9 +53,26 @@ function SkusSection() {
         <select value={primaryIdentifierType} onChange={(e) => setPrimaryIdentifierType(e.target.value as (typeof SKU_IDENTIFIER_TYPES)[number])}>
           {SKU_IDENTIFIER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
+        {needsOtherIdentifier && (
+          <input
+            placeholder={`${primaryIdentifierType} value`}
+            value={otherIdentifierValue}
+            onChange={(e) => setOtherIdentifierValue(e.target.value)}
+          />
+        )}
         <button
-          disabled={createSku.isPending || (!sku && !name)}
-          onClick={() => createSku.mutate({ sku: sku || undefined, name: name || undefined, primaryIdentifierType })}
+          disabled={createSku.isPending || !canCreate}
+          onClick={() =>
+            createSku.mutate({
+              sku: sku || undefined,
+              name: name || undefined,
+              ssku: primaryIdentifierType === "ssku" ? otherIdentifierValue : undefined,
+              asin: primaryIdentifierType === "asin" ? otherIdentifierValue : undefined,
+              ean: primaryIdentifierType === "ean" ? otherIdentifierValue : undefined,
+              fnsku: primaryIdentifierType === "fnsku" ? otherIdentifierValue : undefined,
+              primaryIdentifierType,
+            })
+          }
         >
           Add SKU
         </button>

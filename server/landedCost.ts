@@ -69,6 +69,47 @@ export async function getShipmentLandedUnitCost(
   const freightCost = parseFloat(shipment.freightCost ?? "0");
   const dutyCost = parseFloat(shipment.dutyCost ?? "0");
 
+  // weightShare/valueShare are freeform decimal strings at input time —
+  // validate them here, the one place every consumer (dashboards, and the
+  // ledger receipt this feeds at arrival) goes through, rather than trusting
+  // the write path. A non-numeric or out-of-range share would otherwise
+  // propagate as NaN into `landedUnitCost` below and, via markShipmentArrived,
+  // be written permanently into inventory_ledger.unitCost — there is no
+  // reversal path for a corrupted ledger row anywhere in this codebase.
+  const SHARE_SUM_TOLERANCE = 0.001;
+  const weightShares = new Map<number, number>();
+  const valueShares = new Map<number, number>();
+  for (const line of lines) {
+    const weightShare = parseFloat(line.weightShare);
+    const valueShare = parseFloat(line.valueShare);
+    if (!Number.isFinite(weightShare) || weightShare < 0 || weightShare > 1) {
+      throw new Error(
+        `getShipmentLandedUnitCost: shipment ${shipmentId} line item ${line.id} has an invalid weightShare "${line.weightShare}" — must be a number between 0 and 1`,
+      );
+    }
+    if (!Number.isFinite(valueShare) || valueShare < 0 || valueShare > 1) {
+      throw new Error(
+        `getShipmentLandedUnitCost: shipment ${shipmentId} line item ${line.id} has an invalid valueShare "${line.valueShare}" — must be a number between 0 and 1`,
+      );
+    }
+    weightShares.set(line.id, weightShare);
+    valueShares.set(line.id, valueShare);
+  }
+  if (lines.length > 0) {
+    const weightShareSum = [...weightShares.values()].reduce((a, b) => a + b, 0);
+    const valueShareSum = [...valueShares.values()].reduce((a, b) => a + b, 0);
+    if (Math.abs(weightShareSum - 1) > SHARE_SUM_TOLERANCE) {
+      throw new Error(
+        `getShipmentLandedUnitCost: shipment ${shipmentId}'s line items' weightShare sums to ${weightShareSum}, not 1 — freight would be mis-allocated`,
+      );
+    }
+    if (Math.abs(valueShareSum - 1) > SHARE_SUM_TOLERANCE) {
+      throw new Error(
+        `getShipmentLandedUnitCost: shipment ${shipmentId}'s line items' valueShare sums to ${valueShareSum}, not 1 — duty would be mis-allocated`,
+      );
+    }
+  }
+
   // One query for every line's PO line item, instead of one query per line —
   // this is bounded by a single shipment's own line count (not SKU count
   // across the whole catalog), but it's the same N+1 shape the rest of this
@@ -101,9 +142,12 @@ export async function getShipmentLandedUnitCost(
       );
     }
     const exwTotal = parseFloat(poLine.unitPrice) * line.qty;
-    const allocatedFreight = freightCost * parseFloat(line.weightShare);
-    const allocatedDuty = dutyCost * parseFloat(line.valueShare);
+    const allocatedFreight = freightCost * weightShares.get(line.id)!;
+    const allocatedDuty = dutyCost * valueShares.get(line.id)!;
     const landedUnitCost = (exwTotal + allocatedFreight + allocatedDuty) / line.qty;
+    if (!Number.isFinite(landedUnitCost)) {
+      throw new Error(`getShipmentLandedUnitCost: computed a non-finite landedUnitCost for shipment ${shipmentId} line item ${line.id} — refusing to write this into the ledger`);
+    }
     results.push({ lineItemId: line.id, skuId: line.skuId, landedUnitCost });
   }
   return results;

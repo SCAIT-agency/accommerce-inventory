@@ -34,8 +34,19 @@ export const appRouter = router({
   catalog: router({
     listSkus: protectedProcedure.query(() => listSkus()),
     createSku: editorProcedure
-      .input(z.object({ sku: z.string().optional(), name: z.string().optional(), primaryIdentifierType: z.enum(SKU_IDENTIFIER_TYPES) }))
-      .mutation(({ input }) => createSku(input as any)),
+      .input(z.object({
+        sku: z.string().optional(),
+        ssku: z.string().optional(),
+        asin: z.string().optional(),
+        ean: z.string().optional(),
+        fnsku: z.string().optional(),
+        name: z.string().optional(),
+        primaryIdentifierType: z.enum(SKU_IDENTIFIER_TYPES),
+      }).refine((input) => {
+        const value = input[input.primaryIdentifierType];
+        return typeof value === "string" && value.trim().length > 0;
+      }, { message: "the field matching primaryIdentifierType must be provided and non-empty" }))
+      .mutation(({ input }) => createSku(input)),
     listVendors: protectedProcedure.query(() => listVendors()),
     createVendor: editorProcedure.input(z.object({ name: z.string() })).mutation(({ input }) => createVendor(input)),
     listWarehouses: protectedProcedure.query(() => listWarehouses()),

@@ -2,7 +2,7 @@
 
 Source: the final whole-branch review after V1's 20 tasks (see [`BUILD-HISTORY.md`](./BUILD-HISTORY.md)), plus the deferred-minor triage that review ran against everything parked during the build. Every item here is a real finding, not a guess — each was independently verified against the actual code, not just asserted.
 
-Grouped into eight work streams (A–H). Recommended order: **B → A → E → C → D**, with F riding along with whichever other stream touches the same files, and G and H (both added 2026-09-20, at the user's request) closing gaps the earlier streams left standing — G gave the app a live write path to actually receive stock; H gave it a way to plan sales at the grain the business actually plans it, plus fixed a real duplicate-row bug in the existing manual sales-plan entry path. **A, B, C, D, E, G, and H are all done** — remaining work is F (cleanup, opportunistic) plus the small deferred items each stream surfaced along the way.
+Grouped into nine work streams (A–I). Recommended order: **B → A → E → C → D**, with F riding along with whichever other stream touches the same files, and G, H, and I (all added 2026-09-20, at the user's request) closing gaps the earlier streams left standing — G gave the app a live write path to actually receive stock; H gave it a way to plan sales at the grain the business actually plans it, plus fixed a real duplicate-row bug in the existing manual sales-plan entry path; I is a fresh three-lens whole-codebase review (operations/product/engineering) that found and immediately closed the most severe cross-cutting gaps, and tracks everything else it found for future streams. **A, B, C, D, E, G, H, and I are all done** — remaining work is F (cleanup, opportunistic) plus the substantial list of tracked-but-not-yet-built items section I surfaced.
 
 Status legend: ✅ done · ⬜ open
 
@@ -139,6 +139,56 @@ The live app had no way to record a shipment's arrival as real stock — `record
 
 **New item surfaced during this stream — deliberately deferred:**
 - ⬜ `regenerateSalesPlanForWeek`'s per-day `Math.round` can produce a small (≤1 unit/SKU/week) drift between the sum of daily planned quantities and the mathematically exact weekly total — e.g. 10,000/day × 5 units/€1,000 = 7.142.../day, rounding to 7/day × 7 = 49 instead of the exact 50/week. Accepted by design (the spec's largest-remainder ruling only covers the *warehouse* split, not the *day* split, and there's no evidence a day-of-week pattern would be more correct) but was undocumented as a known consequence — worth a one-line doc comment if anyone investigates a "plan doesn't sum to what I typed" report later.
+
+---
+
+## I. Three-lens architecture review (Cook/Jobs/Cherny) — ✅ CRITICAL TIER DONE (2026-09-20), rest tracked below
+
+Full re-review of the whole codebase and product at the user's request, after Streams A-H — three independent fresh reviews (operational excellence, product coherence, engineering rigor), each told to explore cold and verify every claim against real code. Full reports: [`2026-09-20-three-lens-architecture-review.md`](./2026-09-20-three-lens-architecture-review.md). This section only summarizes; read the full doc for file:line evidence on every item.
+
+**Fixed immediately (the items multiple lenses independently flagged, or that were actively corrupting data):**
+
+- ✅ **`getShipmentLandedUnitCost` now validates `weightShare`/`valueShare`** — every line must be finite and in [0,1], and all of a shipment's lines must sum to 1 for weight and separately for value, or it throws before computing anything. Previously a non-numeric share, or lines left at the "1.0" default across a multi-line shipment, would silently compute (and, via `markShipmentArrived`, permanently write) a wrong or `NaN` landed cost into `inventory_ledger` with no reversal path — found independently by all three lenses.
+- ✅ **`getDailyCogsForRange` now handles `"adjustment"` ledger events**, matching `getRemainingBatches`'s existing rule exactly (negative adjustment consumes FIFO like a sale but isn't counted as Daily COGS; positive adjustment becomes its own batch) — previously it silently ignored adjustments entirely, the one of three parallel FIFO implementations that did, causing Daily COGS to diverge from SOH/batch-detail on any SKU with a real adjustment in its history. A final-review pass on this fix also caught and closed a same-timestamp query-ordering hazard the fix itself introduced, wrapped the call in `getMoneyDashboard` with the same try/catch pattern already used for landed cost (`dailyCogsError`), and replaced a test that would have passed even without the fix.
+- ✅ **Removed the manual "Add plan entry" form from the Stock page** — it wrote into the same `sales_plan` rows the Weekly Sales Plan generator owns, and `regenerateSalesPlanForWeek` unconditionally replaces every row for a week's recipe SKUs, so a manual entry for any SKU in that week's recipe was silently destroyed on the next weekly save with no warning either direction. The SKU/warehouse picker + volatility + plan-vs-actual report stays (renamed `SalesPlanReportSection`) — it's read-only and doesn't conflict with anything. The backend `salesPlan.create` procedure and `createSalesPlanEntry` function are untouched and still tested; only the conflicting UI access was removed.
+- ✅ **Currency codes normalized to uppercase before comparing/grouping** in `getCashflowForecast` — `"EUR"` vs `"eur"` was previously treated as two distinct currencies, either triggering a spurious mixed-currency estimate or missing a standard rate keyed by the uppercase code, taking down both Home and Money on a simple casing typo.
+- ✅ **`createSku` now genuinely supports all 6 identifier types** — the router previously accepted only `sku`/`name` behind an `as any` cast that hid the mismatch, while the Catalog page's dropdown offered all 6, so selecting `asin`/`ean`/`fnsku`/`ssku` was guaranteed to fail a NOT NULL constraint with no input field to supply the value anyway. Router schema widened to all 6 optional fields (cast removed, `pnpm check` confirms it was never needed), Catalog page gained a conditional input for the 4 previously-broken types, and a server-side Zod `.refine()` plus a corrected client-side `canCreate` close the residual hole where picking "sku" but only filling "name" (or vice versa) would still submit an empty primary identifier.
+- ✅ **Deleted a dead, misleading duplicate `AppRouter` type** in `server/_core/trpc.ts` that shadowed the real one in `routers.ts` and resolved to a useless generic type — confirmed via repo-wide grep that nothing imported it.
+
+All of the above went through a full review + fix-round + scoped re-review cycle before being committed, per this project's established process.
+
+**Tracked, not yet built** (grouped by lens — see the full doc linked above for file:line evidence on each):
+
+*Operational (Cook):*
+- ⬜ No way to enter a bank transaction from the UI — `payments.recordTransaction` has a router procedure but no client caller; the Transactions page can only ever show what the migration script imported.
+- ⬜ Purchase Order status can never be advanced from the UI — `purchaseOrders.updateStatus` has a full state machine, tests, and a router procedure, but `PurchaseOrdersPage.tsx` renders status as a read-only badge. Every PO stays `draft` forever in the live app.
+- ⬜ The daily Shopify pull is a manual CLI chore with no schedule, retry, or alerting — and treats the negative-stock guard firing (the most likely real production error) as an "expected skip," silently vanishing that SKU's sales for the day with only a console line as a trace.
+- ⬜ No reversal or correction path exists anywhere for stock, cost, or payment data — a wrong receipt qty, landed cost, or payment can never be corrected or reversed by any operator action. `sales_plan` is the only table the app will delete from.
+- ⬜ Freight/duty can be edited after a shipment has already arrived and its ledger receipt written, permanently desyncing the two with no warning.
+- ⬜ Migrations aren't in the deploy pipeline (`RAILWAY.md` only says to run `pnpm db:push` manually once); the nightly export has no row bound and will OOM at real ledger volume; no monitoring/alerting/restore-drill exists anywhere.
+- ⬜ Matching a transaction doesn't mark its payment paid — the two functions (`matchTransactionToPayment`, cashflow's `paid` check) disagree on what "paid" means, so a matched-but-unpaid payment is invisible to both the actual and the unpaid views.
+- ⬜ Overdue payables (expectedDate in the past, still unpaid) are excluded from "near-term cash needs" entirely — only future-dated unpaid amounts are counted.
+- ⬜ `MoneyPage`'s Daily COGS/Landed Cost tabs silently show data for an arbitrary first-in-list SKU/warehouse/shipment with no picker or label — a V1 placeholder the comment admits, never revisited by the stream that relabeled this page.
+- ⬜ A SKU with no ledger history is structurally excluded from the stockout-risk count rather than shown at risk.
+
+*Product (Jobs):*
+- ⬜ The Change Log page is completely unreachable from the UI (no link anywhere) despite 7+ reason-category dropdowns across the app existing specifically to feed it.
+- ⬜ The app displays raw SKU ids (`SKU #17`) instead of names/codes on Shipments, PO, Money, and the Inventory Ledger drill-down, despite `catalog.listSkus` already being called on multiple of those pages.
+- ⬜ No currency symbol anywhere money is displayed; 4 different date-formatting conventions across the app; a shipment's Status cell renders 4 independent controls with 4 differently-defaulted reason dropdowns in one table cell.
+- ⬜ `CustomsArrivalControl` renders (and offers a working-looking button) on shipments still in `planned` status, where the backend is guaranteed to reject it — the user sees a developer-facing error naming an internal function.
+- ⬜ Home page is 4 non-clickable, unlabeled counters with no path to action; the stockout-risk threshold (21/45/90 days) has no relationship to this business's real ~66-day replenishment lead time, so a SKU that's already too late to save renders as merely "low."
+- ⬜ No `leadTimeDays`/`safetyStockDays`/reorder-point columns anywhere in the schema — the app cannot answer "what do I order and when," the two questions the Control Tower it's meant to replace exists to answer.
+- ⬜ Catalog entities (SKU/Vendor/Warehouse) can be created but never edited or archived.
+
+*Engineering (Cherny):*
+- ⬜ **The 3 parallel FIFO implementations are still 3 separate functions** (`computeFifoCogs` — dead code, `getRemainingBatches`, and `getDailyCogsForRange`) — this stream fixed the one live disagreement between them (adjustment handling) but did not unify them into one shared implementation, which remains the recommended fix to prevent the next divergence.
+- ⬜ **Money and quantity-share columns are still `varchar`, not `decimal`** — every monetary column in the schema (`unitPrice`, `freightCost`, `paidAmount`, `fxRate`, etc.) allows storing `"NaN"`, `""`, or any non-numeric string; MySQL cannot validate or `SUM` them. `decimal(18,4)` with Drizzle's string mode is a drop-in.
+- ⬜ Four different "row not found" idioms coexist, including two in the same file (`shipments.ts`) — explicit-throw, unguarded-crash, silent-optional-chain-into-a-false-audit-row, and spread-of-undefined-into-a-malformed-object. No single house style.
+- ⬜ Several money-affecting writes aren't atomic — `recordShipmentCosts` and `markPaymentPaid` each do an update followed by multiple unguarded `logChange` calls with no transaction.
+- ⬜ Missing FKs on `sales_plan`/`sales_actuals` (skuId/warehouseId), `purchase_orders.vendorId`, and every `createdBy`/`changedBy` column; exactly one index exists in the whole schema (`inventory_ledger`'s), so `change_log`'s history lookup and `payments`'/`transactions`' cashflow-relevant queries all full-scan.
+- ⬜ `.mjs` CLI scripts are outside the TypeScript project entirely (no `allowJs`) — the daily Shopify pull path has none of the migration path's input validation rigor.
+- ⬜ Dead code: `updateSku` (never called), `computeFifoCogs` (superseded, test-only); `nightlyExport.ts`'s `CORE_TABLES` list already missed Stream H's two new tables the moment they shipped, since it's a hand-maintained list rather than derived from the schema.
+- ⬜ `payments.history` router procedure is unreachable from the UI (`ChangeLogPage`/its route only accept `"purchase_order" | "shipment"`).
 
 ---
 

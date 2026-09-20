@@ -8,8 +8,6 @@ export const router = t.router;
 export const publicProcedure = t.procedure;
 export { t };
 
-export type AppRouter = ReturnType<typeof router>;
-
 const requireUser = t.middleware(async ({ ctx, next }) => {
   if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED" });
   return next({ ctx: { ...ctx, user: ctx.user } });
