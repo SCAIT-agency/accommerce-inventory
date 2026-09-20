@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
 import { trpc } from "../lib/trpc";
 
-const STATUS_COLORS: Record<string, string> = {
-  critical: "#b00020",
-  low: "#b36b00",
-  ok: "#1a7f37",
-  overstock: "#5a5a5a",
-  unknown: "#5a5a5a",
+const STATUS_BADGE_CLASS: Record<string, string> = {
+  critical: "badge badge-critical",
+  low: "badge badge-warning",
+  ok: "badge badge-ok",
+  overstock: "badge badge-overstock",
+  unknown: "badge badge-unknown",
 };
 
 interface SalesPlanFormState {
@@ -152,7 +152,7 @@ export function StockPage() {
                 <td>{w.soh}</td>
                 <td>{w.avgDailySales.toFixed(2)}</td>
                 <td>{w.daysOfCover === null ? "—" : w.daysOfCover.toFixed(1)}</td>
-                <td style={{ color: STATUS_COLORS[w.status] }}>{w.status}</td>
+                <td><span className={STATUS_BADGE_CLASS[w.status]}>{w.status}</span></td>
               </tr>
             )),
           )}

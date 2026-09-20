@@ -1,0 +1,281 @@
+/* client/src/index.css
+ *
+ * The app's first stylesheet — everything before this was unstyled browser
+ * defaults. Styles the existing semantic HTML directly (table, input, select,
+ * button, nav) rather than requiring every page to adopt new class names, so
+ * this applies app-wide with minimal component changes.
+ *
+ * Palette anchors on the semantic status colors StockPage.tsx already used
+ * inline (critical/low/ok/overstock) rather than inventing new ones — see
+ * STATUS_COLORS there. Type pairing: IBM Plex Sans for UI text, IBM Plex Mono
+ * for anything tabular (SKU codes, money, dates) — a ledger/manifest reads
+ * fastest when its figures line up in a fixed-width face.
+ */
+
+:root {
+  --ink: #12182b;
+  --muted: #5a6472;
+  --surface: #f5f6f8;
+  --surface-raised: #ffffff;
+  --border: #dbdfe6;
+  --accent: #26456f;
+  --accent-soft: #e4ecf5;
+  --accent-contrast: #ffffff;
+
+  --critical: #b00020;
+  --critical-soft: #fbe7ea;
+  --warning: #b36b00;
+  --warning-soft: #fbf0dc;
+  --ok: #1a7f37;
+  --ok-soft: #e4f3e8;
+  --neutral-status: #5a5a5a;
+  --neutral-status-soft: #eceef0;
+
+  --font-ui: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e7e9ee;
+    --muted: #9aa1ac;
+    --surface: #14171c;
+    --surface-raised: #1c2027;
+    --border: #2b3038;
+    --accent: #7fa3d1;
+    --accent-soft: #202a38;
+    --accent-contrast: #0d1117;
+
+    --critical: #e8887a;
+    --critical-soft: #3a2224;
+    --warning: #e0b155;
+    --warning-soft: #3a2f1a;
+    --ok: #7bcb98;
+    --ok-soft: #1f3527;
+    --neutral-status: #9aa1ac;
+    --neutral-status-soft: #262a30;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+h1, h2, h3 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  margin: 0 0 12px;
+}
+
+h1 { font-size: 22px; }
+h2 { font-size: 18px; }
+h3 { font-size: 15px; }
+
+p {
+  color: var(--muted);
+  max-width: 65ch;
+  margin: 0 0 16px;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* --- Top nav (AppNav) --------------------------------------------------- */
+
+nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 24px;
+  height: 52px;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-ui);
+}
+
+nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: 6px;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+nav a:hover {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+nav a.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+nav button {
+  margin-left: auto;
+}
+
+/* --- Page container ------------------------------------------------------ */
+
+#root > div {
+  padding: 24px 24px 48px;
+  max-width: 1100px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* --- Tables — the app's primary surface --------------------------------- */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+caption {
+  text-align: left;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+th {
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr:hover {
+  background: var(--accent-soft);
+}
+
+/* Numeric-looking table content reads as data, not prose. */
+td, th {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Forms --------------------------------------------------------------- */
+
+input, select, button {
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+
+input, select {
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 5px 8px;
+  margin: 2px 4px 2px 0;
+}
+
+input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+input[type="date"], input[type="email"], input[type="password"], input[type="text"] {
+  font-family: var(--font-data);
+}
+
+button {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 6px 12px;
+  font-weight: 500;
+  cursor: pointer;
+  margin: 2px 4px 2px 0;
+  transition: opacity 120ms ease;
+}
+
+button:hover {
+  opacity: 0.88;
+}
+
+button:disabled {
+  background: var(--border);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+/* --- Status badges --------------------------------------------------------
+ * Shared by StockPage's daysOfCover status and ShipmentsPage's shipment/
+ * customs status. A pill, not a color-block: semantic color is a signal,
+ * not the whole surface. */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.badge-critical { color: var(--critical); background: var(--critical-soft); }
+.badge-low, .badge-warning { color: var(--warning); background: var(--warning-soft); }
+.badge-ok { color: var(--ok); background: var(--ok-soft); }
+.badge-overstock, .badge-unknown, .badge-neutral { color: var(--neutral-status); background: var(--neutral-status-soft); }
+
+[role="alert"] {
+  color: var(--critical);
+  background: var(--critical-soft);
+  border: 1px solid var(--critical);
+  border-radius: 5px;
+  padding: 6px 10px;
+  font-size: 13px;
+  margin-top: 6px;
+}

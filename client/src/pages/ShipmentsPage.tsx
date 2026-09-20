@@ -13,6 +13,16 @@ const REASON_CATEGORIES = [
 
 type ReasonCategory = (typeof REASON_CATEGORIES)[number];
 
+const SHIPMENT_STATUS_BADGE_CLASS: Record<string, string> = {
+  delivered: "badge badge-ok",
+};
+const DEFAULT_STATUS_BADGE_CLASS = "badge badge-neutral";
+
+const CUSTOMS_STATUS_BADGE_CLASS: Record<string, string> = {
+  held: "badge badge-warning",
+  cleared: "badge badge-ok",
+};
+
 // "planned" has no entry here on purpose: the only forward transition out of
 // "planned" is marking a shipment departed, which must go through
 // markShipmentDeparted (records the actual depart date and enforces the
@@ -221,7 +231,10 @@ function CustomsArrivalControl({ shipment, onUpdated }: { shipment: ShipmentList
 
   return (
     <div>
-      <div>Customs: {shipment.customsStatus} · Arrived: {shipment.actualArrivalDate ? new Date(shipment.actualArrivalDate).toISOString().slice(0, 10) : "—"}</div>
+      <div>
+        Customs: <span className={CUSTOMS_STATUS_BADGE_CLASS[shipment.customsStatus] ?? DEFAULT_STATUS_BADGE_CLASS}>{shipment.customsStatus}</span>
+        {" "}· Arrived: {shipment.actualArrivalDate ? new Date(shipment.actualArrivalDate).toISOString().slice(0, 10) : "—"}
+      </div>
       <select
         value={form.customsStatus}
         onChange={(e) => setForm((prev) => ({ ...prev, customsStatus: e.target.value }))}
@@ -349,7 +362,7 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
     <tr>
       <td>{shipment.shipmentRef}</td>
       <td>
-        {shipment.status}
+        <span className={SHIPMENT_STATUS_BADGE_CLASS[shipment.status] ?? DEFAULT_STATUS_BADGE_CLASS}>{shipment.status}</span>
         <div style={{ marginTop: "8px" }}>
           <PlannedDepartureControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
         </div>
