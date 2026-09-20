@@ -13,6 +13,7 @@ import { PurchaseOrdersPage } from "./pages/PurchaseOrdersPage";
 import { ShipmentsPage } from "./pages/ShipmentsPage";
 import { MoneyPage } from "./pages/MoneyPage";
 import { ChangeLogPage } from "./pages/ChangeLogPage";
+import { InventoryLedgerPage } from "./pages/InventoryLedgerPage";
 import { LoginPage } from "./pages/LoginPage";
 
 // Without this guard every protected page just renders "Failed to load:
@@ -78,6 +79,16 @@ function ChangeLogRoute() {
   return <ChangeLogPage entityType={entityType} entityId={id} />;
 }
 
+function InventoryLedgerRoute() {
+  const { skuId, warehouseId } = useParams<{ skuId: string; warehouseId: string }>();
+  const parsedSkuId = Number(skuId);
+  const parsedWarehouseId = Number(warehouseId);
+  if (!skuId || !warehouseId || Number.isNaN(parsedSkuId) || Number.isNaN(parsedWarehouseId)) {
+    return <div>Invalid SKU or warehouse id</div>;
+  }
+  return <InventoryLedgerPage skuId={parsedSkuId} warehouseId={parsedWarehouseId} />;
+}
+
 const queryClient = new QueryClient();
 const trpcClient = trpc.createClient({
   links: [httpBatchLink({ url: "/api/trpc", transformer: superjson })],
@@ -97,6 +108,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="/shipments" element={<ShipmentsPage />} />
               <Route path="/money" element={<MoneyPage />} />
               <Route path="/change-log/:entityType/:entityId" element={<ChangeLogRoute />} />
+              <Route path="/inventory-ledger/:skuId/:warehouseId" element={<InventoryLedgerRoute />} />
             </Route>
           </Routes>
         </BrowserRouter>

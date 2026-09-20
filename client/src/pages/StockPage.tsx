@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
@@ -20,11 +21,14 @@ function defaultSalesPlanForm(): SalesPlanFormState {
   return { skuId: "", warehouseId: "", periodDate: new Date().toISOString().slice(0, 10), plannedQty: "" };
 }
 
-function SalesPlanSection() {
+function SalesPlanSection({ warehouseFilter }: { warehouseFilter: number | "all" }) {
   const utils = trpc.useUtils();
   const skusQuery = trpc.catalog.listSkus.useQuery();
   const warehousesQuery = trpc.catalog.listWarehouses.useQuery();
-  const [form, setForm] = useState<SalesPlanFormState>(() => defaultSalesPlanForm());
+  const [form, setForm] = useState<SalesPlanFormState>(() => ({
+    ...defaultSalesPlanForm(),
+    warehouseId: warehouseFilter === "all" ? "" : String(warehouseFilter),
+  }));
   const createEntry = trpc.salesPlan.create.useMutation({
     onSuccess: () => {
       setForm(defaultSalesPlanForm());
@@ -116,6 +120,7 @@ function SalesPlanSection() {
 export function StockPage() {
   const stockQuery = trpc.dashboards.stock.useQuery();
   const warehousesQuery = trpc.catalog.listWarehouses.useQuery();
+  const [warehouseFilter, setWarehouseFilter] = useState<number | "all">("all");
 
   const warehouseLabels = useMemo(() => {
     const map = new Map<number, string>();
@@ -133,6 +138,14 @@ export function StockPage() {
   return (
     <div>
       <h1>Stock</h1>
+      <div>
+        <button onClick={() => setWarehouseFilter("all")} disabled={warehouseFilter === "all"}>All warehouses</button>
+        {(warehousesQuery.data ?? []).map((w) => (
+          <button key={w.id} onClick={() => setWarehouseFilter(w.id)} disabled={warehouseFilter === w.id}>
+            {w.code}
+          </button>
+        ))}
+      </div>
       <table>
         <thead>
           <tr>
@@ -142,24 +155,28 @@ export function StockPage() {
             <th>Avg daily sales</th>
             <th>Days of cover</th>
             <th>Status</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           {data.flatMap((row) =>
-            row.byWarehouse.map((w) => (
-              <tr key={`${row.skuId}-${w.warehouseId}`}>
-                <td>{row.sku}</td>
-                <td>{warehouseLabels.get(w.warehouseId) ?? `#${w.warehouseId}`}</td>
-                <td>{w.soh}</td>
-                <td>{w.avgDailySales.toFixed(2)}</td>
-                <td>{w.daysOfCover === null ? "—" : w.daysOfCover.toFixed(1)}</td>
-                <td><span className={STATUS_BADGE_CLASS[w.status]}>{w.status}</span></td>
-              </tr>
-            )),
+            row.byWarehouse
+              .filter((w) => warehouseFilter === "all" || w.warehouseId === warehouseFilter)
+              .map((w) => (
+                <tr key={`${row.skuId}-${w.warehouseId}`}>
+                  <td>{row.sku}</td>
+                  <td>{warehouseLabels.get(w.warehouseId) ?? `#${w.warehouseId}`}</td>
+                  <td>{w.soh}</td>
+                  <td>{w.avgDailySales.toFixed(2)}</td>
+                  <td>{w.daysOfCover === null ? "—" : w.daysOfCover.toFixed(1)}</td>
+                  <td><span className={STATUS_BADGE_CLASS[w.status]}>{w.status}</span></td>
+                  <td><Link to={`/inventory-ledger/${row.skuId}/${w.warehouseId}`}>Batches</Link></td>
+                </tr>
+              )),
           )}
         </tbody>
       </table>
-      <SalesPlanSection />
+      <SalesPlanSection warehouseFilter={warehouseFilter} />
     </div>
   );
 }
