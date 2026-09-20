@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 
 const NAV_ITEMS = [
   { to: "/", label: "Home" },
@@ -9,6 +9,19 @@ const NAV_ITEMS = [
 ];
 
 export function AppNav() {
+  const navigate = useNavigate();
+
+  async function signOut() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    } finally {
+      // Always redirect, even if the network call failed — a signed-out user
+      // stuck on a page that will just 401 on every subsequent action helps
+      // no one.
+      navigate("/login");
+    }
+  }
+
   return (
     <nav>
       {NAV_ITEMS.map((item) => (
@@ -16,6 +29,7 @@ export function AppNav() {
           {item.label}
         </NavLink>
       ))}
+      <button onClick={signOut}>Sign out</button>
     </nav>
   );
 }
