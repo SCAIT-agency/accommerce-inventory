@@ -10,7 +10,6 @@ design spec's single-tenant-per-client model).
 |----------|-------------|---------|
 | `DATABASE_URL` | MySQL/TiDB connection string | `mysql://user:pass@host:4000/accommerce?ssl={"rejectUnauthorized":true}` |
 | `SESSION_SECRET` | Secret key for signing session cookies (min 32 chars) | output of `openssl rand -hex 32` |
-| `APP_PASSWORD` | Password gate — all users must enter this to access the app | `your-secure-password` |
 | `PORT` | Server port (Railway sets this automatically) | `3000` |
 
 ## One-time setup (done in Accommerce's own accounts)
@@ -22,7 +21,7 @@ design spec's single-tenant-per-client model).
 3. In TiDB Cloud's console: Settings → Backup → enable automated daily backups
    with point-in-time recovery. This is a managed feature — enable it, don't build it.
 4. In Railway: set environment variables `DATABASE_URL`, `SESSION_SECRET`
-   (`openssl rand -hex 32`), `APP_PASSWORD`, `PORT=3000`.
+   (`openssl rand -hex 32`), `PORT=3000`.
 5. Connect the Railway service to the `accommerce-inventory` GitHub repo for
    auto-deploy on push to `main`. Build command: `pnpm build`. Start command: `pnpm start`.
    `pnpm build` emits the server bundle to `dist/index.js` and the Vite-built
@@ -31,21 +30,32 @@ design spec's single-tenant-per-client model).
    serves both the API and the frontend. There is no separate static host and no
    Vite process in production.
 6. Run `pnpm db:push` once against the production `DATABASE_URL` to create the schema.
-7. **Required one-time bootstrap — create the first user.** The login flow is
-   app password → pick an identity from `users` → session. Nothing in the app
-   creates that first `users` row, so until this runs the login screen has no
-   identity to offer and nobody can get in. Run once against the production
+7. **Required one-time bootstrap — create the first user.** Nothing in the
+   app creates a `users` row on its own, so until this runs the login screen
+   has no account to authenticate against. Run once against the production
    `DATABASE_URL`:
 
    ```bash
    SEED_USER_EMAIL=ops@accommerce.example SEED_USER_ROLE=editor \
+     SEED_USER_PASSWORD=a-real-password \
      pnpm exec tsx scripts/seed-first-user.ts
    ```
 
-   `SEED_USER_ROLE` is `editor` or `viewer` (defaults to `editor`). The script
-   prints the created user's id/email/role, and refuses to run twice for the
-   same email. Add further users by re-running it with a different
+   `SEED_USER_ROLE` is `editor` or `viewer` (defaults to `editor`). The
+   script prints the created user's id/email/role, and refuses to run twice
+   for the same email. Add further users the same way, with a different
    `SEED_USER_EMAIL`.
+
+   To reset a user's password later (e.g. a suspected leak, or someone
+   forgetting theirs), run:
+
+   ```bash
+   RESET_USER_EMAIL=julian@accommerce.example RESET_USER_PASSWORD=a-new-password \
+     pnpm exec tsx scripts/reset-password.mjs
+   ```
+
+   This also immediately invalidates every session that user currently has
+   — see `docs/2026-09-20-security-hardening-design.md` Section 4.
 8. Add a Railway Cron Job (Railway → New → Cron Job) running nightly, command:
    `pnpm exec tsx scripts/run-nightly-export.mjs` (a thin wrapper around
    `runNightlyExport` — see `server/nightlyExport.ts`), writing to a Railway

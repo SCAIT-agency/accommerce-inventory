@@ -1,19 +1,18 @@
 // scripts/seed-first-user.ts
 //
-// One-time bootstrap for a fresh deploy (see RAILWAY.md). The app's login
-// flow is: app password -> pick an identity from `users` -> session cookie.
-// Nothing in the app creates that first `users` row, so without this script a
-// fresh deploy has no identity to select and nobody can get past the login
-// screen. Run once, after `pnpm db:push`:
+// Bootstrap for a fresh deploy (see RAILWAY.md) — also the general-purpose
+// way to add any subsequent user, since its only guard is "this exact email
+// already exists," not "a user already exists at all." Run with tsx, not
+// plain `node` — this repo uses extensionless relative imports that Node's
+// native ESM resolver cannot resolve.
 //
 //   SEED_USER_EMAIL=ops@accommerce.example SEED_USER_ROLE=editor \
+//     SEED_USER_PASSWORD=a-real-password \
 //     pnpm exec tsx scripts/seed-first-user.ts
-//
-// Run with tsx, not plain `node` — this repo uses extensionless relative
-// imports that Node's native ESM resolver cannot resolve.
 import { eq } from "drizzle-orm";
 import { db } from "../server/dbClient";
 import { users } from "../drizzle/schema";
+import { hashPassword } from "../server/_core/passwords";
 
 const ROLES = ["editor", "viewer"] as const;
 type Role = (typeof ROLES)[number];
@@ -21,29 +20,30 @@ type Role = (typeof ROLES)[number];
 async function main() {
   const email = process.env.SEED_USER_EMAIL;
   const role = process.env.SEED_USER_ROLE ?? "editor";
+  const password = process.env.SEED_USER_PASSWORD;
 
   if (!email) throw new Error("SEED_USER_EMAIL is required");
   if (!ROLES.includes(role as Role)) {
     throw new Error(`SEED_USER_ROLE must be one of ${ROLES.join(", ")} — got "${role}"`);
   }
+  if (!password) throw new Error("SEED_USER_PASSWORD is required");
 
   const [existing] = await db.select().from(users).where(eq(users.email, email));
   if (existing) {
     throw new Error(
-      `user ${email} already exists (id ${existing.id}, role ${existing.role}) — this bootstrap script is meant to run once against a fresh deploy`,
+      `user ${email} already exists (id ${existing.id}, role ${existing.role}) — this bootstrap script is meant to run once per email`,
     );
   }
 
-  const [result] = await db.insert(users).values({ email, role: role as Role });
+  const passwordHash = await hashPassword(password);
+  const [result] = await db.insert(users).values({ email, role: role as Role, passwordHash });
   const [created] = await db.select().from(users).where(eq(users.id, result.insertId));
 
-  console.log(`Created first user: id=${created.id} email=${created.email} role=${created.role}`);
+  console.log(`Created user: id=${created.id} email=${created.email} role=${created.role}`);
 }
 
 main()
   .then(() => {
-    // The mysql2 pool keeps its sockets open, which would otherwise keep the
-    // event loop alive forever — a one-shot script must actually exit.
     process.exit(0);
   })
   .catch((err) => {

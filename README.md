@@ -25,7 +25,7 @@ This started as a **V1 skeleton** and has since gone through three hardening pas
 ## Local development
 
 ```bash
-cp .env.example .env   # fill in DATABASE_URL / SESSION_SECRET / APP_PASSWORD
+cp .env.example .env   # fill in DATABASE_URL / SESSION_SECRET
 docker compose up -d   # local MySQL 8 for dev/test (see docker-compose.yml)
 pnpm install
 pnpm db:push
