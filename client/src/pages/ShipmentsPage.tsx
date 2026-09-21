@@ -90,6 +90,24 @@ function defaultDepartDateCorrectionForm(): DepartDateCorrectionFormState {
   return { newDate: new Date().toISOString().slice(0, 10), reasonCategory: "logistics_delay", reasonNote: "" };
 }
 
+interface ReceiptCorrectionFormState {
+  lineItemId: string;
+  newQty: string;
+  freightCost: string;
+  dutyCost: string;
+  reasonNote: string;
+}
+
+function defaultReceiptCorrectionForm(shipment: ShipmentListItem): ReceiptCorrectionFormState {
+  return {
+    lineItemId: "",
+    newQty: "",
+    freightCost: shipment.freightCost ?? "",
+    dutyCost: shipment.dutyCost ?? "",
+    reasonNote: "",
+  };
+}
+
 interface PlannedDepartureFormState {
   plannedDepartDate: string;
   actualDepartDate: string;
@@ -353,6 +371,176 @@ function DepartDateCorrectionControl({ shipment, onUpdated }: { shipment: Shipme
   );
 }
 
+// Only meaningful once a receipt has actually been written to the ledger
+// (shipment.status === "delivered") — before that, there is nothing to
+// correct. No reasonCategory here at all, per the design's Global Constraint
+// for this whole stream: every correction is "data_correction" by
+// construction, server-side. Copy stays neutral ("Correct quantity",
+// "Correct cost restated"), never "Fix"/"mistake"/"wrong".
+//
+// correctLandedCost skips (does not fail on) a line whose recomputed cost is
+// unchanged — lastCostResult reports "N of M" honestly rather than implying
+// every line was touched.
+//
+// Either mutation can be refused by correctLedgerReceipt's FIFO-replayability
+// self-check, with an error message that literally instructs the caller to
+// "pass allowNegativeSoh to record the correction anyway". That's the one
+// refusal an operator can legitimately choose to override — matched by
+// message text (both procedures throw plain Errors, no typed error here) —
+// surfaced as a distinct "Force this correction anyway" button that
+// resubmits the exact same payload with allowNegativeSoh: true. Never shown
+// by default, only after a real refusal naming this specific escape hatch.
+function CorrectReceiptControl({
+  shipment,
+  lineItems,
+  onUpdated,
+}: {
+  shipment: ShipmentListItem;
+  lineItems: { id: number; skuId: number; qty: number }[];
+  onUpdated: () => void;
+}) {
+  const correctReceiptQty = trpc.shipments.correctReceiptQty.useMutation({ onSuccess: onUpdated });
+  const correctLandedCost = trpc.shipments.correctLandedCost.useMutation({ onSuccess: onUpdated });
+  const [form, setForm] = useState<ReceiptCorrectionFormState>(() => defaultReceiptCorrectionForm(shipment));
+  const [lastQtyResult, setLastQtyResult] = useState<{ consumedFromOtherBatches: boolean } | null>(null);
+  const [lastCostResult, setLastCostResult] = useState<{ correctedCount: number; consumedFromOtherBatches: boolean } | null>(null);
+
+  if (shipment.status !== "delivered") return null;
+
+  const canCorrectQty = form.lineItemId !== "" && form.newQty.trim().length > 0 && form.reasonNote.trim().length > 0;
+  const costsChanged = form.freightCost !== (shipment.freightCost ?? "") || form.dutyCost !== (shipment.dutyCost ?? "");
+  const canCorrectCost = costsChanged && form.reasonNote.trim().length > 0;
+
+  // Present only after a refusal whose message names this exact escape
+  // hatch — mutation.error naturally clears when a new mutate() call starts,
+  // so this hides itself again as soon as the forced retry is in flight.
+  const qtyNeedsForce = correctReceiptQty.error != null && /allowNegativeSoh/i.test(correctReceiptQty.error.message);
+  const costNeedsForce = correctLandedCost.error != null && /allowNegativeSoh/i.test(correctLandedCost.error.message);
+
+  const submitQty = (allowNegativeSoh?: boolean) => {
+    correctReceiptQty.mutate(
+      {
+        shipmentId: shipment.id,
+        lineItemId: Number(form.lineItemId),
+        newQty: Number(form.newQty),
+        reasonNote: form.reasonNote,
+        allowNegativeSoh,
+      },
+      { onSuccess: (result) => setLastQtyResult(result) },
+    );
+  };
+
+  const submitCost = (allowNegativeSoh?: boolean) => {
+    correctLandedCost.mutate(
+      {
+        shipmentId: shipment.id,
+        freightCost: form.freightCost !== (shipment.freightCost ?? "") ? form.freightCost : undefined,
+        dutyCost: form.dutyCost !== (shipment.dutyCost ?? "") ? form.dutyCost : undefined,
+        reasonNote: form.reasonNote,
+        allowNegativeSoh,
+      },
+      {
+        onSuccess: (result) =>
+          setLastCostResult({
+            correctedCount: result.corrections.length,
+            consumedFromOtherBatches: result.corrections.some((c) => c.consumedFromOtherBatches),
+          }),
+      },
+    );
+  };
+
+  return (
+    <div>
+      <strong>Correct receipt</strong>
+      <div>
+        <select value={form.lineItemId} onChange={(e) => setForm((prev) => ({ ...prev, lineItemId: e.target.value }))}>
+          <option value="">Line item…</option>
+          {lineItems.map((li) => <option key={li.id} value={li.id}>SKU {li.skuId} — qty {li.qty}</option>)}
+        </select>
+        <input
+          type="text"
+          placeholder="corrected qty"
+          value={form.newQty}
+          onChange={(e) => setForm((prev) => ({ ...prev, newQty: e.target.value }))}
+        />
+        <button disabled={!canCorrectQty || correctReceiptQty.isPending} onClick={() => submitQty()}>
+          Correct quantity
+        </button>
+        {qtyNeedsForce && (
+          <button disabled={correctReceiptQty.isPending} onClick={() => submitQty(true)}>
+            Force this correction anyway
+          </button>
+        )}
+      </div>
+      <div style={{ marginTop: "4px" }}>
+        <input
+          type="text"
+          placeholder="freight cost"
+          value={form.freightCost}
+          onChange={(e) => setForm((prev) => ({ ...prev, freightCost: e.target.value }))}
+        />
+        <input
+          type="text"
+          placeholder="duty cost"
+          value={form.dutyCost}
+          onChange={(e) => setForm((prev) => ({ ...prev, dutyCost: e.target.value }))}
+        />
+        <button disabled={!canCorrectCost || correctLandedCost.isPending} onClick={() => submitCost()}>
+          Correct cost restated
+        </button>
+        {costNeedsForce && (
+          <button disabled={correctLandedCost.isPending} onClick={() => submitCost(true)}>
+            Force this correction anyway
+          </button>
+        )}
+      </div>
+      <input
+        type="text"
+        placeholder="what changed and why"
+        value={form.reasonNote}
+        onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
+      />
+      {correctReceiptQty.error && (
+        <div>
+          Failed to correct: {correctReceiptQty.error.message}
+          {qtyNeedsForce && (
+            <div>
+              This correction would leave some stock data temporarily inconsistent until the underlying issue is
+              resolved — remaining-batch and Daily COGS figures for this SKU may error out until the over-sale is
+              separately resolved.
+            </div>
+          )}
+        </div>
+      )}
+      {correctLandedCost.error && (
+        <div>
+          Failed to correct: {correctLandedCost.error.message}
+          {costNeedsForce && (
+            <div>
+              This correction would leave some stock data temporarily inconsistent until the underlying issue is
+              resolved — remaining-batch and Daily COGS figures for this SKU may error out until the over-sale is
+              separately resolved.
+            </div>
+          )}
+        </div>
+      )}
+      {lastQtyResult?.consumedFromOtherBatches && (
+        <div>This correction drew from a different batch than the one being corrected, because the original batch was already partly or fully sold — past Daily COGS is not recalculated.</div>
+      )}
+      {lastCostResult && (
+        <div>
+          Corrected {lastCostResult.correctedCount} of {lineItems.length} line items
+          {lastCostResult.correctedCount < lineItems.length
+            ? ` (${lineItems.length - lastCostResult.correctedCount} needed no change).`
+            : "."}
+          {lastCostResult.consumedFromOtherBatches &&
+            " This correction drew from a different batch than the one being corrected, because the original batch was already partly or fully sold — past Daily COGS is not recalculated."}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
   const { data, error, isLoading, refetch } = trpc.shipments.getWithLineItems.useQuery(shipment.id);
   const utils = trpc.useUtils();
@@ -390,6 +578,13 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
         </div>
         <div style={{ marginTop: "8px" }}>
           <DepartDateCorrectionControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+        </div>
+        <div style={{ marginTop: "8px" }}>
+          <CorrectReceiptControl
+            shipment={shipment}
+            lineItems={data.lineItems}
+            onUpdated={() => { refetch(); utils.shipments.list.invalidate(); utils.dashboards.money.invalidate(); utils.dashboards.stock.invalidate(); }}
+          />
         </div>
         <div style={{ marginTop: "8px" }}><Link to={`/change-log/shipment/${shipment.id}`}>History</Link></div>
       </td>
