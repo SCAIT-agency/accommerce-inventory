@@ -4,13 +4,22 @@ import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboar
 import { getRemainingBatches } from "./inventoryLedger";
 import { listSkus, createSku, updateSku, listVendors, createVendor, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
-import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
-import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
+import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
+import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation, upsertWeeklyInput, listWeeklyInputs } from "./salesPlan";
 import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES } from "../drizzle/schema";
 import { listChangeLog } from "./changeLog";
 
 const reasonCategorySchema = z.enum(REASON_CATEGORIES);
+
+// Non-negative, plain-decimal string (no exponent/scientific notation, no
+// sign) — same shape as scripts/migrate-from-sheet.ts's DECIMAL_PATTERN with
+// the leading `-?` dropped, since every field this guards (money/FX amounts)
+// is non-negative by definition. Scoped to the three new correction
+// procedures below, matching correctLedgerReceipt's own validation
+// precedent (server/inventoryLedger.ts) at the router's input layer instead
+// of leaving a malformed string to reach a `decimal` column as `"NaN"`.
+const nonNegativeDecimalString = z.string().regex(/^\d+(\.\d+)?$/, "must be a non-negative number in plain decimal notation");
 
 export const appRouter = router({
   dashboards: router({
@@ -180,6 +189,36 @@ export const appRouter = router({
           reasonNote: input.reasonNote,
         }),
       ),
+    correctReceiptQty: editorProcedure
+      .input(z.object({
+        shipmentId: z.number(),
+        lineItemId: z.number(),
+        newQty: z.number().int().positive(),
+        reasonNote: z.string().min(1),
+        allowNegativeSoh: z.boolean().optional(),
+      }))
+      .mutation(({ input, ctx }) =>
+        correctShipmentReceiptQty(input.shipmentId, input.lineItemId, input.newQty, {
+          changedBy: ctx.user.id,
+          reasonNote: input.reasonNote,
+          allowNegativeSoh: input.allowNegativeSoh,
+        }),
+      ),
+    correctLandedCost: editorProcedure
+      .input(z.object({
+        shipmentId: z.number(),
+        freightCost: nonNegativeDecimalString.optional(),
+        dutyCost: nonNegativeDecimalString.optional(),
+        reasonNote: z.string().min(1),
+        allowNegativeSoh: z.boolean().optional(),
+      }))
+      .mutation(({ input, ctx }) =>
+        correctShipmentLandedCost(
+          input.shipmentId,
+          { freightCost: input.freightCost, dutyCost: input.dutyCost },
+          { changedBy: ctx.user.id, reasonNote: input.reasonNote, allowNegativeSoh: input.allowNegativeSoh },
+        ),
+      ),
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("shipment", input)),
   }),
   payments: router({
@@ -214,6 +253,23 @@ export const appRouter = router({
           reasonCategory: input.reasonCategory,
           reasonNote: input.reasonNote,
           changedBy: ctx.user.id,
+        }),
+      ),
+    correctAmount: editorProcedure
+      .input(z.object({
+        id: z.number(),
+        amount: nonNegativeDecimalString,
+        fxRate: nonNegativeDecimalString,
+        paidDate: z.date(),
+        reasonNote: z.string().min(1),
+      }))
+      .mutation(({ input, ctx }) =>
+        correctPaymentAmount(input.id, {
+          amount: input.amount,
+          fxRate: input.fxRate,
+          paidDate: input.paidDate,
+          changedBy: ctx.user.id,
+          reasonNote: input.reasonNote,
         }),
       ),
     recordTransaction: editorProcedure
