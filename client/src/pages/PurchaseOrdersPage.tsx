@@ -68,6 +68,22 @@ function defaultMarkPaidForm(expectedAmount: string): MarkPaidFormState {
   };
 }
 
+interface PaymentCorrectionFormState {
+  amount: string;
+  fxRate: string;
+  paidDate: string;
+  reasonNote: string;
+}
+
+function defaultPaymentCorrectionForm(payment: Payment): PaymentCorrectionFormState {
+  return {
+    amount: payment.paidAmount ?? "",
+    fxRate: payment.fxRate ?? "1",
+    paidDate: payment.paidDate ? toDateInputValue(payment.paidDate) : toDateInputValue(null),
+    reasonNote: "",
+  };
+}
+
 function MarkPaidRow({ payment, onPaid }: { payment: Payment; onPaid: () => void }) {
   const markPaid = trpc.payments.markPaid.useMutation({ onSuccess: () => onPaid() });
   const [form, setForm] = useState<MarkPaidFormState>(() => defaultMarkPaidForm(payment.expectedAmount));
@@ -79,6 +95,7 @@ function MarkPaidRow({ payment, onPaid }: { payment: Payment; onPaid: () => void
     return (
       <li>
         Payment #{payment.sequenceNo}: paid {formatMoney(payment.paidAmount!, payment.currency)} on {payment.paidDate ? new Date(payment.paidDate).toISOString().slice(0, 10) : "—"}
+        <CorrectPaymentControl payment={payment} onCorrected={onPaid} />
         <PaymentHistory paymentId={payment.id} />
       </li>
     );
@@ -137,6 +154,56 @@ function MarkPaidRow({ payment, onPaid }: { payment: Payment; onPaid: () => void
       {markPaid.error && <div>Failed to save: {markPaid.error.message}</div>}
       <PaymentHistory paymentId={payment.id} />
     </li>
+  );
+}
+
+function CorrectPaymentControl({ payment, onCorrected }: { payment: Payment; onCorrected: () => void }) {
+  const correctAmount = trpc.payments.correctAmount.useMutation({ onSuccess: onCorrected });
+  const [form, setForm] = useState<PaymentCorrectionFormState>(() => defaultPaymentCorrectionForm(payment));
+  const canSave = form.amount.trim().length > 0 && form.fxRate.trim().length > 0 && form.reasonNote.trim().length > 0;
+
+  return (
+    <span>
+      {" "}
+      <input
+        type="text"
+        placeholder="corrected amount"
+        value={form.amount}
+        onChange={(e) => setForm((prev) => ({ ...prev, amount: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="fx rate"
+        value={form.fxRate}
+        onChange={(e) => setForm((prev) => ({ ...prev, fxRate: e.target.value }))}
+      />
+      <input
+        type="date"
+        value={form.paidDate}
+        onChange={(e) => setForm((prev) => ({ ...prev, paidDate: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="what changed and why"
+        value={form.reasonNote}
+        onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
+      />
+      <button
+        disabled={!canSave || correctAmount.isPending}
+        onClick={() =>
+          correctAmount.mutate({
+            id: payment.id,
+            amount: form.amount,
+            fxRate: form.fxRate,
+            paidDate: new Date(form.paidDate),
+            reasonNote: form.reasonNote,
+          })
+        }
+      >
+        Correct payment
+      </button>
+      {correctAmount.error && <div>Failed to correct: {correctAmount.error.message}</div>}
+    </span>
   );
 }
 
