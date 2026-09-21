@@ -6,6 +6,8 @@ import {
   transformShipments,
   transformPayments,
   transformTransactions,
+  transformSalesActuals,
+  transformSalesPlan,
 } from "./migrate-from-sheet";
 
 describe("transformSheetExport", () => {
@@ -215,6 +217,123 @@ describe("transformShipments", () => {
     expect(result.shipments).toEqual([]);
     expect(result.skipped[0].reason).toContain("warehouse");
   });
+
+  it("carries through planned/actual depart/arrival dates and customs status when present", () => {
+    const rows = [
+      {
+        shipment_ref: "PO1-W1", vendor_reference: "", status: "delivered", warehouse: "FF-DE",
+        freight_cost: "100.00", duty_cost: "20.00", cost_currency: "EUR",
+        po_line_item_ref: "PO1-W1::JELLO-CAL-500", sku: "JELLO-CAL-500", qty: "1000", weight_share: "1.0", value_share: "1.0",
+        planned_depart_date: "2026-07-01", actual_depart_date: "2026-07-03", planned_arrival_date: "2026-07-20", actual_arrival_date: "2026-07-22",
+        customs_status: "cleared",
+      },
+    ];
+    const result = transformShipments(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.shipments[0]).toMatchObject({
+      plannedDepartDate: new Date("2026-07-01"),
+      actualDepartDate: new Date("2026-07-03"),
+      plannedArrivalDate: new Date("2026-07-20"),
+      actualArrivalDate: new Date("2026-07-22"),
+      customsStatus: "cleared",
+    });
+  });
+
+  it("defaults date fields and customsStatus to null when the Sheet leaves them blank", () => {
+    const rows = [
+      { shipment_ref: "PO1-W1", vendor_reference: "", status: "planned", warehouse: "FF-DE", freight_cost: "", duty_cost: "", cost_currency: "", po_line_item_ref: "PO1-W1::JELLO-CAL-500", sku: "JELLO-CAL-500", qty: "1000", weight_share: "1.0", value_share: "1.0" },
+    ];
+    const result = transformShipments(rows);
+    expect(result.shipments[0]).toMatchObject({
+      plannedDepartDate: null,
+      actualDepartDate: null,
+      plannedArrivalDate: null,
+      actualArrivalDate: null,
+      customsStatus: null,
+    });
+  });
+
+  it("quarantines a row with an unparseable date field", () => {
+    const rows = [
+      { shipment_ref: "PO1-W1", vendor_reference: "", status: "planned", warehouse: "FF-DE", freight_cost: "", duty_cost: "", cost_currency: "", po_line_item_ref: "x", sku: "JELLO-CAL-500", qty: "1", weight_share: "1.0", value_share: "1.0", actual_depart_date: "not-a-date" },
+    ];
+    const result = transformShipments(rows);
+    expect(result.shipments).toEqual([]);
+    expect(result.skipped[0].reason).toContain("actualDepartDate");
+  });
+
+  it("quarantines a row with an unrecognized customs_status", () => {
+    const rows = [
+      { shipment_ref: "PO1-W1", vendor_reference: "", status: "planned", warehouse: "FF-DE", freight_cost: "", duty_cost: "", cost_currency: "", po_line_item_ref: "x", sku: "JELLO-CAL-500", qty: "1", weight_share: "1.0", value_share: "1.0", customs_status: "not_a_real_status" },
+    ];
+    const result = transformShipments(rows);
+    expect(result.shipments).toEqual([]);
+    expect(result.skipped[0].reason).toContain("customs_status");
+  });
+
+  it("merges two rows sharing the same shipment_ref into one shipment with two line items, when dates and warehouse agree", () => {
+    const rows = [
+      { shipment_ref: "Mutual-PO2-Delivered", vendor_reference: "", status: "delivered", warehouse: "MUTUAL-CH", freight_cost: "500.00", duty_cost: "80.00", cost_currency: "EUR", po_line_item_ref: "PO2::JELLO-CAL-500", sku: "JELLO-CAL-500", qty: "3240", weight_share: "0.8", value_share: "0.8", actual_arrival_date: "2026-08-01" },
+      { shipment_ref: "Mutual-PO2-Delivered", vendor_reference: "", status: "delivered", warehouse: "MUTUAL-CH", freight_cost: "500.00", duty_cost: "80.00", cost_currency: "EUR", po_line_item_ref: "PO2::JELLO-MIX-250", sku: "JELLO-MIX-250", qty: "700", weight_share: "0.2", value_share: "0.2", actual_arrival_date: "2026-08-01" },
+    ];
+    const result = transformShipments(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.shipments).toHaveLength(1);
+    expect(result.shipments[0].shipmentRef).toBe("Mutual-PO2-Delivered");
+    expect(result.shipments[0].lineItems).toHaveLength(2);
+    expect(result.shipments[0].lineItems.map((li) => li.sku)).toEqual(["JELLO-CAL-500", "JELLO-MIX-250"]);
+  });
+
+  it("quarantines every row of a group sharing a shipment_ref when they disagree on warehouse, with the conflict spelled out", () => {
+    const rows = [
+      { shipment_ref: "Mutual-PO2-Delivered", vendor_reference: "", status: "delivered", warehouse: "MUTUAL-CH", freight_cost: "500.00", duty_cost: "80.00", cost_currency: "EUR", po_line_item_ref: "PO2::JELLO-CAL-500", sku: "JELLO-CAL-500", qty: "3240", weight_share: "0.8", value_share: "0.8" },
+      { shipment_ref: "Mutual-PO2-Delivered", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "500.00", duty_cost: "80.00", cost_currency: "EUR", po_line_item_ref: "PO2::JELLO-MIX-250", sku: "JELLO-MIX-250", qty: "700", weight_share: "0.2", value_share: "0.2" },
+    ];
+    const result = transformShipments(rows);
+    expect(result.shipments).toEqual([]);
+    expect(result.skipped).toHaveLength(2);
+    expect(result.skipped[0].reason).toContain("conflicting merge");
+    expect(result.skipped[0].reason).toContain("warehouse");
+    expect(result.skipped[0].reason).toContain("MUTUAL-CH");
+    expect(result.skipped[0].reason).toContain("FF-DE");
+  });
+
+  it("merges pooled-container rows named <prefix>Container<N>-<SKU> into one shipment under the stripped prefix", () => {
+    const rows = [
+      { shipment_ref: "PO1-Wave4-Container2-Jello", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "900.00", duty_cost: "150.00", cost_currency: "EUR", po_line_item_ref: "PO1::Jello", sku: "Jello", qty: "10000", weight_share: "0.5", value_share: "0.5", actual_arrival_date: "2026-08-15" },
+      { shipment_ref: "PO1-Wave4-Container2-Mixer", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "900.00", duty_cost: "150.00", cost_currency: "EUR", po_line_item_ref: "PO1::Mixer", sku: "Mixer", qty: "3000", weight_share: "0.3", value_share: "0.3", actual_arrival_date: "2026-08-15" },
+      { shipment_ref: "PO1-Wave4-Container2-Straw", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "900.00", duty_cost: "150.00", cost_currency: "EUR", po_line_item_ref: "PO1::Straw", sku: "Straw", qty: "2000", weight_share: "0.2", value_share: "0.2", actual_arrival_date: "2026-08-15" },
+    ];
+    const result = transformShipments(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.shipments).toHaveLength(1);
+    expect(result.shipments[0].shipmentRef).toBe("PO1-Wave4-Container2");
+    expect(result.shipments[0].lineItems).toHaveLength(3);
+    expect(result.shipments[0].lineItems.map((li) => li.sku)).toEqual(["Jello", "Mixer", "Straw"]);
+  });
+
+  it("quarantines a pooled container's rows when one variant disagrees on actual arrival date — not silently merged wrong", () => {
+    const rows = [
+      { shipment_ref: "PO1-Wave4-Container2-Jello", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "900.00", duty_cost: "150.00", cost_currency: "EUR", po_line_item_ref: "PO1::Jello", sku: "Jello", qty: "10000", weight_share: "0.5", value_share: "0.5", actual_arrival_date: "2026-08-15" },
+      { shipment_ref: "PO1-Wave4-Container2-Mixer", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "900.00", duty_cost: "150.00", cost_currency: "EUR", po_line_item_ref: "PO1::Mixer", sku: "Mixer", qty: "3000", weight_share: "0.3", value_share: "0.3", actual_arrival_date: "2026-08-16" },
+    ];
+    const result = transformShipments(rows);
+    expect(result.shipments).toEqual([]);
+    expect(result.skipped).toHaveLength(2);
+    expect(result.skipped[0].reason).toContain("conflicting merge");
+    expect(result.skipped[0].reason).toContain("actual_arrival_date");
+    expect(result.skipped[0].reason).toContain("2026-08-15");
+    expect(result.skipped[0].reason).toContain("2026-08-16");
+  });
+
+  it("does not pool a shipment_ref matching the Container<N> pattern when the suffix isn't that row's own sku", () => {
+    const rows = [
+      { shipment_ref: "PO1-Wave1-Container9-Notes", vendor_reference: "", status: "planned", warehouse: "FF-DE", freight_cost: "", duty_cost: "", cost_currency: "", po_line_item_ref: "x", sku: "JELLO-CAL-500", qty: "1", weight_share: "1.0", value_share: "1.0" },
+    ];
+    const result = transformShipments(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.shipments[0].shipmentRef).toBe("PO1-Wave1-Container9-Notes");
+  });
 });
 
 describe("transformPayments", () => {
@@ -239,6 +358,35 @@ describe("transformPayments", () => {
     const result = transformPayments(rows);
     expect(result.payments).toEqual([]);
     expect(result.skipped[0].reason).toContain("sequence_no");
+  });
+
+  it("maps paid=TRUE with a paid_date to paid: true and the parsed paidDate", () => {
+    const rows = [
+      { po_number: "PO3-JELLO", sequence_no: "1", expected_amount: "30746.70", expected_date: "2026-09-09", currency: "USD", paid: "TRUE", paid_date: "2026-09-10" },
+    ];
+    const result = transformPayments(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.payments[0]).toMatchObject({ paid: true, paidDate: new Date("2026-09-10") });
+  });
+
+  it("defaults paid to false and paidDate to null when the Sheet leaves them blank", () => {
+    const rows = [{ po_number: "PO3-JELLO", sequence_no: "1", expected_amount: "30746.70", expected_date: "2026-09-09", currency: "USD" }];
+    const result = transformPayments(rows);
+    expect(result.payments[0]).toMatchObject({ paid: false, paidDate: null });
+  });
+
+  it("quarantines a row marked paid without a paid_date instead of defaulting silently", () => {
+    const rows = [{ po_number: "PO3-JELLO", sequence_no: "1", expected_amount: "30746.70", expected_date: "2026-09-09", currency: "USD", paid: "TRUE" }];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped[0].reason).toContain("paid_date");
+  });
+
+  it("quarantines a row with an unparseable paid_date", () => {
+    const rows = [{ po_number: "PO3-JELLO", sequence_no: "1", expected_amount: "30746.70", expected_date: "2026-09-09", currency: "USD", paid: "TRUE", paid_date: "not-a-date" }];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped[0].reason).toContain("paid_date");
   });
 });
 
@@ -265,5 +413,63 @@ describe("transformTransactions", () => {
     const result = transformTransactions(rows);
     expect(result.transactions).toEqual([]);
     expect(result.skipped[0].reason).toContain("amount");
+  });
+
+  it("carries a matched_ref through as matchedRef, transferred as-is (never resolved here)", () => {
+    const rows = [
+      { date: "2026-09-09", amount: "30746.70", currency: "USD", fx_rate: "0.93", counterparty: "Lvmengkang", description: "PO3 Jello Pay1", matched_ref: "PO3-JELLO" },
+    ];
+    const result = transformTransactions(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.transactions[0].matchedRef).toBe("PO3-JELLO");
+  });
+
+  it("defaults matchedRef to null when the Sheet's PO#/Shipment Ref column is blank or absent", () => {
+    const rows = [
+      { date: "2026-09-09", amount: "30746.70", currency: "USD", fx_rate: "0.93", counterparty: "Lvmengkang", description: "" },
+      { date: "2026-09-09", amount: "30746.70", currency: "USD", fx_rate: "0.93", counterparty: "Lvmengkang", description: "", matched_ref: "" },
+    ];
+    const result = transformTransactions(rows);
+    expect(result.transactions[0].matchedRef).toBeNull();
+    expect(result.transactions[1].matchedRef).toBeNull();
+  });
+});
+
+describe("transformSalesActuals", () => {
+  it("maps a well-formed sales actual row", () => {
+    const rows = [{ sku: "JELLO-CAL-500", warehouse: "FF-DE", date: "2026-09-01", qty: "120" }];
+    const result = transformSalesActuals(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.rows).toEqual([{ sku: "JELLO-CAL-500", warehouseCode: "FF-DE", date: new Date("2026-09-01"), qty: 120 }]);
+  });
+
+  it("quarantines a row with an unparseable qty instead of silently truncating it", () => {
+    const rows = [{ sku: "JELLO-CAL-500", warehouse: "FF-DE", date: "2026-09-01", qty: "120xyz" }];
+    const result = transformSalesActuals(rows);
+    expect(result.rows).toEqual([]);
+    expect(result.skipped[0].reason).toContain("qty");
+  });
+
+  it("quarantines a row with an unparseable date", () => {
+    const rows = [{ sku: "JELLO-CAL-500", warehouse: "FF-DE", date: "not-a-date", qty: "120" }];
+    const result = transformSalesActuals(rows);
+    expect(result.rows).toEqual([]);
+    expect(result.skipped[0].reason).toContain("date");
+  });
+});
+
+describe("transformSalesPlan", () => {
+  it("maps a well-formed sales plan row", () => {
+    const rows = [{ sku: "JELLO-CAL-500", warehouse: "FF-DE", date: "2026-09-01", qty: "143" }];
+    const result = transformSalesPlan(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.rows).toEqual([{ sku: "JELLO-CAL-500", warehouseCode: "FF-DE", date: new Date("2026-09-01"), qty: 143 }]);
+  });
+
+  it("quarantines a row with an unparseable qty", () => {
+    const rows = [{ sku: "JELLO-CAL-500", warehouse: "FF-DE", date: "2026-09-01", qty: "not-a-number" }];
+    const result = transformSalesPlan(rows);
+    expect(result.rows).toEqual([]);
+    expect(result.skipped[0].reason).toContain("qty");
   });
 });

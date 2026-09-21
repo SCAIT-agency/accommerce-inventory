@@ -1,4 +1,4 @@
-import { LEDGER_EVENT_TYPES } from "../drizzle/schema";
+import { LEDGER_EVENT_TYPES, CUSTOMS_STATUSES } from "../drizzle/schema";
 
 export interface SheetExportRow {
   sku: string;
@@ -261,7 +261,17 @@ export interface ShipmentSheetRow {
   qty: string;
   weight_share: string;
   value_share: string;
+  // Optional shipment history carried from the Sheet (YYYY-MM-DD or blank).
+  // Migration writes these directly — it records history, it does not replay
+  // the state machine (same reasoning as `status` above).
+  planned_depart_date?: string;
+  actual_depart_date?: string;
+  planned_arrival_date?: string;
+  actual_arrival_date?: string;
+  customs_status?: string;
 }
+
+export type CustomsStatus = (typeof CUSTOMS_STATUSES)[number];
 
 export interface TransformedShipment {
   shipmentRef: string;
@@ -271,14 +281,72 @@ export interface TransformedShipment {
   freightCost: string | null;
   dutyCost: string | null;
   costCurrency: string | null;
+  plannedDepartDate: Date | null;
+  actualDepartDate: Date | null;
+  plannedArrivalDate: Date | null;
+  actualArrivalDate: Date | null;
+  customsStatus: CustomsStatus | null;
   lineItems: { poLineItemRef: string; sku: string; qty: number; weightShare: string; valueShare: string }[];
 }
 
 const VALID_SHIPMENT_STATUSES = ["planned", "departed", "in_transit", "customs", "delivered"];
 
+function optionalDate(raw: string | undefined): Date | null | "invalid" {
+  if (raw === undefined || raw === "") return null;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? "invalid" : d;
+}
+
+// CONVENTION (decided against the live Sheet, 2026-09-19): the Sheet names
+// the per-SKU lines of one physical container "<prefix>Container<N>-<SKU>"
+// (e.g. PO1-Wave4-Container2-Jello/-Mixer/-Straw) — one row per SKU, but one
+// freight/customs invoice for the whole container. These rows merge into ONE
+// platform shipment with N lines under the shared "<prefix>Container<N>"
+// ref. A row whose ref matches the pattern but whose suffix isn't that row's
+// own `sku` is left alone (not a pooled row — merges only on an exact
+// shipment_ref match, same as any other multi-line shipment).
+const POOLED_SHIPMENT_PATTERN = /^(.*Container\d+)-(.+)$/;
+
+function platformShipmentRef(row: Pick<ShipmentSheetRow, "shipment_ref" | "sku">): string {
+  const m = POOLED_SHIPMENT_PATTERN.exec(row.shipment_ref);
+  return m && m[2] === row.sku ? m[1] : row.shipment_ref;
+}
+
+// Rows merging under one ref (pooled-container or a plain repeated
+// shipment_ref, e.g. "Mutual-PO2-Delivered" appearing once per SKU) must
+// agree on everything shipment-level, not just line-item fields — otherwise
+// the merge would silently pick one row's dates/warehouse over another's.
+const SHIPMENT_MERGE_KEYS = ["warehouse", "planned_depart_date", "actual_depart_date", "planned_arrival_date", "actual_arrival_date"] as const;
+
+function findShipmentMergeConflict(rows: ShipmentSheetRow[]): string | null {
+  const [first, ...rest] = rows;
+  for (const row of rest) {
+    for (const key of SHIPMENT_MERGE_KEYS) {
+      const a = first[key] ?? "";
+      const b = row[key] ?? "";
+      if (a !== b) {
+        return `disagree on ${key} ("${a}" vs "${b}")`;
+      }
+    }
+  }
+  return null;
+}
+
+interface PendingShipmentRow {
+  rowIndex: number;
+  row: ShipmentSheetRow;
+  qty: number;
+  dates: {
+    plannedDepartDate: Date | null;
+    actualDepartDate: Date | null;
+    plannedArrivalDate: Date | null;
+    actualArrivalDate: Date | null;
+  };
+}
+
 export function transformShipments(rows: ShipmentSheetRow[]): { shipments: TransformedShipment[]; skipped: SkippedRow[] } {
   const skipped: SkippedRow[] = [];
-  const byShipmentRef = new Map<string, TransformedShipment>();
+  const groups = new Map<string, PendingShipmentRow[]>();
 
   rows.forEach((row, rowIndex) => {
     if (!row.shipment_ref) {
@@ -302,26 +370,61 @@ export function transformShipments(rows: ShipmentSheetRow[]): { shipments: Trans
       skipped.push({ rowIndex, reason: `unparseable qty "${row.qty}"` });
       return;
     }
-
-    const lineItem = { poLineItemRef: row.po_line_item_ref, sku: row.sku, qty, weightShare: row.weight_share, valueShare: row.value_share };
-    const existing = byShipmentRef.get(row.shipment_ref);
-    if (existing) {
-      existing.lineItems.push(lineItem);
-    } else {
-      byShipmentRef.set(row.shipment_ref, {
-        shipmentRef: row.shipment_ref,
-        vendorReference: row.vendor_reference || null,
-        initialStatus: row.status as TransformedShipment["initialStatus"],
-        warehouseCode: row.warehouse,
-        freightCost: row.freight_cost || null,
-        dutyCost: row.duty_cost || null,
-        costCurrency: row.cost_currency || null,
-        lineItems: [lineItem],
-      });
+    const dates = {
+      plannedDepartDate: optionalDate(row.planned_depart_date),
+      actualDepartDate: optionalDate(row.actual_depart_date),
+      plannedArrivalDate: optionalDate(row.planned_arrival_date),
+      actualArrivalDate: optionalDate(row.actual_arrival_date),
+    };
+    const badDateKey = (Object.keys(dates) as (keyof typeof dates)[]).find((k) => dates[k] === "invalid");
+    if (badDateKey) {
+      skipped.push({ rowIndex, reason: `unparseable ${badDateKey}` });
+      return;
     }
+    if (row.customs_status && !(CUSTOMS_STATUSES as readonly string[]).includes(row.customs_status)) {
+      skipped.push({ rowIndex, reason: `unrecognized customs_status "${row.customs_status}"` });
+      return;
+    }
+
+    const ref = platformShipmentRef(row);
+    const entry: PendingShipmentRow = { rowIndex, row, qty, dates: dates as PendingShipmentRow["dates"] };
+    groups.set(ref, [...(groups.get(ref) ?? []), entry]);
   });
 
-  return { shipments: Array.from(byShipmentRef.values()), skipped };
+  const shipments: TransformedShipment[] = [];
+  for (const [ref, group] of groups) {
+    const conflict = findShipmentMergeConflict(group.map((g) => g.row));
+    if (conflict) {
+      const reason = `conflicting merge: ${group.length} rows share shipment ref "${ref}" but ${conflict}`;
+      for (const g of group) skipped.push({ rowIndex: g.rowIndex, reason });
+      continue;
+    }
+
+    const first = group[0];
+    shipments.push({
+      shipmentRef: ref,
+      vendorReference: first.row.vendor_reference || null,
+      initialStatus: first.row.status as TransformedShipment["initialStatus"],
+      warehouseCode: first.row.warehouse,
+      freightCost: first.row.freight_cost || null,
+      dutyCost: first.row.duty_cost || null,
+      costCurrency: first.row.cost_currency || null,
+      plannedDepartDate: first.dates.plannedDepartDate,
+      actualDepartDate: first.dates.actualDepartDate,
+      plannedArrivalDate: first.dates.plannedArrivalDate,
+      actualArrivalDate: first.dates.actualArrivalDate,
+      customsStatus: (first.row.customs_status as CustomsStatus | undefined) || null,
+      lineItems: group.map((g) => ({
+        poLineItemRef: g.row.po_line_item_ref,
+        sku: g.row.sku,
+        qty: g.qty,
+        weightShare: g.row.weight_share,
+        valueShare: g.row.value_share,
+      })),
+    });
+  }
+
+  return { shipments, skipped };
 }
 
 // --- Payments ---
@@ -332,6 +435,11 @@ export interface PaymentSheetRow {
   expected_amount: string;
   expected_date: string;
   currency: string;
+  // "TRUE"/"FALSE" (blank = not paid). A paid slot needs a paid_date — the
+  // Sheet itself computes the date from Transactions, so a blank one is a
+  // real data gap worth quarantining, not defaulting silently.
+  paid?: string;
+  paid_date?: string;
 }
 
 export interface TransformedPayment {
@@ -340,6 +448,8 @@ export interface TransformedPayment {
   expectedAmount: string;
   expectedDate: Date;
   currency: string;
+  paid: boolean;
+  paidDate: Date | null;
 }
 
 export function transformPayments(rows: PaymentSheetRow[]): { payments: TransformedPayment[]; skipped: SkippedRow[] } {
@@ -370,12 +480,24 @@ export function transformPayments(rows: PaymentSheetRow[]): { payments: Transfor
       skipped.push({ rowIndex, reason: `unparseable sequence_no "${row.sequence_no}"` });
       return;
     }
+    const paid = (row.paid ?? "").toUpperCase() === "TRUE";
+    const paidDate = optionalDate(row.paid_date);
+    if (paidDate === "invalid") {
+      skipped.push({ rowIndex, reason: `unparseable paid_date "${row.paid_date}"` });
+      return;
+    }
+    if (paid && paidDate === null) {
+      skipped.push({ rowIndex, reason: `paid without a paid_date (${row.po_number} #${row.sequence_no})` });
+      return;
+    }
     payments.push({
       poNumber: row.po_number,
       sequenceNo,
       expectedAmount: row.expected_amount,
       expectedDate: date,
       currency: row.currency,
+      paid,
+      paidDate: paid ? paidDate : null,
     });
   });
 
@@ -391,6 +513,12 @@ export interface TransactionSheetRow {
   fx_rate: string;
   counterparty: string;
   description: string;
+  // A human-entered PO number (or shipment ref) this transaction pays for,
+  // carried from the Sheet's own "PO#/Shipment Ref" column — transferred
+  // as-is, never inferred. The transform itself never resolves this to a
+  // payment; that matching (and its own tolerance/variance rules) happens
+  // downstream, against the migrated POs/payments, not here.
+  matched_ref?: string;
 }
 
 export interface TransformedTransaction {
@@ -400,6 +528,7 @@ export interface TransformedTransaction {
   fxRate: string;
   counterparty: string;
   description: string;
+  matchedRef: string | null;
 }
 
 export function transformTransactions(rows: TransactionSheetRow[]): { transactions: TransformedTransaction[]; skipped: SkippedRow[] } {
@@ -421,8 +550,10 @@ export function transformTransactions(rows: TransactionSheetRow[]): { transactio
       skipped.push({ rowIndex, reason: `unparseable amount "${row.amount}"` });
       return;
     }
-    // migrated as unmatched regardless of any match hint the source row carries —
-    // real matching happens manually after migration, per the design's decision.
+    // The transform itself never matches — matchedRef is only a carried hint
+    // that downstream migration code resolves against a migrated PO's own
+    // payments (a transfer of a link a human already made in the Sheet);
+    // automated matching stays out, per the design's decision.
     transactions.push({
       date,
       amount: row.amount,
@@ -430,8 +561,66 @@ export function transformTransactions(rows: TransactionSheetRow[]): { transactio
       fxRate: row.fx_rate,
       counterparty: row.counterparty,
       description: row.description,
+      matchedRef: (row.matched_ref ?? "").trim() || null,
     });
   });
 
   return { transactions, skipped };
+}
+
+// --- Sales actuals & sales plan (per SKU / warehouse / calendar day) ---
+
+export interface SalesRowSheet {
+  sku: string;
+  warehouse: string;
+  date: string;
+  qty: string;
+}
+
+export interface TransformedSalesRow {
+  sku: string;
+  warehouseCode: string;
+  date: Date;
+  qty: number;
+}
+
+function transformSalesRows(rows: SalesRowSheet[], label: string): { rows: TransformedSalesRow[]; skipped: SkippedRow[] } {
+  const skipped: SkippedRow[] = [];
+  const out: TransformedSalesRow[] = [];
+
+  rows.forEach((row, rowIndex) => {
+    if (!INTEGER_PATTERN.test(row.qty)) {
+      skipped.push({ rowIndex, reason: `unparseable ${label} qty "${row.qty}"` });
+      return;
+    }
+    const qty = parseInt(row.qty, 10);
+    if (Number.isNaN(qty)) {
+      skipped.push({ rowIndex, reason: `unparseable ${label} qty "${row.qty}"` });
+      return;
+    }
+    const date = new Date(row.date);
+    if (Number.isNaN(date.getTime())) {
+      skipped.push({ rowIndex, reason: `unparseable ${label} date "${row.date}"` });
+      return;
+    }
+    out.push({ sku: row.sku, warehouseCode: row.warehouse, date, qty });
+  });
+
+  return { rows: out, skipped };
+}
+
+// One row per SKU/warehouse/calendar-day, from the Sales Plan tabs' `<SKU>
+// Actual/day` columns (FF and Mutual, each exported separately upstream and
+// concatenated here) — each row becomes one `sale` ledger event *and* one
+// `sales_actuals` row (written together through `recordSalesActual`, not
+// through this file's own `ledgerRows`/`transformSheetExport` path, which
+// stays receipts-only).
+export function transformSalesActuals(rows: SalesRowSheet[]): { rows: TransformedSalesRow[]; skipped: SkippedRow[] } {
+  return transformSalesRows(rows, "sales actual");
+}
+
+// One row per SKU/warehouse/calendar-day, from the Sales Plan tabs' `<SKU>
+// Plan/day` columns — becomes a `sales_plan` row, never a ledger event.
+export function transformSalesPlan(rows: SalesRowSheet[]): { rows: TransformedSalesRow[]; skipped: SkippedRow[] } {
+  return transformSalesRows(rows, "sales plan");
 }
