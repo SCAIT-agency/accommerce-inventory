@@ -13,5 +13,6 @@ export const REASON_CATEGORIES = [
   "vendor_price_change",
   "freight_rate_change",
   "holiday_capacity",
+  "data_correction",
   "other",
 ] as const;

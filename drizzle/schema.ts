@@ -1,5 +1,5 @@
 import { sql, type SQL } from "drizzle-orm";
-import { date, decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index, unique, foreignKey } from "drizzle-orm/mysql-core";
+import { date, decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index, unique, foreignKey, type AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { REASON_CATEGORIES } from "../shared/constants";
 
 export const users = mysqlTable("users", {
@@ -226,6 +226,22 @@ export const inventoryLedger = mysqlTable(
     // parameter in getSoh's lte() comparison — silently miscomputing SOH.
     date: timestamp("date", { fsp: 3 }).notNull(),
     sourceRef: varchar("sourceRef", { length: 128 }),
+    // Which shipment line item this receipt came from — only populated going
+    // forward by markShipmentArrived (Task 4). Historical rows keep this
+    // null; a shipment can legitimately have two line items sharing one SKU
+    // (Stream G, 2026-09-20), so skuId alone can't disambiguate which
+    // receipt belongs to which line item once a correction needs to target
+    // one specifically. See docs/2026-09-21-reversal-correction-paths-design.md §3.
+    lineItemId: int("lineItemId").references(() => shipmentLineItems.id),
+    // The four columns below are populated ONLY by a correction write
+    // (server/inventoryLedger.ts's correctLedgerReceipt, Task 3) — an
+    // ordinary receipt/sale event leaves them null. correctsEventId links a
+    // correction's reversal row and its replacement receipt row back to the
+    // id of the original, wrong event it corrects.
+    correctsEventId: int("correctsEventId").references((): AnyMySqlColumn => inventoryLedger.id),
+    changedBy: int("changedBy").references(() => users.id),
+    reasonCategory: mysqlEnum("reasonCategory", REASON_CATEGORIES),
+    reasonNote: text("reasonNote"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => ({

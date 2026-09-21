@@ -247,4 +247,18 @@ describe("inventory ledger", () => {
 
     expect(totalRemaining).toBe(soh);
   });
+
+  it("accepts an ordinary receipt event with all new correction columns left null", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "0.42", date: new Date("2026-09-01"), sourceRef: "PO1" });
+
+    const [row] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+    expect(row.lineItemId).toBeNull();
+    expect(row.correctsEventId).toBeNull();
+    expect(row.changedBy).toBeNull();
+    expect(row.reasonCategory).toBeNull();
+    expect(row.reasonNote).toBeNull();
+  });
 });
