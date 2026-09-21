@@ -5,6 +5,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    setupFiles: ['./vitest.env-setup.ts'],
     // Test files share one real dev database and truncate the same tables in
     // beforeEach — running files concurrently races those truncations.
     fileParallelism: false,
