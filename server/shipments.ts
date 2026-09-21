@@ -1,8 +1,8 @@
-import { eq } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
-import { shipments, shipmentLineItems, type Shipment, SHIPMENT_STATUSES, CUSTOMS_STATUSES } from "../drizzle/schema";
+import { shipments, shipmentLineItems, inventoryLedger, type Shipment, SHIPMENT_STATUSES, CUSTOMS_STATUSES } from "../drizzle/schema";
 import { logChange, normalizeDecimalForAudit, type ReasonCategory } from "./changeLog";
-import { recordLedgerEvent } from "./inventoryLedger";
+import { recordLedgerEvent, correctLedgerReceipt, type LedgerCorrectionResult } from "./inventoryLedger";
 import { getShipmentLandedUnitCost } from "./landedCost";
 
 const VALID_SHIPMENT_TRANSITIONS: Record<(typeof SHIPMENT_STATUSES)[number], (typeof SHIPMENT_STATUSES)[number][]> = {
@@ -275,6 +275,7 @@ export async function markShipmentArrived(
         unitCost: landedUnitCost.toFixed(8),
         date: actualArrivalDate,
         sourceRef: shipment.shipmentRef,
+        lineItemId: line.id,
       }, tx);
     }
   });
@@ -309,5 +310,99 @@ export async function correctShipmentActualDepartDate(
       reasonNote: opts.reasonNote,
       changedBy: opts.changedBy,
     }, tx);
+  });
+}
+
+/**
+ * A receipt is still correctable iff no OTHER row points at it via
+ * correctsEventId — exactly the guard correctLedgerReceipt itself enforces.
+ *
+ * Deliberately NOT filtered on `correctsEventId IS NULL`: a replacement
+ * receipt written by a previous correction carries a non-null correctsEventId
+ * (pointing back at the event it replaced) while being the line item's
+ * current, perfectly correctable receipt. Excluding those would make a second
+ * correction of the same line item silently impossible.
+ */
+async function filterUncorrected(tx: DbClient, candidates: { id: number }[]): Promise<{ id: number }[]> {
+  const uncorrected: { id: number }[] = [];
+  for (const candidate of candidates) {
+    const [alreadyCorrected] = await tx.select().from(inventoryLedger).where(eq(inventoryLedger.correctsEventId, candidate.id));
+    if (!alreadyCorrected) uncorrected.push(candidate);
+  }
+  return uncorrected;
+}
+
+async function findUncorrectedReceipt(
+  tx: DbClient,
+  shipmentRef: string,
+  lineItemId: number,
+  fallbackSkuId: number,
+): Promise<{ id: number }> {
+  const byLineItem = await tx
+    .select({ id: inventoryLedger.id })
+    .from(inventoryLedger)
+    .where(and(
+      eq(inventoryLedger.eventType, "receipt"),
+      eq(inventoryLedger.sourceRef, shipmentRef),
+      eq(inventoryLedger.lineItemId, lineItemId),
+    ));
+  const uncorrectedByLineItem = await filterUncorrected(tx, byLineItem);
+  if (uncorrectedByLineItem.length === 1) return uncorrectedByLineItem[0];
+  if (uncorrectedByLineItem.length > 1) {
+    throw new Error(`ambiguous: ${uncorrectedByLineItem.length} uncorrected receipts found for lineItemId ${lineItemId} on shipment ref ${shipmentRef}`);
+  }
+
+  // Fall back to skuId for receipts written before lineItemId existed on
+  // inventory_ledger.
+  const bySku = await tx
+    .select({ id: inventoryLedger.id })
+    .from(inventoryLedger)
+    .where(and(
+      eq(inventoryLedger.eventType, "receipt"),
+      eq(inventoryLedger.sourceRef, shipmentRef),
+      eq(inventoryLedger.skuId, fallbackSkuId),
+      isNull(inventoryLedger.lineItemId),
+    ));
+  const uncorrectedBySku = await filterUncorrected(tx, bySku);
+  if (uncorrectedBySku.length === 0) {
+    throw new Error(`correctShipmentReceiptQty: no uncorrected receipt found for shipment ref ${shipmentRef} / line item ${lineItemId}`);
+  }
+  if (uncorrectedBySku.length > 1) {
+    throw new Error(
+      `ambiguous: ${uncorrectedBySku.length} uncorrected receipts found for shipment ref ${shipmentRef}, and this shipment predates per-line-item ledger tracking — cannot disambiguate which one is line item ${lineItemId}`,
+    );
+  }
+  return uncorrectedBySku[0];
+}
+
+/**
+ * Corrects a wrong received quantity by the identifiers a human actually has
+ * — the shipment and the line item on it — instead of a raw ledger event id.
+ *
+ * Resolves that pair to the line item's current, not-yet-corrected receipt
+ * (lineItemId first; skuId fallback for receipts written before
+ * inventory_ledger carried lineItemId) and delegates to correctLedgerReceipt,
+ * inheriting all of its guards: no-op refusal, non-negative whole-unit qty,
+ * required reasonNote, the negative-stock guard, and the FIFO-replayability
+ * self-check. Runs inside one transaction, so a refusal there leaves no rows
+ * behind here either.
+ */
+export async function correctShipmentReceiptQty(
+  shipmentId: number,
+  lineItemId: number,
+  newQty: number,
+  opts: { changedBy: number; reasonNote: string; allowNegativeSoh?: boolean },
+): Promise<LedgerCorrectionResult> {
+  return db.transaction(async (tx) => {
+    const [shipment] = await tx.select().from(shipments).where(eq(shipments.id, shipmentId));
+    if (!shipment) {
+      throw new Error(`correctShipmentReceiptQty: no shipment found with id ${shipmentId}`);
+    }
+    const [line] = await tx.select().from(shipmentLineItems).where(eq(shipmentLineItems.id, lineItemId));
+    if (!line || line.shipmentId !== shipmentId) {
+      throw new Error(`correctShipmentReceiptQty: no line item ${lineItemId} found on shipment ${shipmentId}`);
+    }
+    const receipt = await findUncorrectedReceipt(tx, shipment.shipmentRef, lineItemId, line.skuId);
+    return correctLedgerReceipt(receipt.id, { qty: newQty }, opts, tx);
   });
 }

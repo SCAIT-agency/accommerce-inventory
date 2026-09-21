@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { sql, eq } from "drizzle-orm";
+import { sql, eq, and } from "drizzle-orm";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments, warehouses, users } from "../drizzle/schema";
-import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate } from "./shipments";
+import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty } from "./shipments";
 import { createSku, createVendor, createWarehouse, createUser } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { listChangeLog } from "./changeLog";
@@ -28,6 +28,12 @@ beforeEach(async () => {
     try {
       await tx.delete(changeLog);
       await tx.delete(payments);
+      // markShipmentArrived writes receipts here, and the correction tests
+      // below write reversal/replacement rows that point at each other via
+      // correctsEventId (a self-referencing FK) — so these have to go before
+      // the shipmentLineItems they reference, and cannot be left for another
+      // file's plain, FK-checked DELETE to trip over.
+      await tx.delete(inventoryLedger);
       await tx.delete(shipmentLineItems);
       await tx.delete(shipments);
       await tx.delete(poLineItems);
@@ -57,6 +63,18 @@ async function seedPoWithLineItem() {
   });
   const withItems = await getPurchaseOrderWithLineItemsHelper(po.id);
   return { po, lineItemId: withItems.lineItems[0].id, skuId: sku.id };
+}
+
+// Walks a freshly created shipment through the full planned -> delivered
+// sequence, so a test that only cares about the resulting ledger receipts
+// doesn't repeat six setup calls.
+async function driveShipmentToDelivered(shipmentId: number, arrivalDate = new Date("2026-09-20")) {
+  await updateShipmentPlannedDepartDate(shipmentId, new Date("2026-09-01"), { reasonCategory: "logistics_delay", changedBy: userId });
+  await markShipmentDeparted(shipmentId, new Date("2026-09-02"), { changedBy: userId });
+  await updateShipmentStatus(shipmentId, "in_transit", { changedBy: userId });
+  await updateShipmentStatus(shipmentId, "customs", { changedBy: userId });
+  await recordShipmentCosts(shipmentId, { freightCost: "900.00", dutyCost: "100.00", costCurrency: "USD" }, { reasonCategory: "freight_rate_change", changedBy: userId });
+  await markShipmentArrived(shipmentId, arrivalDate, { changedBy: userId, reasonCategory: "logistics_delay" });
 }
 
 // local re-import to avoid a circular test dependency
@@ -518,5 +536,136 @@ describe("shipments", () => {
 
     const soh = await getSoh(skuId, ffWarehouseId);
     expect(soh).toBe(0);
+  });
+
+  it("markShipmentArrived records lineItemId on every receipt event it writes", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container9",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    const { lineItems } = await getShipmentWithLineItems(shipment.id);
+    const [receipt] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, skuId));
+    expect(receipt.lineItemId).toBe(lineItems[0].id);
+  });
+
+  it("correctShipmentReceiptQty corrects a wrong receipt quantity via the shipment + line item", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container10",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    const { lineItems } = await getShipmentWithLineItems(shipment.id);
+    const result = await correctShipmentReceiptQty(shipment.id, lineItems[0].id, 89000, {
+      changedBy: userId,
+      reasonNote: "recount found 1000 short",
+    });
+
+    expect(result.consumedFromOtherBatches).toBe(false);
+    expect(await getSoh(skuId, ffWarehouseId)).toBe(89000);
+  });
+
+  it("correctShipmentReceiptQty corrects the same line item a second time, via the first correction's replacement receipt", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container11",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    const { lineItems } = await getShipmentWithLineItems(shipment.id);
+    const first = await correctShipmentReceiptQty(shipment.id, lineItems[0].id, 89000, {
+      changedBy: userId,
+      reasonNote: "recount found 1000 short",
+    });
+    expect(await getSoh(skuId, ffWarehouseId)).toBe(89000);
+
+    // The replacement receipt the first correction wrote carries a non-null
+    // correctsEventId. It is nonetheless the line item's current, eligible
+    // receipt — a second correction must find and correct it, not report
+    // "no uncorrected receipt found".
+    const second = await correctShipmentReceiptQty(shipment.id, lineItems[0].id, 88000, {
+      changedBy: userId,
+      reasonNote: "second recount, 1000 short again",
+    });
+
+    expect(second.consumedFromOtherBatches).toBe(false);
+    expect(await getSoh(skuId, ffWarehouseId)).toBe(88000);
+
+    const [secondReversal] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.id, second.reversalId));
+    // The second correction reversed the FIRST correction's replacement
+    // receipt (89000), not the original 90000 one.
+    expect(secondReversal.correctsEventId).toBe(first.correctedId);
+    expect(secondReversal.qty).toBe(-89000);
+  });
+
+  it("correctShipmentReceiptQty disambiguates two line items sharing one SKU on the same shipment", async () => {
+    const vendor = await createVendor({ name: "MBS Logistics" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po1 = await createPurchaseOrder({ poNumber: "PO1", vendorId: vendor.id, lineItems: [{ skuId: sku.id, qty: 50000, unitPrice: "0.15", currency: "USD" }], createdBy: userId });
+    const po2 = await createPurchaseOrder({ poNumber: "PO2", vendorId: vendor.id, lineItems: [{ skuId: sku.id, qty: 40000, unitPrice: "0.16", currency: "USD" }], createdBy: userId });
+    const po1WithItems = await getPurchaseOrderWithLineItemsHelper(po1.id);
+    const po2WithItems = await getPurchaseOrderWithLineItemsHelper(po2.id);
+
+    const shipment = await createShipment({
+      shipmentRef: "Pooled-Container1",
+      warehouseId: ffWarehouseId,
+      lineItems: [
+        { poLineItemId: po1WithItems.lineItems[0].id, skuId: sku.id, qty: 50000, weightShare: "0.55555556", valueShare: "0.55172414" },
+        { poLineItemId: po2WithItems.lineItems[0].id, skuId: sku.id, qty: 40000, weightShare: "0.44444444", valueShare: "0.44827586" },
+      ],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    const { lineItems } = await getShipmentWithLineItems(shipment.id);
+    const firstLine = lineItems.find((li) => li.qty === 50000)!;
+    const secondLine = lineItems.find((li) => li.qty === 40000)!;
+
+    // Correcting only the first line item must leave the second untouched --
+    // proving lineItemId, not skuId, disambiguated which receipt to correct.
+    await correctShipmentReceiptQty(shipment.id, firstLine.id, 49000, { changedBy: userId, reasonNote: "recount" });
+
+    expect(await getSoh(sku.id, ffWarehouseId)).toBe(49000 + 40000);
+    const secondLineReceipts = await db
+      .select()
+      .from(inventoryLedger)
+      .where(and(eq(inventoryLedger.lineItemId, secondLine.id), eq(inventoryLedger.eventType, "receipt")));
+    expect(secondLineReceipts).toHaveLength(1);
+    expect(secondLineReceipts[0].correctsEventId).toBeNull();
+  });
+
+  it("correctShipmentReceiptQty rejects a nonexistent shipment/line item combination", async () => {
+    await expect(
+      correctShipmentReceiptQty(999999, 999999, 10, { changedBy: userId, reasonNote: "test" }),
+    ).rejects.toThrow(/no shipment found with id 999999/);
+
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container12",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await expect(
+      correctShipmentReceiptQty(shipment.id, 999999, 10, { changedBy: userId, reasonNote: "test" }),
+    ).rejects.toThrow(/no line item 999999 found on shipment/);
+
+    // Real shipment, real line item, but nothing has arrived yet — so no
+    // receipt exists to correct.
+    const { lineItems } = await getShipmentWithLineItems(shipment.id);
+    await expect(
+      correctShipmentReceiptQty(shipment.id, lineItems[0].id, 10, { changedBy: userId, reasonNote: "test" }),
+    ).rejects.toThrow(/no uncorrected receipt found/);
   });
 });
