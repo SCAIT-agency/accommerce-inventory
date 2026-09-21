@@ -1,25 +1,23 @@
-#!/usr/bin/env tsx
-// scripts/run-parallel-check.mjs
+// scripts/run-parallel-check.ts
 //
 // CLI entrypoint for the parallel-run comparison check. Reads a JSON export of
 // today's sheet snapshot and verifies that Control Tower (db) matches it
 // perfectly for all SKU/warehouse pairs.
 //
 // Usage:
-//   pnpm exec tsx scripts/run-parallel-check.mjs <path-to-todays-sheet-snapshot.json>
+//   pnpm exec tsx scripts/run-parallel-check.ts <path-to-todays-sheet-snapshot.json>
 //
 // JSON format: array of { sku, warehouseCode, sohFromSheet }
 // Exits 0 (safeToCutOver: true) only if all balances match exactly.
 
 import { readFile } from "node:fs/promises";
-import { db } from "../server/dbClient.ts";
 import { listSkus, listWarehouses } from "../server/db.ts";
 import { getSoh } from "../server/inventoryLedger.ts";
 import { generateParallelRunReport } from "./parallel-run-report.ts";
 
 const inputPath = process.argv[2];
 if (!inputPath) {
-  console.error("Usage: pnpm exec tsx scripts/run-parallel-check.mjs <path-to-todays-sheet-snapshot.json>");
+  console.error("Usage: pnpm exec tsx scripts/run-parallel-check.ts <path-to-todays-sheet-snapshot.json>");
   process.exit(1);
 }
 

@@ -1,19 +1,20 @@
-#!/usr/bin/env tsx
-// scripts/run-migration.mjs
+// scripts/run-migration.ts
 //
 // CLI entrypoint for the migration. Reads a JSON export file and calls runMigration,
-// exiting with 0 on success (quarantined rows logged) or 1 on reconciliation failure
-// (full rollback, no partial data left behind).
+// exiting with 0 on success (quarantined rows logged) or 1 on failure
+// (a reconciliation failure inside runMigration's own db.transaction is fully
+// rolled back; a failure before that — bad path, missing file, malformed
+// JSON — never opens a transaction, so there is nothing to roll back).
 //
 // Usage:
-//   pnpm exec tsx scripts/run-migration.mjs <path-to-exported-sheet-data.json>
+//   pnpm exec tsx scripts/run-migration.ts <path-to-exported-sheet-data.json>
 
 import { readFile } from "node:fs/promises";
 import { runMigration } from "./reconcile-migration.ts";
 
 const inputPath = process.argv[2];
 if (!inputPath) {
-  console.error("Usage: pnpm exec tsx scripts/run-migration.mjs <path-to-exported-sheet-data.json>");
+  console.error("Usage: pnpm exec tsx scripts/run-migration.ts <path-to-exported-sheet-data.json>");
   process.exit(1);
 }
 
@@ -41,6 +42,6 @@ try {
   process.exit(0);
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
-  console.error("Migration failed and rolled back:", message);
+  console.error("Migration failed:", message);
   process.exit(1);
 }
