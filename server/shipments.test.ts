@@ -836,6 +836,118 @@ describe("shipments", () => {
     expect(await getSoh(skuId, ffWarehouseId)).toBe(90000);
   });
 
+  // Shared fixture for the skip/rollback pair below: a delivered two-line
+  // shipment whose second line carries a zero weight share, so a freight-only
+  // restatement provably cannot move its landed cost.
+  async function seedShipmentWithAZeroFreightShareLine(shipmentRef: string) {
+    const vendor = await createVendor({ name: "MBS Logistics" });
+    const movingSku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const unchangedSku = await createSku({ sku: "JELLO-STRAW-100", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W6",
+      vendorId: vendor.id,
+      lineItems: [
+        { skuId: movingSku.id, qty: 50000, unitPrice: "0.15", currency: "USD" },
+        { skuId: unchangedSku.id, qty: 40000, unitPrice: "0.16", currency: "USD" },
+      ],
+      createdBy: userId,
+    });
+    const poWithItems = await getPurchaseOrderWithLineItemsHelper(po.id);
+    const movingPoLine = poWithItems.lineItems.find((li) => li.skuId === movingSku.id)!;
+    const unchangedPoLine = poWithItems.lineItems.find((li) => li.skuId === unchangedSku.id)!;
+    const shipment = await createShipment({
+      shipmentRef,
+      warehouseId: ffWarehouseId,
+      lineItems: [
+        { poLineItemId: movingPoLine.id, skuId: movingSku.id, qty: 50000, weightShare: "1.00000000", valueShare: "0.5" },
+        // All of the freight is allocated to the first line, so restating
+        // freight alone leaves this line's landed cost exactly where it is.
+        { poLineItemId: unchangedPoLine.id, skuId: unchangedSku.id, qty: 40000, weightShare: "0.00000000", valueShare: "0.5" },
+      ],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+    return { shipment, movingSku, unchangedSku, unchangedPoLineId: unchangedPoLine.id };
+  }
+
+  it("correctShipmentLandedCost skips a line whose landed cost is unchanged instead of failing the whole restatement", async () => {
+    const { shipment, movingSku, unchangedSku } = await seedShipmentWithAZeroFreightShareLine("PO1-W6-Container1");
+
+    const [unchangedReceiptBefore] = await db
+      .select()
+      .from(inventoryLedger)
+      .where(eq(inventoryLedger.skuId, unchangedSku.id));
+
+    const result = await correctShipmentLandedCost(
+      shipment.id,
+      { freightCost: "1800.00" },
+      { changedBy: userId, reasonNote: "final forwarder invoice" },
+    );
+
+    // Only the line whose cost actually moved is corrected. The zero-share
+    // line is skipped, not failed -- and not silently reported as corrected.
+    expect(result.corrections).toHaveLength(1);
+    const [correctedReceipt] = await db
+      .select()
+      .from(inventoryLedger)
+      .where(eq(inventoryLedger.id, result.corrections[0].correctedId));
+    expect(correctedReceipt.skuId).toBe(movingSku.id);
+    expect(parseFloat(correctedReceipt.unitCost ?? "0")).toBeCloseTo((50000 * 0.15 + 1800 * 1 + 100 * 0.5) / 50000, 6);
+
+    // The skipped line's receipt is provably untouched: same row, same id,
+    // same cost, and no reversal/replacement written against it.
+    const unchangedEvents = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, unchangedSku.id));
+    expect(unchangedEvents).toHaveLength(1);
+    expect(unchangedEvents[0].id).toBe(unchangedReceiptBefore.id);
+    expect(unchangedEvents[0].eventType).toBe("receipt");
+    expect(unchangedEvents[0].correctsEventId).toBeNull();
+    expect(unchangedEvents[0].unitCost).toBe(unchangedReceiptBefore.unitCost);
+    expect(await getSoh(unchangedSku.id, ffWarehouseId)).toBe(40000);
+    expect(await getSoh(movingSku.id, ffWarehouseId)).toBe(50000);
+
+    // The restatement itself is committed and audited normally regardless of
+    // how many lines needed a ledger correction.
+    const [updatedShipment] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(updatedShipment.freightCost).toBe("1800.0000");
+    const history = await listChangeLog("shipment", shipment.id);
+    const freightEntry = history.find((h) => h.field === "freightCost" && h.reasonCategory === "data_correction");
+    expect(freightEntry?.oldValue).toBe("900");
+    expect(freightEntry?.newValue).toBe("1800");
+  });
+
+  it("correctShipmentLandedCost still rolls the whole restatement back when a line fails for a reason other than being a no-op", async () => {
+    const { shipment, movingSku, unchangedSku, unchangedPoLineId } =
+      await seedShipmentWithAZeroFreightShareLine("PO1-W6-Container2");
+
+    // A third line item added AFTER delivery: no ledger receipt exists for it,
+    // which is NOT a no-op refusal. Skipping the zero-share line must not
+    // widen into swallowing this one.
+    await db.insert(shipmentLineItems).values({
+      shipmentId: shipment.id,
+      poLineItemId: unchangedPoLineId,
+      skuId: unchangedSku.id,
+      qty: 1000,
+      weightShare: "0.00000000",
+      valueShare: "0.00000000",
+    });
+
+    await expect(
+      correctShipmentLandedCost(shipment.id, { freightCost: "1800.00" }, { changedBy: userId, reasonNote: "test rollback" }),
+    ).rejects.toThrow(/no uncorrected receipt found/);
+
+    const [unchangedShipment] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(unchangedShipment.freightCost).toBe("900.0000");
+    const history = await listChangeLog("shipment", shipment.id);
+    expect(history.some((h) => h.reasonCategory === "data_correction")).toBe(false);
+    // Both original receipts survive untouched -- including the line that had
+    // already been corrected before the failing line was reached.
+    const events = await db.select().from(inventoryLedger);
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.eventType === "receipt" && e.correctsEventId === null)).toBe(true);
+    expect(await getSoh(movingSku.id, ffWarehouseId)).toBe(50000);
+    expect(await getSoh(unchangedSku.id, ffWarehouseId)).toBe(40000);
+  });
+
   it("correctShipmentLandedCost refuses a call that restates no cost field at all", async () => {
     const { lineItemId, skuId } = await seedPoWithLineItem();
     const shipment = await createShipment({

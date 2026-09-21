@@ -408,6 +408,20 @@ export async function correctShipmentReceiptQty(
 }
 
 /**
+ * True for correctLedgerReceipt's "correction changes nothing — refusing to
+ * write a no-op correction pair" refusal, and nothing else it raises.
+ *
+ * Message matching is the only signal available (that function throws plain
+ * Errors), so the coupling is deliberately narrowed to the stable
+ * "changes nothing" fragment — the exact pattern three tests in
+ * inventoryLedger.test.ts already pin that message with. If correction errors
+ * ever become typed, this is the one place to switch over.
+ */
+function isNoOpCorrection(err: unknown): boolean {
+  return err instanceof Error && /changes nothing/.test(err.message);
+}
+
+/**
  * Restates a shipment's freight and/or duty cost and corrects every line
  * item's receipt to the landed unit cost that recomputes from it.
  *
@@ -421,6 +435,16 @@ export async function correctShipmentReceiptQty(
  * Only the cost fields actually passed are written and audited, but the
  * recompute always re-reads the whole row — so restating freight alone still
  * yields a landed cost carrying the shipment's existing duty allocation.
+ *
+ * One deliberate exception to "any failing line rolls everything back": a line
+ * whose recomputed landed cost is unchanged is SKIPPED, not failed. That shape
+ * is ordinary, not exceptional — a freight-only restatement leaves a line with
+ * `weightShare = 0` exactly where it was, as does any line whose cost happens
+ * to round to the same 8 decimals — and `correctLedgerReceipt` rejects such a
+ * correction as a no-op (rightly: writing one would reshuffle FIFO order for
+ * no reason). Refusing the whole shipment-wide restatement over it would make
+ * the feature unusable on pooled containers. Skipped lines are absent from the
+ * returned `corrections` array, and nothing is written for them.
  */
 export async function correctShipmentLandedCost(
   shipmentId: number,
@@ -473,11 +497,24 @@ export async function correctShipmentLandedCost(
     const corrections: LedgerCorrectionResult[] = [];
     for (const lc of landedCosts) {
       const receipt = await findUncorrectedReceipt(tx, before.shipmentRef, lc.lineItemId, lc.skuId);
-      // toFixed(8) matches both the ledger column's scale and the exact
-      // formatting markShipmentArrived writes, so a restatement that lands on
-      // the same cost is recognised as a no-op by correctLedgerReceipt rather
-      // than written as a cost-changing correction pair.
-      corrections.push(await correctLedgerReceipt(receipt.id, { unitCost: lc.landedUnitCost.toFixed(8) }, opts, tx));
+      try {
+        // toFixed(8) matches both the ledger column's scale and the exact
+        // formatting markShipmentArrived writes, so a restatement that lands
+        // on the same cost is recognised as a no-op by correctLedgerReceipt
+        // rather than written as a cost-changing correction pair.
+        corrections.push(await correctLedgerReceipt(receipt.id, { unitCost: lc.landedUnitCost.toFixed(8) }, opts, tx));
+      } catch (err) {
+        // Narrow on purpose: ONLY correctLedgerReceipt's no-op refusal means
+        // "this line needed no correction". Every other refusal it can raise
+        // — ambiguous receipt, unreplayable FIFO history, negative SOH,
+        // invalid qty/cost, blank reasonNote — is a real failure and must
+        // still roll the whole shipment-wide correction back.
+        //
+        // Safe to swallow here because that check runs before either ledger
+        // row is written, so a skipped line leaves no partial state behind in
+        // the open transaction.
+        if (!isNoOpCorrection(err)) throw err;
+      }
     }
     return { corrections };
   });
