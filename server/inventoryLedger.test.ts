@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { inventoryLedger, skus, warehouses, appSettings } from "../drizzle/schema";
-import { recordLedgerEvent, getSoh, getSohForSkus, ALLOW_BACKORDERS_SETTING } from "./inventoryLedger";
+import { recordLedgerEvent, getSoh, getSohForSkus, ALLOW_BACKORDERS_SETTING, replayLedgerEventsFifo } from "./inventoryLedger";
 import { createSku, createWarehouse, setAppSetting } from "./db";
 
 beforeEach(async () => {
@@ -260,5 +260,40 @@ describe("inventory ledger", () => {
     expect(row.changedBy).toBeNull();
     expect(row.reasonCategory).toBeNull();
     expect(row.reasonNote).toBeNull();
+  });
+
+  it("replayLedgerEventsFifo reports which batch sourceRefs a negative adjustment actually consumed", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 50, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "batch-A" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 50, unitCost: "2.00", date: new Date("2026-09-02"), sourceRef: "batch-B" });
+    // Consumes all of batch-A (50) plus 20 units of batch-B — a case
+    // engineered to span two batches, so the reported sourceRefs must
+    // include both, not just the first one touched.
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "adjustment", qty: -70, unitCost: null, date: new Date("2026-09-03"), sourceRef: "write-off" });
+
+    const events = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id)).orderBy(inventoryLedger.date, inventoryLedger.id);
+    const touched: Set<string | null>[] = [];
+    replayLedgerEventsFifo(events, undefined, (_event, _cost, touchedSourceRefs) => {
+      touched.push(touchedSourceRefs);
+    });
+
+    expect(touched).toHaveLength(1);
+    expect(touched[0]).toEqual(new Set(["batch-A", "batch-B"]));
+  });
+
+  it("replayLedgerEventsFifo's onSaleConsumed callback still fires with just cost, unaffected by the new third parameter", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "0.50", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -40, unitCost: null, date: new Date("2026-09-02"), sourceRef: "shopify" });
+
+    const events = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id)).orderBy(inventoryLedger.date, inventoryLedger.id);
+    let reportedCost = -1;
+    replayLedgerEventsFifo(events, (_event, consumedCost) => { reportedCost = consumedCost; });
+
+    expect(reportedCost).toBeCloseTo(40 * 0.5, 6);
   });
 });

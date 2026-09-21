@@ -101,31 +101,35 @@ export interface FifoBatch {
 export function replayLedgerEventsFifo(
   events: LedgerEvent[],
   onSaleConsumed?: (event: LedgerEvent, consumedCost: number) => void,
+  onAdjustmentConsumed?: (event: LedgerEvent, consumedCost: number, touchedSourceRefs: Set<string | null>) => void,
 ): FifoBatch[] {
   const batches: FifoBatch[] = [];
 
-  const consume = (qtyToConsume: number, asOfDate: Date, context: string): number => {
+  const consume = (qtyToConsume: number, asOfDate: Date, context: string): { consumedCost: number; touchedSourceRefs: Set<string | null> } => {
     let remaining = qtyToConsume;
     let consumedCost = 0;
+    const touchedSourceRefs = new Set<string | null>();
     while (remaining > 0) {
       const batch = batches.find((b) => b.qty > 0 && b.date <= asOfDate);
       if (!batch) throw new Error(`replayLedgerEventsFifo: insufficient stock to consume ${remaining} units for ${context}`);
       const consumed = Math.min(batch.qty, remaining);
       consumedCost += consumed * batch.unitCost;
+      touchedSourceRefs.add(batch.sourceRef);
       batch.qty -= consumed;
       remaining -= consumed;
     }
-    return consumedCost;
+    return { consumedCost, touchedSourceRefs };
   };
 
   for (const event of events) {
     if (event.eventType === "receipt") {
       batches.push({ qty: event.qty, unitCost: parseFloat(event.unitCost ?? "0"), date: event.date, sourceRef: event.sourceRef });
     } else if (event.eventType === "sale") {
-      const consumedCost = consume(Math.abs(event.qty), event.date, `sale event ${event.id}`);
+      const { consumedCost } = consume(Math.abs(event.qty), event.date, `sale event ${event.id}`);
       onSaleConsumed?.(event, consumedCost);
     } else if (event.qty < 0) {
-      consume(Math.abs(event.qty), event.date, `adjustment event ${event.id}`);
+      const { consumedCost, touchedSourceRefs } = consume(Math.abs(event.qty), event.date, `adjustment event ${event.id}`);
+      onAdjustmentConsumed?.(event, consumedCost, touchedSourceRefs);
     } else if (event.qty > 0) {
       batches.push({ qty: event.qty, unitCost: parseFloat(event.unitCost ?? "0"), date: event.date, sourceRef: event.sourceRef });
     }
