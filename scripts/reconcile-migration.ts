@@ -303,19 +303,35 @@ export async function runMigration(input: RunMigrationInput, options: RunMigrati
     // 3. Payments (+ paid flags transferred as the Sheet recorded them).
     // Finding 5: a payment referencing a PO number/shipment ref that wasn't
     // migrated is quarantined instead of silently inserting an orphaned row.
-    // transformPayments already pooled a container's several per-row payment
-    // slots into one row under the pooled shipment ref (see migrate-from-sheet.ts),
-    // so resolving payment.shipmentRef through the same shipmentIdByRef map
-    // built above for shipment creation is enough — no separate pooling logic
-    // needed here.
+    // transformPayments pools a container's several per-row payment slots
+    // into one row under the pooled shipment ref when it sees ≥2 distinct
+    // raw refs sharing that owner — but transformShipments pools a
+    // Container-N-<SKU> row into a pooled shipment even when it's the ONLY
+    // row for that container (no minimum group size there), and payments
+    // have no `sku` field to make that same single-row judgment at transform
+    // time. So a lone payment row for a genuinely (but singly) pooled
+    // container keeps its own raw ref, which never matches shipmentIdByRef's
+    // pooled key — resolved here with the same raw-first/normalized-fallback
+    // pattern already used for transaction matching below: try the payment's
+    // own ref directly, and only if that fails, try the pooled-owner
+    // candidate.
     for (const [paymentIdx, payment] of transformedPayments.entries()) {
-      const ownerRef = (payment.poNumber ?? payment.shipmentRef)!;
       const poId = payment.poNumber ? poIdByNumber.get(payment.poNumber) : undefined;
-      const shipmentId = payment.shipmentRef ? shipmentIdByRef.get(payment.shipmentRef) : undefined;
+      let resolvedShipmentRef = payment.shipmentRef;
+      let shipmentId = resolvedShipmentRef ? shipmentIdByRef.get(resolvedShipmentRef) : undefined;
+      if (shipmentId === undefined && payment.shipmentRef) {
+        const pooledCandidate = pooledPaymentOwnerRef(payment.shipmentRef);
+        const pooledId = pooledCandidate !== payment.shipmentRef ? shipmentIdByRef.get(pooledCandidate) : undefined;
+        if (pooledId !== undefined) {
+          shipmentId = pooledId;
+          resolvedShipmentRef = pooledCandidate;
+        }
+      }
+      const ownerRef = (payment.poNumber ?? resolvedShipmentRef)!;
       if (poId === undefined && shipmentId === undefined) {
         runtimeSkippedPayments.push({
           rowIndex: paymentIdx,
-          reason: `unresolved owner "${ownerRef}" — referenced PO/shipment was not migrated (likely quarantined)`,
+          reason: `unresolved owner "${(payment.poNumber ?? payment.shipmentRef)!}" — referenced PO/shipment was not migrated (likely quarantined)`,
         });
         continue;
       }
@@ -469,10 +485,18 @@ export async function runMigration(input: RunMigrationInput, options: RunMigrati
       [...new Set(r.split(",").map((p) => p.trim()).filter(Boolean).map(pooledPaymentOwnerRef))].join(", ");
     const resolveRef = (raw: string): string => (resolvesDirectly(raw) ? raw : normalizeRef(raw));
 
-    const byRawRef = new Map<string, typeof hinted>();
-    for (const h of hinted) byRawRef.set(h.ref, [...(byRawRef.get(h.ref) ?? []), h]);
-    for (const [rawRef, group] of byRawRef) {
-      const ref = resolveRef(rawRef);
+    // Group by the RESOLVED ref, not the raw one — two transactions naming
+    // different per-SKU spellings of the SAME pooled container (e.g. one
+    // "...Container2-JELLO", another "...Container2-STRAW") must land in ONE
+    // group so the instalment-subset pass below can match them together;
+    // grouping by raw ref first would keep them in two separate one-
+    // transaction groups that each fail the exact/variance passes alone.
+    const byResolvedRef = new Map<string, typeof hinted>();
+    for (const h of hinted) {
+      const resolved = resolveRef(h.ref);
+      byResolvedRef.set(resolved, [...(byResolvedRef.get(resolved) ?? []), h]);
+    }
+    for (const [ref, group] of byResolvedRef) {
       if (ref.includes(",")) {
         for (const h of group) reject(h, "several refs on one transaction — the platform links one transaction to one payment");
         continue;

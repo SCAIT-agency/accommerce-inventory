@@ -373,6 +373,71 @@ describe("runMigration (widened scope)", () => {
     expect(result.unmatchedManualLinks).toEqual([]);
   });
 
+  // Round-3 Important #2 regression: transformShipments pools a
+  // Container-N-<SKU> row into a pooled shipment even when it's the ONLY row
+  // for that container (no minimum group size) — but a lone payment row for
+  // that same single-line container kept its own raw (un-pooled) ref, which
+  // never matched the pooled shipment. Must resolve via the same
+  // raw-first/normalized-fallback pattern, not quarantine as "unresolved owner".
+  it("resolves a lone payment row on a genuinely (but singly) pooled Container-N shipment, instead of quarantining it as unresolved", async () => {
+    const result = await runMigration({
+      ledgerRows: [],
+      poRows: [{ po_number: "PO1", vendor_name: "V", vendor_reference: "", status: "closed", sku: "JELLO", qty: "10", unit_price: "1", currency: "EUR" }],
+      // A single row whose Container-N suffix DOES match its own sku — transformShipments pools it alone.
+      shipmentRows: [{ shipment_ref: "PO1-Wave5-Container7-JELLO", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "500", duty_cost: "0", cost_currency: "EUR", po_line_item_ref: "PO1::JELLO", sku: "JELLO", qty: "10", weight_share: "1", value_share: "1" }],
+      // A single payment row for that same container, spelled with the raw (un-pooled) per-SKU ref.
+      paymentRows: [{ po_number: "", shipment_ref: "PO1-Wave5-Container7-JELLO", sequence_no: "1", expected_amount: "500.00", expected_date: "2026-07-21", currency: "EUR" }],
+      transactionRows: [],
+      sheetTotals: [],
+    });
+    const [shipment] = await db.select().from(shipments);
+    expect(shipment.shipmentRef).toBe("PO1-Wave5-Container7"); // transformShipments pooled the single row
+    const paymentRows = await db.select().from(payments);
+    expect(paymentRows).toHaveLength(1);
+    expect(paymentRows[0]).toMatchObject({ shipmentId: shipment.id, poId: null, expectedAmount: "500.0000" });
+    expect(result.quarantined.payments).toEqual([]);
+  });
+
+  // Round-3 Important #3 regression: two transactions naming DIFFERENT
+  // per-SKU spellings of the SAME pooled container (one "...Container2-
+  // JELLO", the other "...Container2-STRAW") must be grouped together by
+  // their RESOLVED ref before the matching passes run, so the closest-sum
+  // instalment pass can match them together against the one pooled payment.
+  // Grouping by raw ref first would keep them in two separate one-
+  // transaction groups that each individually miss the 1%/5% tolerance.
+  it("matches two transactions naming different per-SKU spellings of the same pooled container as one instalment", async () => {
+    const shipmentRows = [
+      { shipment_ref: "PO1-Wave4-Container2-JELLO", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "600", duty_cost: "0", cost_currency: "EUR", po_line_item_ref: "PO1::JELLO", sku: "JELLO", qty: "10", weight_share: "0.5", value_share: "0.5" },
+      { shipment_ref: "PO1-Wave4-Container2-STRAW", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "600", duty_cost: "0", cost_currency: "EUR", po_line_item_ref: "PO1::STRAW", sku: "STRAW", qty: "10", weight_share: "0.5", value_share: "0.5" },
+    ];
+    const result = await runMigration({
+      ledgerRows: [],
+      poRows: [
+        { po_number: "PO1", vendor_name: "V", vendor_reference: "", status: "closed", sku: "JELLO", qty: "10", unit_price: "1", currency: "EUR" },
+        { po_number: "PO1", vendor_name: "V", vendor_reference: "", status: "closed", sku: "STRAW", qty: "10", unit_price: "1", currency: "EUR" },
+      ],
+      shipmentRows,
+      // One pooled payment slot, unpaid on the Sheet, totaling 600.00.
+      paymentRows: [
+        { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+        { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+      ],
+      // Neither transaction alone is within 1%/5% of 600.00 — only their SUM is.
+      transactionRows: [
+        { date: "2026-07-21", amount: "250.00", currency: "EUR", fx_rate: "1", counterparty: "F", description: "part 1", matched_ref: "PO1-Wave4-Container2-JELLO" },
+        { date: "2026-07-22", amount: "350.00", currency: "EUR", fx_rate: "1", counterparty: "F", description: "part 2", matched_ref: "PO1-Wave4-Container2-STRAW" },
+      ],
+      sheetTotals: [],
+    });
+    const [payment] = await db.select().from(payments);
+    const txs = await db.select().from(transactions);
+    expect(txs.find((t) => t.description === "part 1")?.matchedPaymentId).toBe(payment.id);
+    expect(txs.find((t) => t.description === "part 2")?.matchedPaymentId).toBe(payment.id);
+    expect(result.counts.matchedTransactions).toBe(2);
+    expect(payment).toMatchObject({ paid: true, paidAmount: "600.0000" });
+    expect(result.unmatchedManualLinks).toEqual([]);
+  });
+
   it("quarantines a pooled container's payment rows when they disagree on paid status instead of silently summing", async () => {
     const shipmentRows = [
       { shipment_ref: "PO1-Wave4-Container2-JELLO", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "600", duty_cost: "0", cost_currency: "EUR", po_line_item_ref: "PO1::JELLO", sku: "JELLO", qty: "10", weight_share: "0.5", value_share: "0.5" },

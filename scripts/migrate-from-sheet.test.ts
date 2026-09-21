@@ -539,6 +539,23 @@ describe("transformPayments", () => {
     expect(result.skipped[0].reason).toContain("duplicate payment rows");
   });
 
+  // Round-3 Critical (residual) regression: `distinctRawRefs.size > 1` alone
+  // is not enough to detect "genuinely pooled" — a duplicate ALONGSIDE
+  // genuinely distinct rows (JELLO, JELLO-again, STRAW) still has size 2 > 1
+  // and would silently sum the duplicate in too (900.00 for a real 600.00).
+  // The correct test is size === group.length (every row distinct).
+  it("quarantines the whole group when a duplicate row sits inside an otherwise-genuine pooled container, instead of summing the duplicate in", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" }, // exact duplicate of the row above
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+    ];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]); // never a payment silently summing to 900.00
+    expect(result.skipped).toHaveLength(3);
+    expect(result.skipped[0].reason).toContain("duplicate payment rows");
+  });
+
   // Round-2 Important #1 regression: a pooled sibling that fails sequence_no
   // parsing (not just amount/date) must still poison the WHOLE owner — the
   // valid JELLO row must not migrate alone as if its 300.00 were the real

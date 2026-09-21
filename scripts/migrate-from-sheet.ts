@@ -606,18 +606,24 @@ export function transformPayments(rows: PaymentSheetRow[]): { payments: Transfor
       continue;
     }
 
-    // Only a GENUINE pooled container — rows merging from at least two
-    // DISTINCT raw shipment_ref values (real per-SKU container lines) — may
+    // Only a GENUINE pooled container — every row in the group a DISTINCT
+    // raw shipment_ref value (real, different per-SKU container lines) — may
     // ever sum. POs never pool at all (per the design, only Container-N
-    // shipment refs pool); an exact-duplicate row pair (same raw ref/PO
-    // number, same sequence) is a duplicate, not a pool, and both quarantine
-    // outright rather than silently doubling the real amount.
+    // shipment refs pool). `size > 1` alone isn't enough: a group with a
+    // duplicate ALONGSIDE genuinely distinct rows (e.g. JELLO, JELLO-again,
+    // STRAW) still has size > 1 (2 distinct refs among 3 rows) and would
+    // silently sum in the duplicate too. The correct test is that EVERY row
+    // is distinct — size === group.length — so any duplicate anywhere in the
+    // group (whole-group or partial) quarantines instead of silently
+    // overcounting.
     const distinctRawRefs = new Set(group.map((g) => g.shipmentRefRaw ?? g.poNumber));
-    const pooled = group.length > 1 && !isPoOwned && distinctRawRefs.size > 1;
+    const pooled = group.length > 1 && !isPoOwned && distinctRawRefs.size === group.length;
     if (group.length > 1 && !pooled) {
       const reason = isPoOwned
         ? `duplicate payment rows: ${group.length} rows share PO "${owner}" sequence ${group[0].sequenceNo} — purchase orders don't pool, expected exactly one row per PO×sequence`
-        : `duplicate payment rows: ${group.length} rows share the exact same shipment_ref "${group[0].shipmentRefRaw}" and sequence ${group[0].sequenceNo} — not a genuine pooled container (no distinct per-SKU lines), so this is a duplicate, not a sum`;
+        : distinctRawRefs.size === 1
+          ? `duplicate payment rows: ${group.length} rows share the exact same shipment_ref "${group[0].shipmentRefRaw}" and sequence ${group[0].sequenceNo} — not a genuine pooled container (no distinct per-SKU lines), so this is a duplicate, not a sum`
+          : `duplicate payment rows: ${group.length} rows share owner "${owner}" sequence ${group[0].sequenceNo} but only ${distinctRawRefs.size} distinct shipment_ref value(s) among them — at least one row duplicates another's, so this group can't be safely summed`;
       for (const g of group) skipped.push({ rowIndex: g.rowIndex, reason });
       continue;
     }
