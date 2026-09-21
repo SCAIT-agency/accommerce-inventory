@@ -134,7 +134,7 @@ export const poLineItems = mysqlTable("po_line_items", {
   poId: int("poId").notNull().references(() => purchaseOrders.id),
   skuId: int("skuId").notNull().references(() => skus.id),
   qty: int("qty").notNull(),
-  unitPrice: decimal("unitPrice", { precision: 18, scale: 6, mode: "string" }).notNull(),
+  unitPrice: decimal("unitPrice", { precision: 18, scale: 8, mode: "string" }).notNull(),
   currency: varchar("currency", { length: 8 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
@@ -224,7 +224,7 @@ export const inventoryLedger = mysqlTable(
     warehouseId: int("warehouseId").notNull().references(() => warehouses.id),
     eventType: mysqlEnum("eventType", LEDGER_EVENT_TYPES).notNull(),
     qty: int("qty").notNull(),
-    unitCost: decimal("unitCost", { precision: 18, scale: 6, mode: "string" }),
+    unitCost: decimal("unitCost", { precision: 18, scale: 8, mode: "string" }),
     // fsp: 3 (millisecond precision) matches what JS Date actually carries.
     // Default second-level precision rounds (not truncates) on insert, which
     // can flip the ordering of two events timestamped milliseconds apart

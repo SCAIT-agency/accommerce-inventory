@@ -272,7 +272,7 @@ export async function markShipmentArrived(
         warehouseId: shipment.warehouseId,
         eventType: "receipt",
         qty: line.qty,
-        unitCost: landedUnitCost.toFixed(6),
+        unitCost: landedUnitCost.toFixed(8),
         date: actualArrivalDate,
         sourceRef: shipment.shipmentRef,
       }, tx);

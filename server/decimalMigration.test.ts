@@ -31,12 +31,15 @@ beforeEach(async () => {
 });
 
 describe("decimal column migration round-trips every value at its real precision", () => {
-  it("unitCost survives a 6-decimal write exactly", async () => {
+  it("unitCost survives an 8-decimal write exactly", async () => {
+    // Column widened decimal(18,6) -> decimal(18,8) (2026-09-21): 6dp still
+    // truncated real 7dp source unit costs. This asserts the new column's
+    // full scale, not the old 6dp one.
     const sku = await createSku({ sku: "JELLO-DECIMAL-TEST", primaryIdentifierType: "sku" });
     const wh = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
-    await recordLedgerEvent({ skuId: sku.id, warehouseId: wh.id, eventType: "receipt", qty: 100, unitCost: "0.123456", date: new Date(), sourceRef: "TEST" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: wh.id, eventType: "receipt", qty: 100, unitCost: "0.12345678", date: new Date(), sourceRef: "TEST" });
     const [row] = await db.select().from(inventoryLedger).where(sql`${inventoryLedger.skuId} = ${sku.id}`);
-    expect(row.unitCost).toBe("0.123456");
+    expect(row.unitCost).toBe("0.12345678");
   });
 
   it("payment fxRate/paidAmount/baseCurrencyAmount survive a real markPaymentPaid write exactly", async () => {
