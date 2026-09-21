@@ -27,6 +27,7 @@ import {
   type SkuWarehouseTotal,
   type SkippedRow,
   type LandedCostTotal,
+  type ReconcileOptions,
 } from "./migrate-from-sheet";
 
 export interface RunMigrationInput {
@@ -41,6 +42,8 @@ export interface RunMigrationInput {
   salesActualRows?: SalesRowSheet[];
   salesPlanRows?: SalesRowSheet[];
 }
+
+export type RunMigrationOptions = ReconcileOptions;
 
 export interface UnmatchedManualLink {
   transactionIndex: number;
@@ -120,7 +123,7 @@ function findInstalmentSubset<H extends { baseAmount: number }, P extends { amou
   return best ? { members: best.members, target: best.target } : null;
 }
 
-export async function runMigration(input: RunMigrationInput): Promise<RunMigrationResult> {
+export async function runMigration(input: RunMigrationInput, options: RunMigrationOptions = {}): Promise<RunMigrationResult> {
   // Finding 1 (superseded): this used to throw immediately if landedCostTotals
   // was non-empty ("landed-cost reconciliation is not yet wired to a real data
   // source"). That guard's whole reason for existing — unknown real Control
@@ -356,22 +359,31 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
     }
 
     // 4. Transactions, then transfer of the Sheet's human match hints (never
-    //    inferred). This is a genuine adaptation, not a straight port: current
-    //    main's matchTransactionToPayment (server/payments.ts) now enforces a
-    //    strict one-payment↔one-transaction invariant (it throws if a payment
-    //    is already matched to a different transaction — see its own
-    //    server/payments.test.ts "rejects re-matching a payment already
-    //    linked to a different transaction"). The validated instalment-transfer
-    //    rule below deliberately links SEVERAL transactions to ONE payment
-    //    (e.g. two partial wires settling one PO instalment), which that
-    //    guard exists specifically to prevent for live, human-driven usage.
-    //    So this migration does not call matchTransactionToPayment/
-    //    matchTransactionToPaymentCore at all — it writes matchedPaymentId
-    //    directly, and handles the paid/paidAmount side itself via
-    //    markPaymentPaidCore (in the same way server/payments.ts's own
-    //    matchTransactionToPaymentCore does for the plain 1:1 case), giving
-    //    full control over amount/date for instalment sums and variance-only
-    //    updates. See task-6-report.md for the full reasoning.
+    //    inferred). This is a genuine adaptation, not a straight port: this
+    //    migration deliberately does NOT call server/payments.ts's exported
+    //    matchTransactionToPayment(transactionId, paymentId, opts) function,
+    //    for two independent reasons, either one of which would be enough:
+    //      (a) it takes no dbClient parameter at all — it always opens its
+    //          own db.transaction() — so calling it from in here would run
+    //          on a separate pooled connection that cannot see this
+    //          transaction's own uncommitted writes (the payments/
+    //          transactions just inserted above) and would sit outside this
+    //          transaction's rollback boundary entirely;
+    //      (b) it also enforces a strict one-payment↔one-transaction
+    //          invariant (it throws if a payment is already matched to a
+    //          different transaction — see server/payments.test.ts's
+    //          "rejects re-matching a payment already linked to a different
+    //          transaction"). The validated instalment-transfer rule below
+    //          deliberately links SEVERAL transactions to ONE payment (e.g.
+    //          two partial wires settling one PO instalment), which that
+    //          guard exists specifically to prevent for live, human-driven
+    //          usage.
+    //    So this migration writes transactions.matchedPaymentId directly on
+    //    `tx`, and handles the paid/paidAmount side itself via
+    //    markPaymentPaidCore (exported from server/payments.ts specifically
+    //    for this — it already accepts a dbClient), giving full control over
+    //    amount/date for instalment sums and variance-only updates. See
+    //    task-6-report.md for the full reasoning.
     const hinted: { txIdx: number; id: number; ref: string; baseAmount: number; date: Date }[] = [];
     for (const [txIdx, txRow] of transformedTransactions.entries()) {
       const created = await recordTransaction(
@@ -549,6 +561,7 @@ export async function runMigration(input: RunMigrationInput): Promise<RunMigrati
           return line ? line.landedUnitCost : Number.NaN;
         },
       },
+      { landedCostTolerance: options.landedCostTolerance },
     );
     if (!gate.passed) {
       throw new Error(`migration reconciliation failed: ${JSON.stringify(gate.mismatches)}`);

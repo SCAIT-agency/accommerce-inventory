@@ -104,6 +104,42 @@ describe("runMigration (widened scope)", () => {
     expect(await db.select().from(shipments)).toHaveLength(1);
   });
 
+  // Important #3: the design doc's §4 specifies the landed-cost tolerance
+  // "becomes a parameter (default keeps Stream B's max(0.01, 0.1%); the
+  // dry-run passes 0.00006)" — a caller (Task 10's real dry-run) must be able
+  // to pass a tighter tolerance than the built-in default. Actual landed cost
+  // = (1.10*1000 + 500 + 100)/1000 = 1.70; the Sheet says 1.705 — a 0.005 diff.
+  it("passes a diff within the default landed-cost tolerance (max(0.01, 0.1%))", async () => {
+    await runMigration({
+      ledgerRows: [],
+      poRows: [{ po_number: "PO1", vendor_name: "Lvmengkang", vendor_reference: "", status: "closed", sku: "JELLO", qty: "1000", unit_price: "1.10", currency: "EUR" }],
+      shipmentRows: [{ shipment_ref: "PO1-W1", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "500.00", duty_cost: "100.00", cost_currency: "EUR", po_line_item_ref: "PO1::JELLO", sku: "JELLO", qty: "1000", weight_share: "1", value_share: "1" }],
+      paymentRows: [],
+      transactionRows: [],
+      sheetTotals: [],
+      landedCostTotals: [{ shipmentRef: "PO1-W1", sku: "JELLO", landedCostFromSheet: 1.705 }],
+    });
+    expect(await db.select().from(shipments)).toHaveLength(1);
+  });
+
+  it("rejects the same diff under a caller-supplied, tighter landedCostTolerance", async () => {
+    await expect(
+      runMigration(
+        {
+          ledgerRows: [],
+          poRows: [{ po_number: "PO1", vendor_name: "Lvmengkang", vendor_reference: "", status: "closed", sku: "JELLO", qty: "1000", unit_price: "1.10", currency: "EUR" }],
+          shipmentRows: [{ shipment_ref: "PO1-W1", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "500.00", duty_cost: "100.00", cost_currency: "EUR", po_line_item_ref: "PO1::JELLO", sku: "JELLO", qty: "1000", weight_share: "1", value_share: "1" }],
+          paymentRows: [],
+          transactionRows: [],
+          sheetTotals: [],
+          landedCostTotals: [{ shipmentRef: "PO1-W1", sku: "JELLO", landedCostFromSheet: 1.705 }],
+        },
+        { landedCostTolerance: () => 0.001 },
+      ),
+    ).rejects.toThrow(/landed_cost/);
+    expect(await db.select().from(shipments)).toHaveLength(0);
+  });
+
   it("treats a landed-cost target for a line the platform cannot cost as a mismatch, not a pass", async () => {
     await expect(
       runMigration({
@@ -258,6 +294,38 @@ describe("runMigration (widened scope)", () => {
     expect(result.quarantined.payments).toEqual([]);
   });
 
+  // Important #2: a Sheet transaction naming a single per-SKU pooled-container
+  // line (not yet collapsed by an upstream exporter, ported from ea7d1b3)
+  // must still resolve to the pooled shipment's own payment via matchedRef
+  // normalization — otherwise it would reject as "no migrated PO or shipment
+  // with this ref" even though the pooled payment genuinely exists.
+  it("transfers a transaction link whose matched_ref names one line of a pooled container", async () => {
+    const shipmentRows = [
+      { shipment_ref: "PO1-Wave4-Container2-JELLO", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "600", duty_cost: "0", cost_currency: "EUR", po_line_item_ref: "PO1::JELLO", sku: "JELLO", qty: "10", weight_share: "0.5", value_share: "0.5" },
+      { shipment_ref: "PO1-Wave4-Container2-STRAW", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "600", duty_cost: "0", cost_currency: "EUR", po_line_item_ref: "PO1::STRAW", sku: "STRAW", qty: "10", weight_share: "0.5", value_share: "0.5" },
+    ];
+    const result = await runMigration({
+      ledgerRows: [],
+      poRows: [
+        { po_number: "PO1", vendor_name: "V", vendor_reference: "", status: "closed", sku: "JELLO", qty: "10", unit_price: "1", currency: "EUR" },
+        { po_number: "PO1", vendor_name: "V", vendor_reference: "", status: "closed", sku: "STRAW", qty: "10", unit_price: "1", currency: "EUR" },
+      ],
+      shipmentRows,
+      paymentRows: [
+        { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+        { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+      ],
+      // names only ONE of the container's per-SKU lines — must still normalize to the pooled ref
+      transactionRows: [{ date: "2026-07-21", amount: "600.00", currency: "EUR", fx_rate: "1", counterparty: "F", description: "freight", matched_ref: "PO1-Wave4-Container2-JELLO" }],
+      sheetTotals: [],
+    });
+    const [payment] = await db.select().from(payments);
+    const [txRow] = await db.select().from(transactions);
+    expect(txRow.matchedPaymentId).toBe(payment.id);
+    expect(result.counts.matchedTransactions).toBe(1);
+    expect(result.unmatchedManualLinks).toEqual([]);
+  });
+
   it("quarantines a pooled container's payment rows when they disagree on paid status instead of silently summing", async () => {
     const shipmentRows = [
       { shipment_ref: "PO1-Wave4-Container2-JELLO", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "600", duty_cost: "0", cost_currency: "EUR", po_line_item_ref: "PO1::JELLO", sku: "JELLO", qty: "10", weight_share: "0.5", value_share: "0.5" },
@@ -279,6 +347,36 @@ describe("runMigration (widened scope)", () => {
     });
     expect(result.quarantined.payments).toHaveLength(2);
     expect(result.quarantined.payments[0].reason).toContain("disagree on paid");
+    expect(await db.select().from(payments)).toHaveLength(0);
+  });
+
+  // Critical fix: a pooled container's sibling row with a bad field (here, a
+  // blank expected_date) must never let the OTHER, individually-valid sibling
+  // silently stand in for the whole group's total — that would commit a real
+  // wrong (half) money figure with only a per-row quarantine line as signal.
+  // Both rows must quarantine together, and no payment row is created at all.
+  it("never commits a partial (wrong) pooled payment amount when one sibling row is invalid", async () => {
+    const shipmentRows = [
+      { shipment_ref: "PO1-Wave4-Container2-JELLO", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "600", duty_cost: "0", cost_currency: "EUR", po_line_item_ref: "PO1::JELLO", sku: "JELLO", qty: "10", weight_share: "0.5", value_share: "0.5" },
+      { shipment_ref: "PO1-Wave4-Container2-STRAW", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "600", duty_cost: "0", cost_currency: "EUR", po_line_item_ref: "PO1::STRAW", sku: "STRAW", qty: "10", weight_share: "0.5", value_share: "0.5" },
+    ];
+    const result = await runMigration({
+      ledgerRows: [],
+      poRows: [
+        { po_number: "PO1", vendor_name: "V", vendor_reference: "", status: "closed", sku: "JELLO", qty: "10", unit_price: "1", currency: "EUR" },
+        { po_number: "PO1", vendor_name: "V", vendor_reference: "", status: "closed", sku: "STRAW", qty: "10", unit_price: "1", currency: "EUR" },
+      ],
+      shipmentRows,
+      paymentRows: [
+        { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+        // sibling's expected_date is blank — must poison the WHOLE group, not just this row
+        { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "", currency: "EUR" },
+      ],
+      transactionRows: [],
+      sheetTotals: [],
+    });
+    expect(result.quarantined.payments).toHaveLength(2);
+    // Never a payment row carrying only the JELLO row's 300.00 as if it were the real 600.00 total.
     expect(await db.select().from(payments)).toHaveLength(0);
   });
 

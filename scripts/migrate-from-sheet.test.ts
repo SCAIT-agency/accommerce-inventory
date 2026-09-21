@@ -432,6 +432,54 @@ describe("transformPayments", () => {
     expect(result.skipped).toHaveLength(2);
     expect(result.skipped[0].reason).toContain("disagree on currency");
   });
+
+  // Critical fix: a pooled group must never silently commit a partial (wrong)
+  // amount because one sibling's field was individually invalid and dropped
+  // before grouping. Here the STRAW sibling has a blank expected_date; the
+  // whole group (both rows) must quarantine, and no payment row is produced
+  // that carries only the JELLO row's 300.00 as if it were the full 600.00.
+  it("quarantines the WHOLE pooled group when one sibling has a blank/invalid field, never a partial sum", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "", currency: "EUR" },
+    ];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped).toHaveLength(2);
+    expect(result.skipped.map((s) => s.rowIndex).sort()).toEqual([0, 1]);
+    expect(result.skipped[0].reason).toContain("disagree on expected_date");
+  });
+
+  it("quarantines the whole pooled group when one sibling's amount is unparseable, rather than summing only the valid one", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "garbage", expected_date: "2026-07-21", currency: "EUR" },
+    ];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped).toHaveLength(2);
+    expect(result.skipped[0].reason).toContain("unparseable expected_amount");
+  });
+
+  // Important #1: expectedDate is a merge key too (matching SHIPMENT_MERGE_KEYS's
+  // pattern of checking every relevant field) — a group disagreeing on the
+  // planned date quarantines instead of silently taking the first row's date.
+  it("quarantines a pooled group that disagrees on expected_date", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-22", currency: "EUR" },
+    ];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped[0].reason).toContain("disagree on expected_date");
+  });
+
+  it("trims whitespace-only po_number the same as an empty one (XOR validation isn't defeated by whitespace)", () => {
+    const rows = [{ po_number: "   ", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "1.00", expected_date: "2026-07-21", currency: "EUR" }];
+    const result = transformPayments(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.payments[0]).toMatchObject({ poNumber: null, shipmentRef: "PO1-W3" });
+  });
 });
 
 describe("transformTransactions", () => {
@@ -476,6 +524,36 @@ describe("transformTransactions", () => {
     const result = transformTransactions(rows);
     expect(result.transactions[0].matchedRef).toBeNull();
     expect(result.transactions[1].matchedRef).toBeNull();
+  });
+
+  // Important #2: a ref naming a per-SKU pooled-container line normalizes to
+  // the pooled owner ref, ported from the source branch's ea7d1b3
+  // ("collapse pooled-container refs on transactions") — without this, a
+  // real Sheet hint naming e.g. "...Container2-Jello" would resolve to
+  // nothing (paymentsByOwner/shipmentRefs are keyed by pooled refs only) and
+  // reject as "no migrated PO or shipment with this ref".
+  it("normalizes a matched_ref naming a single pooled-container line to the pooled owner ref", () => {
+    const rows = [
+      { date: "2026-07-21", amount: "19056.71", currency: "EUR", fx_rate: "1", counterparty: "F", description: "freight", matched_ref: "PO1-Wave4-Container2-JELLO" },
+    ];
+    const result = transformTransactions(rows);
+    expect(result.transactions[0].matchedRef).toBe("PO1-Wave4-Container2");
+  });
+
+  it("collapses a comma-separated ref naming several lines of the SAME pooled container to one ref", () => {
+    const rows = [
+      { date: "2026-07-21", amount: "19056.71", currency: "EUR", fx_rate: "1", counterparty: "F", description: "freight", matched_ref: "PO1-Wave4-Container2-JELLO, PO1-Wave4-Container2-MIXER, PO1-Wave4-Container2-STRAW" },
+    ];
+    const result = transformTransactions(rows);
+    expect(result.transactions[0].matchedRef).toBe("PO1-Wave4-Container2");
+  });
+
+  it("leaves a ref naming genuinely distinct owners comma-joined (still reported as untransferable downstream)", () => {
+    const rows = [
+      { date: "2026-07-01", amount: "10.00", currency: "EUR", fx_rate: "1", counterparty: "F", description: "split", matched_ref: "PO1, PO1-W1" },
+    ];
+    const result = transformTransactions(rows);
+    expect(result.transactions[0].matchedRef).toBe("PO1, PO1-W1");
   });
 });
 
