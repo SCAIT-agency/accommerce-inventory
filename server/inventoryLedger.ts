@@ -1,6 +1,15 @@
 import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
 import { inventoryLedger, type InsertLedgerEvent, type LedgerEvent } from "../drizzle/schema";
+import { getAppSetting } from "./db";
+
+/**
+ * Per-instance policy: when set to "true", sales may drive SOH negative
+ * (backorders — Jello launched on them, and its Daily COGS prices them
+ * retroactively from the batch that later lands). Absent or any other value
+ * keeps the strict guard, which stays the default for every instance.
+ */
+export const ALLOW_BACKORDERS_SETTING = "allow_backorders";
 
 export async function recordLedgerEvent(event: Omit<InsertLedgerEvent, "id">, dbClient: DbClient = db) {
   // Known, accepted TOCTOU race: the SOH check below and the insert after it
@@ -22,7 +31,7 @@ export async function recordLedgerEvent(event: Omit<InsertLedgerEvent, "id">, db
     // other same-day event's guard check, regardless of insertion order.
     const asOfDate = endOfDayUtc(event.date);
     const currentSoh = await getSoh(event.skuId, event.warehouseId, asOfDate, dbClient);
-    if (currentSoh + event.qty < 0) {
+    if (currentSoh + event.qty < 0 && (await getAppSetting(ALLOW_BACKORDERS_SETTING)) !== "true") {
       throw new Error(
         `recordLedgerEvent: this event would drive SOH negative for sku ${event.skuId}/warehouse ${event.warehouseId} ` +
         `(current: ${currentSoh}, event qty: ${event.qty}) — refusing to write`,

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { inventoryLedger, skus, warehouses } from "../drizzle/schema";
-import { recordLedgerEvent, getSoh, getSohForSkus } from "./inventoryLedger";
-import { createSku, createWarehouse } from "./db";
+import { inventoryLedger, skus, warehouses, appSettings } from "../drizzle/schema";
+import { recordLedgerEvent, getSoh, getSohForSkus, ALLOW_BACKORDERS_SETTING } from "./inventoryLedger";
+import { createSku, createWarehouse, setAppSetting } from "./db";
 
 beforeEach(async () => {
   // Real FKs now tie skus/warehouses to other tables, but each test file only
@@ -22,6 +22,7 @@ beforeEach(async () => {
       await tx.delete(inventoryLedger);
       await tx.delete(skus);
       await tx.delete(warehouses);
+      await tx.delete(appSettings);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
     }
@@ -76,6 +77,26 @@ describe("inventory ledger", () => {
     await expect(
       recordLedgerEvent({ skuId: sku.id, warehouseId: 999999, eventType: "receipt", qty: 10, unitCost: "0.42", date: new Date(), sourceRef: "PO1" }),
     ).rejects.toThrow();
+  });
+
+  it("lets a sale drive SOH negative when the instance allows backorders", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await setAppSetting(ALLOW_BACKORDERS_SETTING, "true");
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -80, unitCost: null, date: new Date("2026-06-16"), sourceRef: "backorder-day-1" });
+
+    expect(await getSoh(sku.id, ff.id)).toBe(-80);
+  });
+
+  it("keeps the strict guard when the setting holds any value other than \"true\"", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await setAppSetting(ALLOW_BACKORDERS_SETTING, "false");
+
+    await expect(
+      recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -1, unitCost: null, date: new Date("2026-06-16"), sourceRef: "x" }),
+    ).rejects.toThrow(/negative/i);
   });
 
   it("pins every pool connection's session timezone to UTC via SET time_zone command", async () => {
