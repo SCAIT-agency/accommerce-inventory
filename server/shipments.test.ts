@@ -6,7 +6,7 @@ import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, 
 import { createSku, createVendor, createWarehouse, createUser } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { listChangeLog } from "./changeLog";
-import { getSoh } from "./inventoryLedger";
+import { getSoh, recordLedgerEvent } from "./inventoryLedger";
 import { inventoryLedger } from "../drizzle/schema";
 
 let ffWarehouseId: number;
@@ -946,6 +946,95 @@ describe("shipments", () => {
     expect(events.every((e) => e.eventType === "receipt" && e.correctsEventId === null)).toBe(true);
     expect(await getSoh(movingSku.id, ffWarehouseId)).toBe(50000);
     expect(await getSoh(unchangedSku.id, ffWarehouseId)).toBe(40000);
+  });
+
+  it("correctShipmentLandedCost propagates a non-no-op refusal raised by correctLedgerReceipt itself and rolls everything back", async () => {
+    // The sibling rollback test above fails in findUncorrectedReceipt, which
+    // runs OUTSIDE the no-op catch — so it cannot detect that catch being
+    // widened. This one makes correctLedgerReceipt itself refuse, from inside
+    // the try block, on a real (non-no-op) error.
+    const vendor = await createVendor({ name: "MBS Logistics" });
+    const healthySku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const strandedSku = await createSku({ sku: "JELLO-STRAW-100", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W7",
+      vendorId: vendor.id,
+      lineItems: [
+        { skuId: healthySku.id, qty: 50000, unitPrice: "0.15", currency: "USD" },
+        { skuId: strandedSku.id, qty: 40000, unitPrice: "0.16", currency: "USD" },
+      ],
+      createdBy: userId,
+    });
+    const poWithItems = await getPurchaseOrderWithLineItemsHelper(po.id);
+    const healthyPoLine = poWithItems.lineItems.find((li) => li.skuId === healthySku.id)!;
+    const strandedPoLine = poWithItems.lineItems.find((li) => li.skuId === strandedSku.id)!;
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W7-Container1",
+      warehouseId: ffWarehouseId,
+      lineItems: [
+        { poLineItemId: healthyPoLine.id, skuId: healthySku.id, qty: 50000, weightShare: "0.6", valueShare: "0.5" },
+        { poLineItemId: strandedPoLine.id, skuId: strandedSku.id, qty: 40000, weightShare: "0.4", valueShare: "0.5" },
+      ],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    // Recreates, at shipment level, the guard/replay ordering asymmetry Task 3
+    // established: 35000 of this line's 40000 units are sold, then a large
+    // receipt stamped at the very end of today lands. End-of-day SOH (105000)
+    // satisfies the day-granular negative-stock guard, but at the reversal's
+    // own wall-clock timestamp only 5000 units exist, so the FIFO replay
+    // inside correctLedgerReceipt cannot cover reversing all 40000.
+    await recordLedgerEvent({
+      skuId: strandedSku.id,
+      warehouseId: ffWarehouseId,
+      eventType: "sale",
+      qty: -35000,
+      unitCost: null,
+      date: new Date("2026-09-21"),
+      sourceRef: "shopify",
+    });
+    const endOfToday = new Date(`${new Date().toISOString().slice(0, 10)}T23:59:59.999Z`);
+    await recordLedgerEvent({
+      skuId: strandedSku.id,
+      warehouseId: ffWarehouseId,
+      eventType: "receipt",
+      qty: 100000,
+      unitCost: "0.17000000",
+      date: endOfToday,
+      sourceRef: "PO2-LATE",
+    });
+
+    const error = await correctShipmentLandedCost(
+      shipment.id,
+      { freightCost: "1800.00" },
+      { changedBy: userId, reasonNote: "final forwarder invoice" },
+    ).then(
+      () => null,
+      (err: Error) => err,
+    );
+
+    // Rejected, and with the REAL underlying error — not swallowed by the
+    // no-op skip, and not miscategorised as one.
+    expect(error).toBeInstanceOf(Error);
+    expect(error!.message).toMatch(/FIFO history unreplayable/);
+    expect(error!.message).toMatch(/allowNegativeSoh/);
+    expect(error!.message).not.toMatch(/changes nothing/);
+
+    // Zero partial state: the restatement, its audit row, and the other line's
+    // already-written correction pair are all gone.
+    const [unchangedShipment] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(unchangedShipment.freightCost).toBe("900.0000");
+    const history = await listChangeLog("shipment", shipment.id);
+    expect(history.some((h) => h.reasonCategory === "data_correction")).toBe(false);
+    const healthyEvents = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, healthySku.id));
+    expect(healthyEvents).toHaveLength(1);
+    expect(healthyEvents[0].correctsEventId).toBeNull();
+    const strandedEvents = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, strandedSku.id));
+    expect(strandedEvents).toHaveLength(3); // receipt, sale, late receipt — no correction rows
+    expect(strandedEvents.every((e) => e.correctsEventId === null)).toBe(true);
+    expect(await getSoh(healthySku.id, ffWarehouseId)).toBe(50000);
+    expect(await getSoh(strandedSku.id, ffWarehouseId)).toBe(40000 - 35000 + 100000);
   });
 
   it("correctShipmentLandedCost refuses a call that restates no cost field at all", async () => {
