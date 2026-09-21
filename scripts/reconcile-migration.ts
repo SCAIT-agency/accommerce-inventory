@@ -19,6 +19,7 @@ import {
   transformSalesPlan,
   reconcileMigration,
   pooledPaymentOwnerRef,
+  resolveShipmentOwnerRef,
   type SheetExportRow,
   type PoSheetRow,
   type ShipmentSheetRow,
@@ -137,8 +138,8 @@ export async function runMigration(input: RunMigrationInput, options: RunMigrati
   // to the ledger before that sale is checked.
   ledgerEvents.sort((a, b) => a.date.getTime() - b.date.getTime());
   const { purchaseOrders: transformedPos, skipped: skippedPos } = transformPurchaseOrders(input.poRows);
-  const { shipments: transformedShipments, skipped: skippedShipments } = transformShipments(input.shipmentRows);
-  const { payments: transformedPayments, skipped: skippedPayments } = transformPayments(input.paymentRows);
+  const { shipments: transformedShipments, skipped: skippedShipments, pooledOwnerRefs } = transformShipments(input.shipmentRows);
+  const { payments: transformedPayments, skipped: skippedPayments } = transformPayments(input.paymentRows, pooledOwnerRefs);
   const { transactions: transformedTransactions, skipped: skippedTransactions } = transformTransactions(input.transactionRows);
   const { rows: salesActualEvents, skipped: skippedSalesActuals } = transformSalesActuals(input.salesActualRows ?? []);
   const { rows: salesPlanEntries, skipped: skippedSalesPlan } = transformSalesPlan(input.salesPlanRows ?? []);
@@ -317,16 +318,8 @@ export async function runMigration(input: RunMigrationInput, options: RunMigrati
     // candidate.
     for (const [paymentIdx, payment] of transformedPayments.entries()) {
       const poId = payment.poNumber ? poIdByNumber.get(payment.poNumber) : undefined;
-      let resolvedShipmentRef = payment.shipmentRef;
-      let shipmentId = resolvedShipmentRef ? shipmentIdByRef.get(resolvedShipmentRef) : undefined;
-      if (shipmentId === undefined && payment.shipmentRef) {
-        const pooledCandidate = pooledPaymentOwnerRef(payment.shipmentRef);
-        const pooledId = pooledCandidate !== payment.shipmentRef ? shipmentIdByRef.get(pooledCandidate) : undefined;
-        if (pooledId !== undefined) {
-          shipmentId = pooledId;
-          resolvedShipmentRef = pooledCandidate;
-        }
-      }
+      const resolvedShipmentRef = payment.shipmentRef ? resolveShipmentOwnerRef(payment.shipmentRef, shipmentRefs, pooledOwnerRefs) : null;
+      const shipmentId = resolvedShipmentRef ? shipmentIdByRef.get(resolvedShipmentRef) : undefined;
       const ownerRef = (payment.poNumber ?? resolvedShipmentRef)!;
       if (poId === undefined && shipmentId === undefined) {
         runtimeSkippedPayments.push({
@@ -482,7 +475,7 @@ export async function runMigration(input: RunMigrationInput, options: RunMigrati
     // the actual ground truth for which refs are real pooled owners.
     const resolvesDirectly = (r: string) => paymentsByOwner.has(r) || shipmentRefs.has(r);
     const normalizeRef = (r: string) =>
-      [...new Set(r.split(",").map((p) => p.trim()).filter(Boolean).map(pooledPaymentOwnerRef))].join(", ");
+      [...new Set(r.split(",").map((p) => p.trim()).filter(Boolean).map((p) => pooledPaymentOwnerRef(p, pooledOwnerRefs)))].join(", ");
     const resolveRef = (raw: string): string => (resolvesDirectly(raw) ? raw : normalizeRef(raw));
 
     // Group by the RESOLVED ref, not the raw one — two transactions naming

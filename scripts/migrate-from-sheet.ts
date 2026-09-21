@@ -367,7 +367,25 @@ interface PendingShipmentRow {
   };
 }
 
-export function transformShipments(rows: ShipmentSheetRow[]): { shipments: TransformedShipment[]; skipped: SkippedRow[] } {
+export interface TransformShipmentsResult {
+  shipments: TransformedShipment[];
+  skipped: SkippedRow[];
+  /**
+   * Refs transformShipments actually resolved via the Container-N pooling
+   * pattern — i.e. at least one merged row's own raw shipment_ref differs
+   * from the group's output ref (only the pattern match rewrites a ref, so
+   * this is exactly "genuinely pooled", not just "has more than one line
+   * item" — a plain multi-SKU shipment sharing one raw ref also has >1 line
+   * item but was never rewritten). This is the ground truth
+   * pooledPaymentOwnerRef cross-checks against (Finding 1, 2026-09-21
+   * final review): the payment side has no `sku` field to make this
+   * judgment itself, so it must be told which owners the shipment side
+   * actually pooled.
+   */
+  pooledOwnerRefs: Set<string>;
+}
+
+export function transformShipments(rows: ShipmentSheetRow[]): TransformShipmentsResult {
   const skipped: SkippedRow[] = [];
   const groups = new Map<string, PendingShipmentRow[]>();
 
@@ -415,6 +433,7 @@ export function transformShipments(rows: ShipmentSheetRow[]): { shipments: Trans
   });
 
   const shipments: TransformedShipment[] = [];
+  const pooledOwnerRefs = new Set<string>();
   for (const [ref, group] of groups) {
     const conflict = findShipmentMergeConflict(group.map((g) => g.row));
     if (conflict) {
@@ -422,6 +441,14 @@ export function transformShipments(rows: ShipmentSheetRow[]): { shipments: Trans
       for (const g of group) skipped.push({ rowIndex: g.rowIndex, reason });
       continue;
     }
+
+    // A row contributed to this group under a ref other than its own raw
+    // shipment_ref only when platformShipmentRef actually stripped it via
+    // the Container-N-<SKU> pattern — the one and only way `ref` can differ
+    // from a member's own row.shipment_ref. That makes this group a genuine
+    // pooled container, not a plain multi-line shipment that happens to
+    // share one raw ref across its rows (which never gets rewritten).
+    if (group.some((g) => g.row.shipment_ref !== ref)) pooledOwnerRefs.add(ref);
 
     const first = group[0];
     shipments.push({
@@ -447,7 +474,7 @@ export function transformShipments(rows: ShipmentSheetRow[]): { shipments: Trans
     });
   }
 
-  return { shipments, skipped };
+  return { shipments, skipped, pooledOwnerRefs };
 }
 
 // --- Payments ---
@@ -482,14 +509,37 @@ export interface TransformedPayment {
 // convention as transformShipments' pooling: "<prefix>Container<N>-<SKU>")
 // share one physical invoice and sum into the pooled shipment's own payment
 // sequence. Payment rows carry no `sku` field to cross-check against (unlike
-// shipment rows), so this applies the pattern alone — an acceptable
-// relaxation since the Container-N-<SKU> naming is reserved for pooled
-// container lines in the real Sheet, never used for an unrelated shipment.
-// Exported: reconcile-migration.ts's transaction-matching also needs this,
-// as a fallback when a matched_ref doesn't resolve on its own (see there).
-export function pooledPaymentOwnerRef(shipmentRef: string): string {
+// shipment rows), so a bare regex match alone would treat ANY
+// Container-N-<X> ref as pooled, even when the shipment side (which DOES
+// have a real per-row sku to check) deliberately left that same container
+// standalone — silently mis-attributing a payment's amount into a container
+// that was never actually pooled (Finding 1, 2026-09-21 final review). The
+// real cross-check: only strip the suffix when the prefix is a REAL,
+// actually-pooled shipment owner — i.e. present in knownPooledOwnerRefs,
+// which transformShipments computes once from the same rows the migration
+// actually pools. Exported: reconcile-migration.ts's transaction-matching
+// also needs this, as a fallback when a matched_ref doesn't resolve on its
+// own (see there).
+export function pooledPaymentOwnerRef(shipmentRef: string, knownPooledOwnerRefs: ReadonlySet<string>): string {
   const m = POOLED_SHIPMENT_PATTERN.exec(shipmentRef);
-  return m ? m[1] : shipmentRef;
+  return m && knownPooledOwnerRefs.has(m[1]) ? m[1] : shipmentRef;
+}
+
+/**
+ * Resolve a single owner ref (PO number or shipment ref) the same way
+ * runMigration's actual write resolves a payment's shipment owner: the raw
+ * ref stands if it already names a real, migrated shipment; only when it
+ * doesn't is the Container-N pooled-owner candidate tried — and
+ * pooledPaymentOwnerRef itself only ever returns a genuinely pooled owner
+ * (see above), so that candidate is guaranteed to be a real shipment
+ * whenever it differs from `raw`. Shared by runMigration
+ * (reconcile-migration.ts) and R5 (control-tower/reconcile.ts) so both
+ * compute the SAME owner for the same raw ref — Finding 2 (2026-09-21 final
+ * review) was exactly R5 re-deriving this independently and disagreeing
+ * with the real migration for a lone (singly) pooled payment slot.
+ */
+export function resolveShipmentOwnerRef(raw: string, knownShipmentRefs: ReadonlySet<string>, knownPooledOwnerRefs: ReadonlySet<string>): string {
+  return knownShipmentRefs.has(raw) ? raw : pooledPaymentOwnerRef(raw, knownPooledOwnerRefs);
 }
 
 interface RawPaymentRow {
@@ -528,7 +578,10 @@ function findPaymentMergeConflict(rows: RawPaymentRow[]): string | null {
   return null;
 }
 
-export function transformPayments(rows: PaymentSheetRow[]): { payments: TransformedPayment[]; skipped: SkippedRow[] } {
+export function transformPayments(
+  rows: PaymentSheetRow[],
+  knownPooledOwnerRefs: ReadonlySet<string>,
+): { payments: TransformedPayment[]; skipped: SkippedRow[] } {
   const skipped: SkippedRow[] = [];
   const preGroup: RawPaymentRow[] = [];
   // Shipment owner refs where a row genuinely naming a pooled-container line
@@ -554,7 +607,7 @@ export function transformPayments(rows: PaymentSheetRow[]): { payments: Transfor
   rows.forEach((row, rowIndex) => {
     const poNumber = (row.po_number ?? "").trim() || null;
     const shipmentRefRaw = (row.shipment_ref ?? "").trim() || null;
-    const candidateOwner = shipmentRefRaw ? pooledPaymentOwnerRef(shipmentRefRaw) : null;
+    const candidateOwner = shipmentRefRaw ? pooledPaymentOwnerRef(shipmentRefRaw, knownPooledOwnerRefs) : null;
     const isGenuinePooledRef = candidateOwner !== null && candidateOwner !== shipmentRefRaw;
 
     if ((poNumber === null) === (shipmentRefRaw === null)) {
@@ -762,6 +815,18 @@ export function transformTransactions(rows: TransactionSheetRow[]): { transactio
     const amount = parseFloat(row.amount);
     if (Number.isNaN(amount)) {
       skipped.push({ rowIndex, reason: `unparseable amount "${row.amount}"` });
+      return;
+    }
+    // export.ts leaves fxRate blank for a non-EUR row whose Amount (EUR)
+    // cell is blank (it deliberately never invents a fallback rate — see
+    // export.ts's exportTransactions). An empty string reaching
+    // recordTransaction below would try to write "" into a decimal column;
+    // MySQL strict mode rejects that with a hard error that rolls back the
+    // WHOLE migration transaction, not just this row (Finding 3, 2026-09-21
+    // final review). Quarantine it here instead, same as every other
+    // malformed field on this row.
+    if (row.currency !== "EUR" && row.fx_rate.trim() === "") {
+      skipped.push({ rowIndex, reason: "missing FX rate for non-EUR transaction" });
       return;
     }
     // The transform itself never matches or normalizes — matchedRef is only

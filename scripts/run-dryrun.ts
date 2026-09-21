@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-// scripts/run-dryrun.mjs
+// scripts/run-dryrun.ts
 //
 // One-command real-data dry-run: live Control Tower Sheet → snapshot → fresh
 // local database → migration → reconciliation → markdown report.

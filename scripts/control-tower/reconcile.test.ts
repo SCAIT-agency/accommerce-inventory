@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { computeFifoDailySeries } from "../../server/landedCost";
-import { exportPayments, exportShipmentPayments, platformShipmentRef } from "./export";
-import { transformPayments } from "../migrate-from-sheet";
+import { exportPayments, exportShipmentPayments, exportShipments, platformShipmentRef } from "./export";
+import { transformPayments, transformShipments, resolveShipmentOwnerRef } from "../migrate-from-sheet";
 import { reconcile, type ReconcileDeps } from "./reconcile";
 import { loadFixtureSnapshot, type ControlTowerSnapshot } from "./snapshot";
 import { pairKey, readLandedCostTarget, readReceipts, readSalesActuals, readSohToday, readStockByDay, seriesKey } from "./targets";
@@ -15,37 +15,44 @@ beforeAll(async () => {
 });
 
 /** Fake platform reads that answer exactly what the Sheet says — the "perfect migration". */
-function perfectDeps(): ReconcileDeps {
-  const stock = readStockByDay(snap);
-  const receipts = readReceipts(snap);
-  const sales = readSalesActuals(snap, TODAY);
-  const landed = readLandedCostTarget(snap);
+function perfectDeps(forSnap: ControlTowerSnapshot = snap): ReconcileDeps {
+  const stock = readStockByDay(forSnap);
+  const receipts = readReceipts(forSnap);
+  const sales = readSalesActuals(forSnap, TODAY);
+  const landed = readLandedCostTarget(forSnap);
   // Mirrors reconcile.ts's own R5 computation: exportShipmentPayments now
   // emits raw, un-pooled rows (Task 7 adaptation — see export.ts's module
   // comment), so the "true" post-migration payment shape is obtained by
   // running them through the same transformPayments pooling runMigration
-  // itself uses, not by re-deriving it here.
-  const { payments: pooledPayments } = transformPayments([...exportPayments(snap), ...exportShipmentPayments(snap)]);
+  // itself uses, not by re-deriving it here. That pooling now requires the
+  // real known-pooled-owners set from transformShipments (Finding 1), and a
+  // lone pooled container's payment slot needs the same extra owner
+  // resolution runMigration applies (resolveShipmentOwnerRef, Finding 2) —
+  // both threaded through here exactly as reconcile.ts's own R5 does, so
+  // this fake keeps mirroring the real migration, not a stale approximation.
+  const { shipments: mockShipments, pooledOwnerRefs } = transformShipments(exportShipments(forSnap).rows);
+  const knownShipmentRefs = new Set(mockShipments.map((s) => s.shipmentRef));
+  const { payments: pooledPayments } = transformPayments([...exportPayments(forSnap), ...exportShipmentPayments(forSnap)], pooledOwnerRefs);
   const paymentsByOwner = new Map<string, typeof pooledPayments>();
   for (const p of pooledPayments) {
-    const owner = p.poNumber ?? p.shipmentRef!;
+    const owner = p.poNumber ?? resolveShipmentOwnerRef(p.shipmentRef!, knownShipmentRefs, pooledOwnerRefs);
     paymentsByOwner.set(owner, [...(paymentsByOwner.get(owner) ?? []), p]);
   }
   const skus = ["Jello", "Mixer", "Straw"];
   const lineQty = new Map<string, number>();
-  for (const r of snap.shipments.rows) {
-    const ref = platformShipmentRef(r[snap.shipments.header.indexOf("Shipment ID")], skus);
+  for (const r of forSnap.shipments.rows) {
+    const ref = platformShipmentRef(r[forSnap.shipments.header.indexOf("Shipment ID")], skus);
     for (const sku of ["Jello", "Mixer", "Straw"]) {
-      const q = r[snap.shipments.header.indexOf(`${sku} Qty`)];
+      const q = r[forSnap.shipments.header.indexOf(`${sku} Qty`)];
       if (q) lineQty.set(`${ref}::${sku}`, (lineQty.get(`${ref}::${sku}`) ?? 0) + parseFloat(q));
     }
   }
-  const tab = snap.transactions;
+  const tab = forSnap.transactions;
   const eur = tab.header.indexOf("Amount (EUR)");
   const ref = tab.header.indexOf("PO#/Shipment Ref");
   return {
     async getSoh(sku, wh, asOf) {
-      if (!asOf) return readSohToday(snap).find((s) => s.sku === sku && s.warehouse === wh)!.qty;
+      if (!asOf) return readSohToday(forSnap).find((s) => s.sku === sku && s.warehouse === wh)!.qty;
       const day = new Date(asOf.getTime() + 1).toISOString().slice(0, 10);
       return stock.get(seriesKey(sku, wh, day)) ?? Number.NaN;
     },
@@ -136,5 +143,50 @@ describe("reconcile", () => {
     };
     const { findings } = await reconcile({ snap, today: TODAY, untransferableLinks: 0 }, broken);
     expect(findings.filter((f) => f.target === "R3").map((f) => f.key)).toEqual(["Jello/FF 2026-07-07 (missing day)", "Jello/FF 2026-07-08 cogs"]);
+  });
+
+  // Finding 2 (2026-09-21 final review): R5 used to compute a shipment-owned
+  // payment's "owner" via transformPayments alone, while the real migration
+  // (runMigration) applies an EXTRA raw-first/pooled-fallback resolution step
+  // on top (resolveShipmentOwnerRef) for a container that pools genuinely but
+  // with only ONE row for a given payment sequence — transformPayments' own
+  // pooling needs ≥2 distinct raw refs, so a lone row keeps its raw
+  // (un-pooled) ref as `shipmentRef`, and only runMigration's extra step
+  // resolves it to the real pooled owner. Reproduced here by renaming a real,
+  // single-SKU, single-row shipment ("PO1-Wave1-Jello") so its own sku
+  // genuinely matches a fabricated Container-N suffix — transformShipments
+  // pools it ALONE (same mechanics as reconcile-migration.test.ts's "resolves
+  // a lone payment row on a genuinely (but singly) pooled Container-N
+  // shipment" regression), while its corresponding payment row(s) stay raw.
+  // If R5 used the old, unresolved owner ("TestContainer9-Jello") to query
+  // the platform, it would find nothing under the real DB owner
+  // ("TestContainer9") and falsely report a slot-count/missing mismatch
+  // against a migration that actually ran correctly.
+  it("R5 resolves a lone-row pooled container's payment owner the same way the real migration writes it (Finding 2)", async () => {
+    const shipIdx = snap.shipments.header.indexOf("Shipment ID");
+    const rows = snap.shipments.rows.map((r) => (r[shipIdx] === "PO1-Wave1-Jello" ? r.map((v, i) => (i === shipIdx ? "TestContainer9-Jello" : v)) : r));
+    // Rename the matching Landed Cost Summary row too — R4/receipts key off
+    // that tab's own ref independently of the Shipments tab, and this test
+    // is about R5, not about introducing an unrelated R4/receipt mismatch.
+    const landedIdx = snap.landedCostSummary.header.indexOf("Shipment ID (Wave)");
+    const landedRows = snap.landedCostSummary.rows.map((r) =>
+      r[landedIdx] === "PO1-Wave1-Jello" ? r.map((v, i) => (i === landedIdx ? "TestContainer9-Jello" : v)) : r,
+    );
+    const mutated: ControlTowerSnapshot = {
+      ...snap,
+      shipments: { ...snap.shipments, rows },
+      landedCostSummary: { ...snap.landedCostSummary, rows: landedRows },
+    };
+
+    // perfectDeps mirrors the real migration exactly (it runs the same
+    // transformShipments → transformPayments → resolveShipmentOwnerRef
+    // pipeline), so its listPayments answers under the TRUE DB owner
+    // ("TestContainer9") — the same ground truth R5 must independently arrive at.
+    const { findings, checked } = await reconcile({ snap: mutated, today: TODAY, untransferableLinks: 0 }, perfectDeps(mutated));
+
+    const r5ForTestContainer = findings.filter((f) => f.target === "R5" && f.key.startsWith("TestContainer9"));
+    expect(r5ForTestContainer).toEqual([]);
+    // Both of "PO1-Wave1-Jello"'s two filled slots (Freight 1, Customs) are checked under the pooled owner.
+    expect(checked.R5).toBeGreaterThan(0);
   });
 });

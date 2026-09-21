@@ -79,7 +79,11 @@ describe("purchase orders & payments", () => {
       ["2", "19209.21", "TRUE", "2026-07-23"],
       ["3", "15092.83", "FALSE", ""],
     ]);
-    expect(transformPayments(rows).skipped).toEqual([]);
+    // transformPayments' pooling now requires the real known-pooled-owners
+    // set from transformShipments (Finding 1, 2026-09-21 final review) —
+    // "PO1-Wave4-Container2" is genuinely pooled in the fixture data.
+    const { pooledOwnerRefs } = transformShipments(exportShipments(snap).rows);
+    expect(transformPayments(rows, pooledOwnerRefs).skipped).toEqual([]);
 
     // Container 2's three raw rows share sequence numbers 1 (Freight) and 2
     // (Customs, Freight-2 being blank for all three) so transformPayments'
@@ -88,7 +92,7 @@ describe("purchase orders & payments", () => {
     const c2Raw = rows.filter((r) => r.shipment_ref?.startsWith("PO1-Wave4-Container2-"));
     expect(c2Raw).toHaveLength(6); // 3 rows × 2 present slots
     expect(new Set(c2Raw.map((r) => r.sequence_no))).toEqual(new Set(["1", "2"]));
-    const { payments: pooled } = transformPayments(rows);
+    const { payments: pooled } = transformPayments(rows, pooledOwnerRefs);
     const c2Pooled = pooled.filter((p) => p.shipmentRef === "PO1-Wave4-Container2").sort((a, b) => a.sequenceNo - b.sequenceNo);
     expect(c2Pooled.map((p) => [p.sequenceNo, p.expectedAmount, p.paid])).toEqual([
       [1, (8536.77 + 689.82 + 2510.38).toFixed(2), false],
@@ -98,7 +102,8 @@ describe("purchase orders & payments", () => {
 
   it("transformPayments quarantines a paid slot with no actual date", () => {
     const rows = exportPayments(snap).map((r) => (r.po_number === "PO1 Jello" && r.sequence_no === "1" ? { ...r, paid_date: "" } : r));
-    const result = transformPayments(rows);
+    // PO-owned rows never pool, so the known-pooled-owners set is irrelevant here.
+    const result = transformPayments(rows, new Set());
     expect(result.skipped).toEqual([{ rowIndex: expect.any(Number), reason: "paid without a paid_date (PO1 Jello #1)" }]);
     expect(result.payments.find((p) => p.poNumber === "PO1 Jello" && p.sequenceNo === 2)).toMatchObject({ paid: true, paidDate: expect.any(Date) });
   });

@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-// scripts/parallel-run.mjs
+// scripts/parallel-run.ts
 //
 // The daily parallel run: today's live dry-run plus a day-over-day delta.
 //

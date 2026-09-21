@@ -354,25 +354,33 @@ describe("transformShipments", () => {
 });
 
 describe("transformPayments", () => {
+  // Most cases below involve no genuine pooled container at all, so they pass
+  // an empty known-pooled-owners set (the safe, fail-closed default — see the
+  // Finding-1 fix). Tests that DO exercise real Container-N pooling pass
+  // POOLED_CONTAINER2, standing in for what transformShipments would have
+  // actually resolved for that container from the real shipment rows.
+  const NO_POOLED_OWNERS: ReadonlySet<string> = new Set();
+  const POOLED_CONTAINER2: ReadonlySet<string> = new Set(["PO1-Wave4-Container2"]);
+
   it("maps a well-formed payment row", () => {
     const rows = [
       { po_number: "PO3-JELLO", sequence_no: "1", expected_amount: "30746.70", expected_date: "2026-09-09", currency: "USD" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.skipped).toEqual([]);
     expect(result.payments[0]).toMatchObject({ poNumber: "PO3-JELLO", sequenceNo: 1, expectedAmount: "30746.70", currency: "USD" });
   });
 
   it("quarantines a row with a non-numeric expected amount", () => {
     const rows = [{ po_number: "PO3-JELLO", sequence_no: "1", expected_amount: "not-a-number", expected_date: "2026-09-09", currency: "USD" }];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.payments).toEqual([]);
     expect(result.skipped[0].reason).toContain("expected_amount");
   });
 
   it("quarantines a row with a non-numeric sequence_no instead of writing NaN", () => {
     const rows = [{ po_number: "PO3-JELLO", sequence_no: "abc", expected_amount: "30746.70", expected_date: "2026-09-09", currency: "USD" }];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.payments).toEqual([]);
     expect(result.skipped[0].reason).toContain("sequence_no");
   });
@@ -381,48 +389,48 @@ describe("transformPayments", () => {
     const rows = [
       { po_number: "PO3-JELLO", sequence_no: "1", expected_amount: "30746.70", expected_date: "2026-09-09", currency: "USD", paid: "TRUE", paid_date: "2026-09-10" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.skipped).toEqual([]);
     expect(result.payments[0]).toMatchObject({ paid: true, paidDate: new Date("2026-09-10") });
   });
 
   it("defaults paid to false and paidDate to null when the Sheet leaves them blank", () => {
     const rows = [{ po_number: "PO3-JELLO", sequence_no: "1", expected_amount: "30746.70", expected_date: "2026-09-09", currency: "USD" }];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.payments[0]).toMatchObject({ paid: false, paidDate: null });
   });
 
   it("quarantines a row marked paid without a paid_date instead of defaulting silently", () => {
     const rows = [{ po_number: "PO3-JELLO", sequence_no: "1", expected_amount: "30746.70", expected_date: "2026-09-09", currency: "USD", paid: "TRUE" }];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.payments).toEqual([]);
     expect(result.skipped[0].reason).toContain("paid_date");
   });
 
   it("quarantines a row with an unparseable paid_date", () => {
     const rows = [{ po_number: "PO3-JELLO", sequence_no: "1", expected_amount: "30746.70", expected_date: "2026-09-09", currency: "USD", paid: "TRUE", paid_date: "not-a-date" }];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.payments).toEqual([]);
     expect(result.skipped[0].reason).toContain("paid_date");
   });
 
   it("maps a well-formed shipment-owned payment row (shipment_ref instead of po_number)", () => {
     const rows = [{ po_number: "", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "19056.71", expected_date: "2026-07-21", currency: "EUR" }];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.skipped).toEqual([]);
     expect(result.payments[0]).toMatchObject({ poNumber: null, shipmentRef: "PO1-W3", sequenceNo: 1, expectedAmount: "19056.71" });
   });
 
   it("quarantines a row that gives both po_number and shipment_ref", () => {
     const rows = [{ po_number: "PO1", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "1.00", expected_date: "2026-07-21", currency: "EUR" }];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.payments).toEqual([]);
     expect(result.skipped[0].reason).toContain("exactly one of po_number / shipment_ref");
   });
 
   it("quarantines a row that gives neither po_number nor shipment_ref", () => {
     const rows = [{ po_number: "", sequence_no: "1", expected_amount: "1.00", expected_date: "2026-07-21", currency: "EUR" }];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.payments).toEqual([]);
     expect(result.skipped[0].reason).toContain("exactly one of po_number / shipment_ref");
   });
@@ -432,7 +440,7 @@ describe("transformPayments", () => {
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR", paid: "TRUE", paid_date: "2026-07-21" },
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR", paid: "TRUE", paid_date: "2026-07-21" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, POOLED_CONTAINER2);
     expect(result.skipped).toEqual([]);
     expect(result.payments).toEqual([
       expect.objectContaining({ shipmentRef: "PO1-Wave4-Container2", sequenceNo: 1, expectedAmount: "600.00", paid: true }),
@@ -444,7 +452,7 @@ describe("transformPayments", () => {
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "USD" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, POOLED_CONTAINER2);
     expect(result.payments).toEqual([]);
     expect(result.skipped).toHaveLength(2);
     expect(result.skipped[0].reason).toContain("disagree on currency");
@@ -460,7 +468,7 @@ describe("transformPayments", () => {
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "", currency: "EUR" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, POOLED_CONTAINER2);
     expect(result.payments).toEqual([]);
     expect(result.skipped).toHaveLength(2);
     expect(result.skipped.map((s) => s.rowIndex).sort()).toEqual([0, 1]);
@@ -472,7 +480,7 @@ describe("transformPayments", () => {
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "garbage", expected_date: "2026-07-21", currency: "EUR" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, POOLED_CONTAINER2);
     expect(result.payments).toEqual([]);
     expect(result.skipped).toHaveLength(2);
     expect(result.skipped[0].reason).toContain("unparseable expected_amount");
@@ -486,14 +494,14 @@ describe("transformPayments", () => {
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-22", currency: "EUR" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, POOLED_CONTAINER2);
     expect(result.payments).toEqual([]);
     expect(result.skipped[0].reason).toContain("disagree on expected_date");
   });
 
   it("trims whitespace-only po_number the same as an empty one (XOR validation isn't defeated by whitespace)", () => {
     const rows = [{ po_number: "   ", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "1.00", expected_date: "2026-07-21", currency: "EUR" }];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.skipped).toEqual([]);
     expect(result.payments[0]).toMatchObject({ poNumber: null, shipmentRef: "PO1-W3" });
   });
@@ -504,8 +512,8 @@ describe("transformPayments", () => {
   // migration with "Cannot read properties of undefined (reading 'trim')".
   it("does not crash when po_number is missing from the row entirely (only shipment_ref given)", () => {
     const rows = [{ shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "1.00", expected_date: "2026-07-21", currency: "EUR" } as unknown as PaymentSheetRow];
-    expect(() => transformPayments(rows)).not.toThrow();
-    const result = transformPayments(rows);
+    expect(() => transformPayments(rows, NO_POOLED_OWNERS)).not.toThrow();
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.skipped).toEqual([]);
     expect(result.payments[0]).toMatchObject({ poNumber: null, shipmentRef: "PO1-W3" });
   });
@@ -518,7 +526,7 @@ describe("transformPayments", () => {
       { po_number: "PO1", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
       { po_number: "PO1", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.payments).toEqual([]);
     expect(result.skipped).toHaveLength(2);
     expect(result.skipped[0].reason).toContain("duplicate payment rows");
@@ -533,7 +541,7 @@ describe("transformPayments", () => {
       { po_number: "", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
       { po_number: "", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.payments).toEqual([]);
     expect(result.skipped).toHaveLength(2);
     expect(result.skipped[0].reason).toContain("duplicate payment rows");
@@ -550,7 +558,7 @@ describe("transformPayments", () => {
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" }, // exact duplicate of the row above
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, POOLED_CONTAINER2);
     expect(result.payments).toEqual([]); // never a payment silently summing to 900.00
     expect(result.skipped).toHaveLength(3);
     expect(result.skipped[0].reason).toContain("duplicate payment rows");
@@ -565,7 +573,7 @@ describe("transformPayments", () => {
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
       { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, POOLED_CONTAINER2);
     expect(result.payments).toEqual([]);
     expect(result.skipped).toHaveLength(2);
     expect(result.skipped.map((s) => s.rowIndex).sort()).toEqual([0, 1]);
@@ -577,7 +585,7 @@ describe("transformPayments", () => {
       // both po_number and shipment_ref given — XOR failure, but shipment_ref still genuinely names the pooled container
       { po_number: "PO1", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, POOLED_CONTAINER2);
     expect(result.payments).toEqual([]);
     expect(result.skipped).toHaveLength(2);
     expect(result.skipped.map((s) => s.rowIndex).sort()).toEqual([0, 1]);
@@ -593,7 +601,7 @@ describe("transformPayments", () => {
       { po_number: "", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "19056.71", expected_date: "2026-07-21", currency: "EUR" },
       { po_number: "PO1", shipment_ref: "PO1-W3", sequence_no: "2", expected_amount: "1.00", expected_date: "2026-07-21", currency: "EUR" }, // XOR failure, unrelated sequence
     ];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.payments).toHaveLength(1);
     expect(result.payments[0]).toMatchObject({ shipmentRef: "PO1-W3", sequenceNo: 1, expectedAmount: "19056.71" });
     expect(result.skipped).toHaveLength(1);
@@ -610,9 +618,43 @@ describe("transformPayments", () => {
   // since this ref was never actually pooled with anything.
   it("keeps a lone payment row's own raw shipment_ref when it only LOOKS like a pooled-container line (no genuine sibling)", () => {
     const rows = [{ po_number: "", shipment_ref: "PO1-Wave1-Container9-Notes", sequence_no: "1", expected_amount: "50.00", expected_date: "2026-07-21", currency: "EUR" }];
-    const result = transformPayments(rows);
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
     expect(result.skipped).toEqual([]);
     expect(result.payments[0]).toMatchObject({ shipmentRef: "PO1-Wave1-Container9-Notes", sequenceNo: 1, expectedAmount: "50.00" });
+  });
+
+  // Finding 1 (2026-09-21 final review): the safety net above only covers a
+  // LONE coincidental match. Two DISTINCT rows coincidentally sharing a
+  // Container-N prefix used to be enough for the old regex-only check to
+  // treat them as a genuine pool and sum them — even though the shipment
+  // side (which DOES have a real per-row sku to check) never actually pooled
+  // anything under that prefix. The fix requires the prefix itself to be a
+  // real, actually-pooled shipment owner (knownPooledOwnerRefs, computed
+  // once from transformShipments) before ever stripping a suffix, so two
+  // unrelated rows that merely share a fabricated prefix must stay two
+  // separate, unpooled payments.
+  it("does not pool two distinct payment rows sharing a Container-N prefix that is not a genuinely pooled shipment owner, even though there are ≥2 of them", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-Wave9-Container3-STRAW", sequence_no: "1", expected_amount: "50.00", expected_date: "2026-07-21", currency: "EUR" },
+      { po_number: "", shipment_ref: "PO1-Wave9-Container3-NOTES", sequence_no: "1", expected_amount: "75.00", expected_date: "2026-07-21", currency: "EUR" },
+    ];
+    // "PO1-Wave9-Container3" is deliberately absent from the known-pooled set
+    // — the shipment side never pooled anything under it.
+    const result = transformPayments(rows, NO_POOLED_OWNERS);
+    expect(result.skipped).toEqual([]);
+    expect(result.payments).toHaveLength(2);
+    expect(result.payments.map((p) => p.shipmentRef).sort()).toEqual(["PO1-Wave9-Container3-NOTES", "PO1-Wave9-Container3-STRAW"]);
+    expect(result.payments.map((p) => p.expectedAmount).sort()).toEqual(["50.00", "75.00"]); // never silently summed to 125.00
+  });
+
+  it("pools two distinct payment rows sharing a Container-N prefix that IS a genuinely pooled shipment owner", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-Wave9-Container3-STRAW", sequence_no: "1", expected_amount: "50.00", expected_date: "2026-07-21", currency: "EUR" },
+      { po_number: "", shipment_ref: "PO1-Wave9-Container3-NOTES", sequence_no: "1", expected_amount: "75.00", expected_date: "2026-07-21", currency: "EUR" },
+    ];
+    const result = transformPayments(rows, new Set(["PO1-Wave9-Container3"]));
+    expect(result.skipped).toEqual([]);
+    expect(result.payments).toEqual([expect.objectContaining({ shipmentRef: "PO1-Wave9-Container3", sequenceNo: 1, expectedAmount: "125.00" })]);
   });
 });
 
@@ -689,6 +731,32 @@ describe("transformTransactions", () => {
     ];
     const result = transformTransactions(rows);
     expect(result.transactions[0].matchedRef).toBe("PO1, PO1-W1");
+  });
+
+  // Finding 3 (2026-09-21 final review): export.ts's exportTransactions
+  // computes fxRate as "" for a non-EUR row whose Amount (EUR) cell is
+  // blank — an empty string reaching recordTransaction's decimal fxRate
+  // column crashes the WHOLE migration transaction under MySQL strict mode,
+  // instead of quarantining just this one malformed row like every other
+  // bad field on this row. Must be caught here, matching the existing
+  // date/amount validation pattern exactly.
+  it("quarantines a non-EUR row with a blank fx_rate instead of letting it reach recordTransaction and crash the whole migration", () => {
+    const rows = [
+      { date: "2026-09-09", amount: "100.00", currency: "USD", fx_rate: "", counterparty: "Test", description: "" },
+    ];
+    const result = transformTransactions(rows);
+    expect(result.transactions).toEqual([]);
+    expect(result.skipped).toEqual([{ rowIndex: 0, reason: expect.stringContaining("FX rate") }]);
+  });
+
+  it("does not quarantine a EUR row with fx_rate '1', and does not quarantine a non-EUR row with a real fx_rate", () => {
+    const rows = [
+      { date: "2026-09-09", amount: "100.00", currency: "EUR", fx_rate: "1", counterparty: "Test", description: "" },
+      { date: "2026-09-09", amount: "100.00", currency: "USD", fx_rate: "0.93", counterparty: "Test", description: "" },
+    ];
+    const result = transformTransactions(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.transactions).toHaveLength(2);
   });
 });
 

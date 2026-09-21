@@ -398,6 +398,45 @@ describe("runMigration (widened scope)", () => {
     expect(result.quarantined.payments).toEqual([]);
   });
 
+  // Finding 1 (2026-09-21 final review): the payment side has no `sku` field
+  // to cross-check a Container-N-<X> ref against, unlike the shipment side's
+  // platformShipmentRef. Two DISTINCT payment rows that merely share a
+  // fabricated Container-N prefix — where the shipment side genuinely never
+  // pooled ANYTHING under that prefix — used to be enough for the old
+  // regex-only pooledPaymentOwnerRef to treat them as a real pool and sum
+  // them, silently mis-attributing the real "STRAW" payment's amount into a
+  // combined, unresolvable owner and losing it in quarantine along with the
+  // unrelated "NOTES" one. Here "PO1-Wave9-Container3-STRAW" is a REAL,
+  // legitimately-unpooled shipment (its own sku is "JELLO-CAL-500", not
+  // "STRAW" — the same false-positive transformShipments' own sku
+  // cross-check guards against) and its payment must resolve DIRECTLY and
+  // independently of the unrelated, genuinely-unresolvable "NOTES" payment.
+  it("resolves each of two payment rows sharing a coincidental (not genuinely pooled) Container-N prefix independently, instead of merging them into one lost quarantine", async () => {
+    const result = await runMigration({
+      ledgerRows: [],
+      poRows: [{ po_number: "PO1", vendor_name: "V", vendor_reference: "", status: "closed", sku: "JELLO-CAL-500", qty: "1", unit_price: "1", currency: "EUR" }],
+      // Suffix "STRAW" doesn't match this row's own sku — stays standalone, raw ref preserved.
+      shipmentRows: [
+        { shipment_ref: "PO1-Wave9-Container3-STRAW", vendor_reference: "", status: "delivered", warehouse: "FF-DE", freight_cost: "50", duty_cost: "0", cost_currency: "EUR", po_line_item_ref: "PO1::JELLO-CAL-500", sku: "JELLO-CAL-500", qty: "1", weight_share: "1", value_share: "1" },
+      ],
+      paymentRows: [
+        // Names the REAL standalone shipment's own raw ref exactly — must resolve directly.
+        { po_number: "", shipment_ref: "PO1-Wave9-Container3-STRAW", sequence_no: "1", expected_amount: "50.00", expected_date: "2026-07-21", currency: "EUR" },
+        // No shipment anywhere named this — genuinely unresolvable, on its own.
+        { po_number: "", shipment_ref: "PO1-Wave9-Container3-NOTES", sequence_no: "1", expected_amount: "75.00", expected_date: "2026-07-21", currency: "EUR" },
+      ],
+      transactionRows: [],
+      sheetTotals: [],
+    });
+    const [shipment] = await db.select().from(shipments);
+    expect(shipment.shipmentRef).toBe("PO1-Wave9-Container3-STRAW"); // never pooled — no genuine sibling
+    const paymentRows = await db.select().from(payments);
+    expect(paymentRows).toHaveLength(1);
+    expect(paymentRows[0]).toMatchObject({ shipmentId: shipment.id, poId: null, expectedAmount: "50.0000" });
+    expect(result.quarantined.payments).toHaveLength(1);
+    expect(result.quarantined.payments[0].reason).toContain("PO1-Wave9-Container3-NOTES");
+  });
+
   // Round-3 Important #3 regression: two transactions naming DIFFERENT
   // per-SKU spellings of the SAME pooled container (one "...Container2-
   // JELLO", the other "...Container2-STRAW") must be grouped together by

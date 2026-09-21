@@ -6,8 +6,8 @@
 // looked at each finding.
 
 import type { DailyFifoRow } from "../../server/landedCost";
-import { exportPayments, exportShipmentPayments, platformShipmentRef } from "./export";
-import { transformPayments } from "../migrate-from-sheet";
+import { exportPayments, exportShipmentPayments, exportShipments, platformShipmentRef } from "./export";
+import { transformPayments, transformShipments, resolveShipmentOwnerRef } from "../migrate-from-sheet";
 import type { LinkVariance } from "../reconcile-migration";
 import type { ControlTowerSnapshot } from "./snapshot";
 import {
@@ -203,8 +203,23 @@ export async function reconcile(input: ReconcileInput, deps: ReconcileDeps, clas
   // actually uses, instead of re-deriving (and risking disagreeing with) it.
   // PO-owned rows are unaffected (POs never pool; transformPayments passes
   // them through as one row per PO×sequence, same as before).
-  const { payments: expectedPayments } = transformPayments([...exportPayments(snap), ...exportShipmentPayments(snap)]);
-  const ownerOf = (p: (typeof expectedPayments)[number]) => p.poNumber ?? p.shipmentRef!;
+  //
+  // FINDING 1/2 (2026-09-21 final review): transformPayments now requires a
+  // known-pooled-owners set (see migrate-from-sheet.ts's pooledPaymentOwnerRef
+  // doc) rather than pooling on the bare Container-N regex alone, so this
+  // must run the same shipment rows through transformShipments first — the
+  // real, single source of truth for which owners actually pooled — instead
+  // of guessing independently. And a lone (singly) pooled container's
+  // payment slot needs the SAME extra raw-first/pooled-fallback resolution
+  // runMigration itself applies (resolveShipmentOwnerRef, shared with
+  // reconcile-migration.ts) — re-deriving owner resolution here instead of
+  // reusing it is exactly what caused R5 to disagree with the real
+  // migration for that case.
+  const { shipments: expectedShipments, pooledOwnerRefs } = transformShipments(exportShipments(snap).rows);
+  const knownShipmentRefs = new Set(expectedShipments.map((s) => s.shipmentRef));
+  const { payments: expectedPayments } = transformPayments([...exportPayments(snap), ...exportShipmentPayments(snap)], pooledOwnerRefs);
+  const ownerOf = (p: (typeof expectedPayments)[number]) =>
+    p.poNumber ?? resolveShipmentOwnerRef(p.shipmentRef!, knownShipmentRefs, pooledOwnerRefs);
   const owners = [...new Set(expectedPayments.map(ownerOf))];
   for (const owner of owners) {
     const expected = expectedPayments.filter((p) => ownerOf(p) === owner);
