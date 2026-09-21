@@ -382,14 +382,16 @@ function DepartDateCorrectionControl({ shipment, onUpdated }: { shipment: Shipme
 // unchanged — lastCostResult reports "N of M" honestly rather than implying
 // every line was touched.
 //
-// Either mutation can be refused by correctLedgerReceipt's FIFO-replayability
-// self-check, with an error message that literally instructs the caller to
-// "pass allowNegativeSoh to record the correction anyway". That's the one
-// refusal an operator can legitimately choose to override — matched by
-// message text (both procedures throw plain Errors, no typed error here) —
-// surfaced as a distinct "Force this correction anyway" button that
-// resubmits the exact same payload with allowNegativeSoh: true. Never shown
-// by default, only after a real refusal naming this specific escape hatch.
+// Either mutation can be refused for a reason allowNegativeSoh:true legitimately
+// overrides — either correctLedgerReceipt's own FIFO-replayability self-check
+// ("...pass allowNegativeSoh to record the correction anyway") or the earlier,
+// more commonly-hit negative-stock guard on the reversal write itself
+// ("...would drive SOH negative..."), which the same flag bypasses but never
+// names in its own message. Matched by message text (both procedures throw
+// plain Errors, no typed error here) against /allowNegativeSoh/i OR
+// /negative/i — surfaced as a distinct "Force this correction anyway" button
+// that resubmits the exact same payload with allowNegativeSoh: true. Never
+// shown by default, only after a refusal matching one of those patterns.
 function CorrectReceiptControl({
   shipment,
   lineItems,
@@ -411,11 +413,22 @@ function CorrectReceiptControl({
   const costsChanged = form.freightCost !== (shipment.freightCost ?? "") || form.dutyCost !== (shipment.dutyCost ?? "");
   const canCorrectCost = costsChanged && form.reasonNote.trim().length > 0;
 
-  // Present only after a refusal whose message names this exact escape
-  // hatch — mutation.error naturally clears when a new mutate() call starts,
-  // so this hides itself again as soon as the forced retry is in flight.
-  const qtyNeedsForce = correctReceiptQty.error != null && /allowNegativeSoh/i.test(correctReceiptQty.error.message);
-  const costNeedsForce = correctLandedCost.error != null && /allowNegativeSoh/i.test(correctLandedCost.error.message);
+  // Present only after a refusal whose message names this escape hatch OR
+  // describes the negative-stock condition it exists to bypass —
+  // allowNegativeSoh is threaded through both correctLedgerReceipt's own
+  // FIFO-replayability self-check ("...pass allowNegativeSoh to record the
+  // correction anyway") AND recordLedgerEvent's earlier, more commonly-hit
+  // guard on the reversal write itself ("...would drive SOH negative for sku
+  // X/warehouse Y... — refusing to write"), which resolves the same way but
+  // never names the flag in its own message. Matching only the first pattern
+  // would leave the more common refusal with no actionable button despite
+  // the same fix applying — widened 2026-09-21 per controller ruling.
+  // mutation.error naturally clears when a new mutate() call starts, so this
+  // hides itself again as soon as the forced retry is in flight.
+  const needsForce = (error: { message: string } | null | undefined) =>
+    error != null && (/allowNegativeSoh/i.test(error.message) || /negative/i.test(error.message));
+  const qtyNeedsForce = needsForce(correctReceiptQty.error);
+  const costNeedsForce = needsForce(correctLandedCost.error);
 
   const submitQty = (allowNegativeSoh?: boolean) => {
     correctReceiptQty.mutate(
