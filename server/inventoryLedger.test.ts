@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { inventoryLedger, skus, warehouses, appSettings } from "../drizzle/schema";
-import { recordLedgerEvent, getSoh, getSohForSkus, ALLOW_BACKORDERS_SETTING, replayLedgerEventsFifo } from "./inventoryLedger";
-import { createSku, createWarehouse, setAppSetting } from "./db";
+import { inventoryLedger, skus, warehouses, appSettings, users } from "../drizzle/schema";
+import { recordLedgerEvent, getSoh, getSohForSkus, ALLOW_BACKORDERS_SETTING, replayLedgerEventsFifo, correctLedgerReceipt, getRemainingBatches } from "./inventoryLedger";
+import { createSku, createWarehouse, setAppSetting, createUser } from "./db";
 
 beforeEach(async () => {
   // Real FKs now tie skus/warehouses to other tables, but each test file only
@@ -23,6 +23,10 @@ beforeEach(async () => {
       await tx.delete(skus);
       await tx.delete(warehouses);
       await tx.delete(appSettings);
+      // Correction tests create a `users` row per test (changedBy is a real
+      // FK); users.email is unique, so without this delete the second such
+      // test in the file would collide on the same address.
+      await tx.delete(users);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
     }
@@ -295,5 +299,269 @@ describe("inventory ledger", () => {
     replayLedgerEventsFifo(events, (_event, consumedCost) => { reportedCost = consumedCost; });
 
     expect(reportedCost).toBeCloseTo(40 * 0.5, 6);
+  });
+
+  it("correctLedgerReceipt appends a reversal and a replacement receipt, leaving the original row untouched", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    const [original] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+
+    const result = await correctLedgerReceipt(
+      original.id,
+      { qty: 90 },
+      { changedBy: user.id, reasonNote: "recount found 10 units short" },
+    );
+
+    expect(result.consumedFromOtherBatches).toBe(false);
+
+    const [unchangedOriginal] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.id, original.id));
+    expect(unchangedOriginal.qty).toBe(100);
+    expect(unchangedOriginal.eventType).toBe("receipt");
+
+    const [reversal] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.id, result.reversalId));
+    expect(reversal.eventType).toBe("adjustment");
+    expect(reversal.qty).toBe(-100);
+    expect(parseFloat(reversal.unitCost ?? "0")).toBeCloseTo(1.0, 6);
+    expect(reversal.correctsEventId).toBe(original.id);
+    expect(reversal.reasonCategory).toBe("data_correction");
+    expect(reversal.reasonNote).toBe("recount found 10 units short");
+    expect(reversal.changedBy).toBe(user.id);
+
+    const [corrected] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.id, result.correctedId));
+    expect(corrected.eventType).toBe("receipt");
+    expect(corrected.qty).toBe(90);
+    expect(parseFloat(corrected.unitCost ?? "0")).toBeCloseTo(1.0, 6);
+    expect(corrected.correctsEventId).toBe(original.id);
+
+    expect(await getSoh(sku.id, ff.id)).toBe(90);
+  });
+
+  it("correctLedgerReceipt can correct unitCost only, leaving qty unchanged", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    const [original] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+
+    const result = await correctLedgerReceipt(
+      original.id,
+      { unitCost: "1.50" },
+      { changedBy: user.id, reasonNote: "freight invoice restated" },
+    );
+
+    const [corrected] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.id, result.correctedId));
+    expect(corrected.qty).toBe(100);
+    expect(parseFloat(corrected.unitCost ?? "0")).toBeCloseTo(1.5, 6);
+    expect(await getSoh(sku.id, ff.id)).toBe(100);
+  });
+
+  it("correctLedgerReceipt reports consumedFromOtherBatches when the original batch was already sold through", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 50, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "batch-A" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 50, unitCost: "2.00", date: new Date("2026-09-02"), sourceRef: "batch-B" });
+    // Sells all 50 of batch-A before the correction runs.
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -50, unitCost: null, date: new Date("2026-09-03"), sourceRef: "shopify" });
+
+    const [batchAEvent] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.sourceRef, "batch-A"));
+
+    // Correcting batch-A's qty now: its reversal (-50) must draw from
+    // batch-B, since batch-A itself has 0 remaining.
+    const result = await correctLedgerReceipt(
+      batchAEvent.id,
+      { qty: 40 },
+      { changedBy: user.id, reasonNote: "recount" },
+    );
+
+    expect(result.consumedFromOtherBatches).toBe(true);
+  });
+
+  it("correctLedgerReceipt rejects correcting a non-receipt event", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -10, unitCost: null, date: new Date("2026-09-02"), sourceRef: "shopify" });
+    const [saleEvent] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.eventType, "sale"));
+
+    await expect(
+      correctLedgerReceipt(saleEvent.id, { qty: 5 }, { changedBy: user.id, reasonNote: "test" }),
+    ).rejects.toThrow(/is not a receipt/);
+  });
+
+  it("correctLedgerReceipt rejects correcting an event that no longer exists", async () => {
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+    await expect(
+      correctLedgerReceipt(999999, { qty: 5 }, { changedBy: user.id, reasonNote: "test" }),
+    ).rejects.toThrow(/no ledger event found/);
+  });
+
+  it("correctLedgerReceipt rejects correcting an already-corrected event", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    const [original] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+    await correctLedgerReceipt(original.id, { qty: 90 }, { changedBy: user.id, reasonNote: "first correction" });
+
+    await expect(
+      correctLedgerReceipt(original.id, { qty: 80 }, { changedBy: user.id, reasonNote: "second attempt on the original" }),
+    ).rejects.toThrow(/already been corrected/);
+  });
+
+  it("correctLedgerReceipt rejects a no-op correction", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    const [original] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+
+    await expect(
+      correctLedgerReceipt(original.id, { qty: 100 }, { changedBy: user.id, reasonNote: "no real change" }),
+    ).rejects.toThrow(/changes nothing/);
+  });
+
+  it("correctLedgerReceipt rejects a correction that would drive SOH negative, unless allowNegativeSoh is set", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    // Sells 95 of the wrongly-large 100 -- correcting down to 10 would need
+    // to reverse all 100 units, but only 5 remain unsold.
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -95, unitCost: null, date: new Date("2026-09-02"), sourceRef: "shopify" });
+    const [original] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.eventType, "receipt"));
+
+    await expect(
+      correctLedgerReceipt(original.id, { qty: 10 }, { changedBy: user.id, reasonNote: "actual receipt was only 10" }),
+    ).rejects.toThrow(/negative/i);
+
+    const result = await correctLedgerReceipt(
+      original.id,
+      { qty: 10 },
+      { changedBy: user.id, reasonNote: "actual receipt was only 10", allowNegativeSoh: true },
+    );
+    expect(await getSoh(sku.id, ff.id)).toBe(10 - 95);
+    // The reversal could not be absorbed by the original batch's own
+    // remaining 5 units — the honest answer for a caller deciding whether to
+    // warn the operator is "yes, this touched stock beyond that batch".
+    expect(result.consumedFromOtherBatches).toBe(true);
+  });
+
+  it("correctLedgerReceipt corrects a months-old receipt today without tripping the guard/replay ordering asymmetry", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    // The reversal this correction writes is dated *today*, while the receipt
+    // it reverses is months old and partly sold through. The negative-stock
+    // guard evaluates end-of-today SOH; the FIFO replay processes events in
+    // strict (date, id) order. Both must agree that this is fine.
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.00", date: new Date("2026-06-01"), sourceRef: "PO-JUNE" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.20", date: new Date("2026-07-01"), sourceRef: "PO-JULY" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -60, unitCost: null, date: new Date("2026-08-15"), sourceRef: "shopify" });
+    const [june] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.sourceRef, "PO-JUNE"));
+
+    const result = await correctLedgerReceipt(june.id, { qty: 95 }, { changedBy: user.id, reasonNote: "recount" });
+
+    expect(await getSoh(sku.id, ff.id)).toBe(100 + 100 - 60 - 100 + 95);
+    // The ledger must still replay cleanly afterwards — a correction that
+    // leaves getRemainingBatches throwing would break SOH views and Daily COGS.
+    const batches = await getRemainingBatches(sku.id, ff.id);
+    expect(batches.reduce((sum, b) => sum + b.remainingQty, 0)).toBe(await getSoh(sku.id, ff.id));
+    // The June batch had only 40 of its 100 units left, so reversing all 100
+    // necessarily reached past it.
+    expect(result.consumedFromOtherBatches).toBe(true);
+  });
+
+  it("correctLedgerReceipt handles two same-day corrections of two different receipts for one sku/warehouse", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "2.00", date: new Date("2026-09-05"), sourceRef: "PO2" });
+    const [first] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.sourceRef, "PO1"));
+    const [second] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.sourceRef, "PO2"));
+
+    const firstResult = await correctLedgerReceipt(first.id, { qty: 90 }, { changedBy: user.id, reasonNote: "recount PO1" });
+    const secondResult = await correctLedgerReceipt(second.id, { qty: 80 }, { changedBy: user.id, reasonNote: "recount PO2" });
+
+    expect(firstResult.consumedFromOtherBatches).toBe(false);
+    expect(secondResult.consumedFromOtherBatches).toBe(false);
+    expect(await getSoh(sku.id, ff.id)).toBe(100 + 100 - 100 + 90 - 100 + 80);
+    const batches = await getRemainingBatches(sku.id, ff.id);
+    expect(batches.reduce((sum, b) => sum + b.remainingQty, 0)).toBe(await getSoh(sku.id, ff.id));
+  });
+
+  it("correctLedgerReceipt refuses a reversal that end-of-day SOH covers but FIFO stock at its own timestamp does not", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 50, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "sale", qty: -30, unitCost: null, date: new Date("2026-09-05"), sourceRef: "shopify" });
+    // A receipt stamped at the very end of today: visible to the day-granular
+    // negative-stock guard (which looks at end-of-day SOH = 120), invisible to
+    // the FIFO replay at the correction's own wall-clock timestamp, where only
+    // PO1's remaining 20 units exist. This is the exact ordering asymmetry
+    // documented above getRemainingBatches.
+    const endOfToday = new Date(`${new Date().toISOString().slice(0, 10)}T23:59:59.999Z`);
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.10", date: endOfToday, sourceRef: "PO2-LATE" });
+    const [original] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.sourceRef, "PO1"));
+
+    await expect(
+      correctLedgerReceipt(original.id, { qty: 40 }, { changedBy: user.id, reasonNote: "recount" }),
+    ).rejects.toThrow(/allowNegativeSoh/);
+
+    // Refused, not half-written: the whole transaction rolled back.
+    const rows = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+    expect(rows).toHaveLength(3);
+    expect(await getSoh(sku.id, ff.id)).toBe(120);
+    await expect(getRemainingBatches(sku.id, ff.id)).resolves.toHaveLength(2);
+  });
+
+  it("correctLedgerReceipt rejects a no-op correction written at a different decimal scale", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    const [original] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+    // Stored as "1.00000000" by the decimal(18,8) column — the same number the
+    // caller is passing, just written at a different scale.
+    expect(original.unitCost).toBe("1.00000000");
+
+    await expect(
+      correctLedgerReceipt(original.id, { unitCost: "1.00" }, { changedBy: user.id, reasonNote: "same cost, restated" }),
+    ).rejects.toThrow(/changes nothing/);
+  });
+
+  it("correctLedgerReceipt rejects a negative or fractional corrected qty", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    const [original] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+
+    await expect(
+      correctLedgerReceipt(original.id, { qty: -5 }, { changedBy: user.id, reasonNote: "typo" }),
+    ).rejects.toThrow(/whole number/);
+    await expect(
+      correctLedgerReceipt(original.id, { qty: 12.5 }, { changedBy: user.id, reasonNote: "typo" }),
+    ).rejects.toThrow(/whole number/);
+    await expect(
+      correctLedgerReceipt(original.id, { unitCost: "not-a-number" }, { changedBy: user.id, reasonNote: "typo" }),
+    ).rejects.toThrow(/unitCost/);
   });
 });
