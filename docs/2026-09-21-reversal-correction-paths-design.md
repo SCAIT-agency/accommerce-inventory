@@ -24,7 +24,7 @@ Out of scope (explicitly, not silently dropped):
 
 ## 3. Data model changes
 
-`drizzle/schema.ts`'s `inventory_ledger` table gains four nullable columns (existing rows unaffected):
+`drizzle/schema.ts`'s `inventory_ledger` table gains five nullable columns (existing rows unaffected):
 
 ```ts
 correctsEventId: int("correctsEventId"), // self-referencing FK, see note below
