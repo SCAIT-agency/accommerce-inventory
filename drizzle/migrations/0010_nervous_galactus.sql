@@ -1,0 +1,1 @@
+ALTER TABLE `po_line_items` MODIFY COLUMN `unitPrice` decimal(18,6) NOT NULL;

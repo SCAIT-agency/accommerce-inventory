@@ -134,7 +134,7 @@ export const poLineItems = mysqlTable("po_line_items", {
   poId: int("poId").notNull().references(() => purchaseOrders.id),
   skuId: int("skuId").notNull().references(() => skus.id),
   qty: int("qty").notNull(),
-  unitPrice: decimal("unitPrice", { precision: 18, scale: 4, mode: "string" }).notNull(),
+  unitPrice: decimal("unitPrice", { precision: 18, scale: 6, mode: "string" }).notNull(),
   currency: varchar("currency", { length: 8 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
