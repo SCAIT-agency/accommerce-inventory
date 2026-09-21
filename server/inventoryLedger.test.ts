@@ -563,5 +563,55 @@ describe("inventory ledger", () => {
     await expect(
       correctLedgerReceipt(original.id, { unitCost: "not-a-number" }, { changedBy: user.id, reasonNote: "typo" }),
     ).rejects.toThrow(/unitCost/);
+    // Exponent notation would sail past the no-op check, which can only
+    // normalize what the decimal(18,8) column stores as written.
+    await expect(
+      correctLedgerReceipt(original.id, { unitCost: "1e-9" }, { changedBy: user.id, reasonNote: "typo" }),
+    ).rejects.toThrow(/plain decimal notation/);
+  });
+
+  it("correctLedgerReceipt rejects a unitCost change that rounds away below the column's 8-decimal scale", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "10.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    const [original] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+    expect(original.unitCost).toBe("10.00000000");
+
+    // 9 decimal places against a decimal(18,8) column: the replacement row
+    // would store "10.00000000", byte-identical to the original.
+    await expect(
+      correctLedgerReceipt(original.id, { unitCost: "10.000000001" }, { changedBy: user.id, reasonNote: "sub-scale noise" }),
+    ).rejects.toThrow(/changes nothing/);
+
+    // The first digit the column actually keeps is still a real change.
+    const result = await correctLedgerReceipt(
+      original.id,
+      { unitCost: "10.00000001" },
+      { changedBy: user.id, reasonNote: "one unit of the last stored decimal" },
+    );
+    const [corrected] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.id, result.correctedId));
+    expect(corrected.unitCost).toBe("10.00000001");
+  });
+
+  it("correctLedgerReceipt rejects an empty or whitespace-only reasonNote", async () => {
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const user = await createUser({ email: "corrector@accommerce.example", role: "editor" });
+
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 100, unitCost: "1.00", date: new Date("2026-09-01"), sourceRef: "PO1" });
+    const [original] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+
+    await expect(
+      correctLedgerReceipt(original.id, { qty: 90 }, { changedBy: user.id, reasonNote: "" }),
+    ).rejects.toThrow(/reasonNote is required/);
+    await expect(
+      correctLedgerReceipt(original.id, { qty: 90 }, { changedBy: user.id, reasonNote: "   " }),
+    ).rejects.toThrow(/reasonNote is required/);
+
+    // Nothing was written by either attempt.
+    const rows = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, sku.id));
+    expect(rows).toHaveLength(1);
   });
 });

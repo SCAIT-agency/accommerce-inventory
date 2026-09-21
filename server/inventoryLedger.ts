@@ -161,14 +161,23 @@ export function replayLedgerEventsFifo(
 // through replayLedgerEventsFifo exactly as this function does, and refuses
 // the whole correction (rolling back both appended rows) if its own reversal
 // cannot be covered by FIFO stock available at its own timestamp. So a
-// correction can never leave this function throwing — it fails loudly at
-// write time instead, with a message naming the allowNegativeSoh escape
-// hatch. The escape hatch itself is the one way through: an operator who
-// passes allowNegativeSoh: true is explicitly recording a reversal that real
-// stock cannot cover, which drives SOH negative and makes this function (and
-// getDailyCogsForRange) throw for that SKU afterwards — the same already-
-// accepted consequence an instance running with allow_backorders has today,
-// surfaced by design rather than by accident. Revisit if any OTHER live
+// correction can never newly leave this function throwing — it fails loudly
+// at write time instead, with a message naming the allowNegativeSoh escape
+// hatch.
+//
+// Two paths still lead past that refusal, and both leave this function (and
+// getDailyCogsForRange) throwing for that SKU until the underlying over-sale
+// is itself resolved — which is out of the correction design's scope:
+//   1. allowNegativeSoh: true — an operator explicitly recording a reversal
+//      that real stock cannot cover, driving SOH negative on purpose.
+//   2. A SKU whose history ALREADY failed to replay before the correction ran
+//      (an instance running with allow_backorders accumulates these). The
+//      correction is not refused there, because it is not what broke the
+//      replay and refusing would make corrections impossible on exactly the
+//      data most likely to need them; no allowNegativeSoh is required.
+// Neither is a new consequence — it is the same one a backorder instance
+// already has today — but both are now reachable on purpose rather than by
+// accident. Revisit if any OTHER live
 // "adjustment" write path is introduced: it would need the same self-check,
 // which nothing in this file forces it to have.
 export async function getRemainingBatches(skuId: number, warehouseId: number): Promise<RemainingBatch[]> {
@@ -206,18 +215,44 @@ export interface LedgerCorrectionResult {
   consumedFromOtherBatches: boolean;
 }
 
-// decimal(18,8) round-trips "1.00" as "1.00000000", so a plain string compare
-// would read a restated-but-identical cost as a real change and write a
-// correction pair that changes no value — which is NOT harmless: the reversal
-// consumes FIFO stock oldest-first and the replacement lands as a new batch
-// dated today, reshuffling which cost future sales draw. Comparing trailing-
-// zero-normalized strings (not parsed floats) keeps the check exact at the
-// column's full 18 significant digits, past what a double can represent.
+// inventoryLedger.unitCost is decimal(18,8): 18 digits of precision, 8 of
+// scale (decimal places). Both ends of a no-op comparison therefore have to
+// be normalized to THAT scale, not to whatever scale each side happens to be
+// written at — the column round-trips "1.00" as "1.00000000" (a trailing-zero
+// difference) and rounds "10.000000001" to "10.00000000" (a sub-scale
+// difference, invisible to trailing-zero stripping alone). Either one slipping
+// through writes a correction pair that changes no stored value, which is NOT
+// harmless: the reversal consumes FIFO stock oldest-first and the replacement
+// lands as a new batch dated today, reshuffling which cost future sales draw.
+//
+// Rounds through BigInt rather than parseFloat so the comparison stays exact
+// across the column's full 18 digits, well past what a double represents, and
+// matches MySQL's own round-half-away-from-zero at the column's scale.
+const LEDGER_UNIT_COST_SCALE = 8;
+const PLAIN_DECIMAL_LITERAL = /^([+-]?)(\d*)(?:\.(\d*))?$/;
+
 function normalizeDecimalForComparison(value: string | null): string | null {
   if (value === null) return null;
   const trimmed = value.trim();
-  if (!trimmed.includes(".")) return trimmed;
-  return trimmed.replace(/0+$/, "").replace(/\.$/, "");
+  const match = PLAIN_DECIMAL_LITERAL.exec(trimmed);
+  // Not a plain decimal literal (so not something this column can store as
+  // written): compare it verbatim rather than inventing a normalization.
+  if (!match || (match[2] === "" && (match[3] ?? "") === "")) return trimmed;
+
+  const intDigits = match[2] === "" ? "0" : match[2];
+  const fracDigits = match[3] ?? "";
+  const keptFrac = fracDigits.slice(0, LEDGER_UNIT_COST_SCALE).padEnd(LEDGER_UNIT_COST_SCALE, "0");
+  let scaled = BigInt(intDigits + keptFrac);
+  if (fracDigits.length > LEDGER_UNIT_COST_SCALE && Number(fracDigits[LEDGER_UNIT_COST_SCALE]) >= 5) {
+    scaled += 1n; // magnitude-only, so this rounds away from zero for either sign
+  }
+  if (scaled === 0n) return "0"; // collapses "-0.00000000" and "0" to one form
+
+  const digits = scaled.toString().padStart(LEDGER_UNIT_COST_SCALE + 1, "0");
+  const normalizedInt = digits.slice(0, digits.length - LEDGER_UNIT_COST_SCALE);
+  const normalizedFrac = digits.slice(digits.length - LEDGER_UNIT_COST_SCALE).replace(/0+$/, "");
+  const sign = match[1] === "-" ? "-" : "";
+  return normalizedFrac ? `${sign}${normalizedInt}.${normalizedFrac}` : `${sign}${normalizedInt}`;
 }
 
 function fifoReplayFails(events: LedgerEvent[]): boolean {
@@ -278,13 +313,23 @@ export async function correctLedgerReceipt(
         `correctLedgerReceipt: corrected qty ${corrections.qty} must be a non-negative whole number of units`,
       );
     }
+    // Plain decimal notation only: exponent forms ("1e-9") would sail past
+    // the no-op check below, which can only normalize what this column can
+    // actually store as written.
     if (corrections.unitCost !== undefined) {
-      const parsed = Number(corrections.unitCost);
-      if (corrections.unitCost.trim() === "" || !Number.isFinite(parsed) || parsed < 0) {
+      const costMatch = PLAIN_DECIMAL_LITERAL.exec(corrections.unitCost.trim());
+      const hasDigits = costMatch !== null && (costMatch[2] !== "" || (costMatch[3] ?? "") !== "");
+      const isNegative = costMatch !== null && costMatch[1] === "-";
+      if (!hasDigits || isNegative) {
         throw new Error(
-          `correctLedgerReceipt: corrected unitCost "${corrections.unitCost}" must be a non-negative number`,
+          `correctLedgerReceipt: corrected unitCost "${corrections.unitCost}" must be a non-negative number in plain decimal notation`,
         );
       }
+    }
+    if (opts.reasonNote.trim() === "") {
+      throw new Error(
+        `correctLedgerReceipt: reasonNote is required on every correction — event ${eventId} cannot be corrected without a recorded explanation of what changed and why`,
+      );
     }
 
     const finalQty = corrections.qty ?? original.qty;
@@ -375,9 +420,13 @@ export async function correctLedgerReceipt(
         allEvents.filter((e) => e.id !== reversal.id && e.id !== corrected.id),
       );
       if (!historyAlreadyFailed && !opts.allowNegativeSoh) {
+        // Deliberately not framed as "the reversal's own coverage failed":
+        // the replay can also die on a LATER event that this correction's
+        // reversal starved downstream. The inner message names whichever
+        // event actually ran out.
         throw new Error(
-          `correctLedgerReceipt: reversing event ${eventId} needs ${original.qty} units of FIFO stock as of this ` +
-          `correction's own timestamp, and the ledger cannot cover it (${(err as Error).message}) — ` +
+          `correctLedgerReceipt: correcting event ${eventId} (reversing ${original.qty} units for sku ${original.skuId}/` +
+          `warehouse ${original.warehouseId}) leaves this SKU's FIFO history unreplayable (${(err as Error).message}) — ` +
           "pass allowNegativeSoh to record the correction anyway",
         );
       }
