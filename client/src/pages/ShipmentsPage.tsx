@@ -4,14 +4,10 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
 import { skuLabel, formatMoney } from "../lib/labels";
+import { REASON_CATEGORIES } from "../../../shared/constants";
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type ShipmentListItem = RouterOutputs["shipments"]["list"][number];
-
-const REASON_CATEGORIES = [
-  "production_delay", "artwork_delay", "customs_hold", "logistics_delay",
-  "payment_timing", "vendor_price_change", "freight_rate_change", "holiday_capacity", "other",
-] as const;
 
 type ReasonCategory = (typeof REASON_CATEGORIES)[number];
 

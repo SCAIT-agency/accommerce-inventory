@@ -1,18 +1,8 @@
 import { useState } from "react";
 import { trpc } from "../lib/trpc";
 import { formatMoney } from "../lib/labels";
+import { REASON_CATEGORIES } from "../../../shared/constants";
 
-const REASON_CATEGORIES = [
-  "production_delay",
-  "artwork_delay",
-  "customs_hold",
-  "logistics_delay",
-  "payment_timing",
-  "vendor_price_change",
-  "freight_rate_change",
-  "holiday_capacity",
-  "other",
-] as const;
 type ReasonCategory = (typeof REASON_CATEGORIES)[number];
 
 function MatchTransactionRow({ transaction, unpaidPayments, onMatched }: { transaction: { id: number; amount: string; currency: string; date: Date; counterparty?: string | null }; unpaidPayments: Array<{ id: number; sequenceNo: number; expectedAmount: string; currency: string; poNumber: string | null }>; onMatched: () => void }) {

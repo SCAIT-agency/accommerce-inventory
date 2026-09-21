@@ -4,12 +4,8 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
 import { PO_STATUSES } from "../../../drizzle/schema";
+import { REASON_CATEGORIES } from "../../../shared/constants";
 import { skuLabel, formatMoney } from "../lib/labels";
-
-const REASON_CATEGORIES = [
-  "production_delay", "artwork_delay", "customs_hold", "logistics_delay",
-  "payment_timing", "vendor_price_change", "freight_rate_change", "holiday_capacity", "other",
-] as const;
 
 type ReasonCategory = (typeof REASON_CATEGORIES)[number];
 

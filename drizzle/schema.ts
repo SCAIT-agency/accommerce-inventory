@@ -1,5 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 import { date, decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index, unique, foreignKey } from "drizzle-orm/mysql-core";
+import { REASON_CATEGORIES } from "../shared/constants";
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -79,17 +80,10 @@ export const warehouses = mysqlTable("warehouses", {
 export type Warehouse = typeof warehouses.$inferSelect;
 export type InsertWarehouse = typeof warehouses.$inferInsert;
 
-export const REASON_CATEGORIES = [
-  "production_delay",
-  "artwork_delay",
-  "customs_hold",
-  "logistics_delay",
-  "payment_timing",
-  "vendor_price_change",
-  "freight_rate_change",
-  "holiday_capacity",
-  "other",
-] as const;
+// Single source of truth is shared/constants.ts — re-exported here so
+// existing server imports of REASON_CATEGORIES from this schema module keep
+// working unchanged.
+export { REASON_CATEGORIES };
 
 export const changeLog = mysqlTable(
   "change_log",
