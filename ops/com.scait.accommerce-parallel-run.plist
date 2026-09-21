@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Daily parallel run of the accommerce-inventory platform against the live
+  Control Tower Sheet (see ops/parallel-run-daily.sh).
+
+  Install:   cp ops/com.scait.accommerce-parallel-run.plist ~/Library/LaunchAgents/
+             launchctl load ~/Library/LaunchAgents/com.scait.accommerce-parallel-run.plist
+  Remove:    launchctl unload ~/Library/LaunchAgents/com.scait.accommerce-parallel-run.plist
+  Run now:   launchctl start com.scait.accommerce-parallel-run
+
+  REPO_DIR points at the checkout to run from — the main checkout, now that
+  this is ported from feat/real-data-dry-run onto main (Task 8 of the Control
+  Tower Live Integration plan).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.scait.accommerce-parallel-run</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>/Users/artem/Claude v 1.0/accommerce-inventory/ops/parallel-run-daily.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>REPO_DIR</key>
+    <string>/Users/artem/Claude v 1.0/accommerce-inventory</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>7</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/artem/Library/Logs/accommerce-parallel-run.launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/artem/Library/Logs/accommerce-parallel-run.launchd.log</string>
+</dict>
+</plist>

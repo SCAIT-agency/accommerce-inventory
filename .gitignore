@@ -22,3 +22,11 @@ Thumbs.db
 
 # Git worktrees (isolated feature workspaces)
 .worktrees/
+
+# Dry-run orchestrator output (Control Tower live integration): report.md per
+# dated run is kept as a committed audit trail; the raw data dumps and the
+# mutable "latest"/delta pointers are not.
+docs/dryrun/**/*.json
+.env.dryrun
+docs/dryrun/latest.md
+docs/dryrun/**/delta.md

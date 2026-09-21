@@ -9,7 +9,9 @@
     "check": "tsc --noEmit",
     "test": "vitest run",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "dryrun": "tsx scripts/run-dryrun.ts",
+    "parallel-run": "tsx scripts/parallel-run.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.2",
