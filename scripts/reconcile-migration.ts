@@ -18,6 +18,7 @@ import {
   transformSalesActuals,
   transformSalesPlan,
   reconcileMigration,
+  pooledPaymentOwnerRef,
   type SheetExportRow,
   type PoSheetRow,
   type ShipmentSheetRow,
@@ -452,9 +453,26 @@ export async function runMigration(input: RunMigrationInput, options: RunMigrati
       }
     };
 
-    const byRef = new Map<string, typeof hinted>();
-    for (const h of hinted) byRef.set(h.ref, [...(byRef.get(h.ref) ?? []), h]);
-    for (const [ref, group] of byRef) {
+    // A matched_ref is resolved RAW first — a real, legitimately-unpooled
+    // shipment ref (transformShipments' own SKU cross-check may deliberately
+    // leave a Container-N-looking ref standalone, e.g. "PO1-Wave1-
+    // Container9-Notes") must resolve directly, never rewritten. Only when
+    // the raw ref doesn't resolve on its own is the pooled-owner
+    // normalization (collapsing a per-SKU container-line hint, or several
+    // comma-separated lines of the SAME container, to the pooled owner ref)
+    // tried as a fallback — this mirrors the source branch's ea7d1b3
+    // normalizeMatchRef, but decided HERE rather than at the transform
+    // layer, because only runMigration holds shipmentIdByRef/paymentsByOwner,
+    // the actual ground truth for which refs are real pooled owners.
+    const resolvesDirectly = (r: string) => paymentsByOwner.has(r) || shipmentRefs.has(r);
+    const normalizeRef = (r: string) =>
+      [...new Set(r.split(",").map((p) => p.trim()).filter(Boolean).map(pooledPaymentOwnerRef))].join(", ");
+    const resolveRef = (raw: string): string => (resolvesDirectly(raw) ? raw : normalizeRef(raw));
+
+    const byRawRef = new Map<string, typeof hinted>();
+    for (const h of hinted) byRawRef.set(h.ref, [...(byRawRef.get(h.ref) ?? []), h]);
+    for (const [rawRef, group] of byRawRef) {
+      const ref = resolveRef(rawRef);
       if (ref.includes(",")) {
         for (const h of group) reject(h, "several refs on one transaction — the platform links one transaction to one payment");
         continue;

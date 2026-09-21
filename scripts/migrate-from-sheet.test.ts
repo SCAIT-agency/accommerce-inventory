@@ -8,6 +8,7 @@ import {
   transformTransactions,
   transformSalesActuals,
   transformSalesPlan,
+  type PaymentSheetRow,
 } from "./migrate-from-sheet";
 
 describe("transformSheetExport", () => {
@@ -133,6 +134,22 @@ describe("reconcileMigration", () => {
       { getMigratedSoh: async () => 0 },
       [{ shipmentRef: "PO1-W1", sku: "JELLO-CAL-500", landedCostFromSheet: 1000.0 }],
       { getMigratedLandedCost: async () => 1010.0 }, // 1% off — beyond tolerance
+    );
+    expect(result.passed).toBe(false);
+    expect(result.mismatches[0].kind).toBe("landed_cost");
+  });
+
+  // Regression test for the round-2 "silently passes a NaN/undefined expected
+  // value" bug: tolerance(NaN) is itself NaN in JS (Math.max(0.01, NaN) ===
+  // NaN), and "anything > NaN" is always false — so a malformed Sheet export
+  // value (landedCostFromSheet itself NaN) must be caught by an explicit
+  // finiteness check, not just by guarding the platform-computed `actual` side.
+  it("fails a landed-cost target whose own landedCostFromSheet is NaN, instead of silently passing it", async () => {
+    const result = await reconcileMigration(
+      [],
+      { getMigratedSoh: async () => 0 },
+      [{ shipmentRef: "PO1-W1", sku: "JELLO-CAL-500", landedCostFromSheet: Number.NaN }],
+      { getMigratedLandedCost: async () => 1.7 }, // a perfectly valid platform-side value
     );
     expect(result.passed).toBe(false);
     expect(result.mismatches[0].kind).toBe("landed_cost");
@@ -480,6 +497,106 @@ describe("transformPayments", () => {
     expect(result.skipped).toEqual([]);
     expect(result.payments[0]).toMatchObject({ poNumber: null, shipmentRef: "PO1-W3" });
   });
+
+  // Round-2 regression: does not throw when a row is missing the po_number
+  // key entirely (JSON export that only ever sets shipment_ref on a
+  // shipment-owned row) — the old `row.po_number.trim()` crashed the whole
+  // migration with "Cannot read properties of undefined (reading 'trim')".
+  it("does not crash when po_number is missing from the row entirely (only shipment_ref given)", () => {
+    const rows = [{ shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "1.00", expected_date: "2026-07-21", currency: "EUR" } as unknown as PaymentSheetRow];
+    expect(() => transformPayments(rows)).not.toThrow();
+    const result = transformPayments(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.payments[0]).toMatchObject({ poNumber: null, shipmentRef: "PO1-W3" });
+  });
+
+  // Round-2 Critical regression: two rows genuinely duplicating the same
+  // PO+sequence (not a pooled container — POs never pool) must quarantine,
+  // never silently sum into one payment carrying double the real amount.
+  it("quarantines (never sums) two duplicate PO-owned rows sharing the same po_number and sequence_no", () => {
+    const rows = [
+      { po_number: "PO1", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+      { po_number: "PO1", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+    ];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped).toHaveLength(2);
+    expect(result.skipped[0].reason).toContain("duplicate payment rows");
+    expect(result.skipped[0].reason).toContain("purchase orders don't pool");
+  });
+
+  // Round-2 regression: two rows with the exact same (non-pooled) shipment_ref
+  // and sequence are a duplicate, not a genuine pooled container (no distinct
+  // per-SKU lines) — must also quarantine rather than silently sum.
+  it("quarantines (never sums) two duplicate rows sharing the exact same non-pooled shipment_ref and sequence_no", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+      { po_number: "", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+    ];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped).toHaveLength(2);
+    expect(result.skipped[0].reason).toContain("duplicate payment rows");
+  });
+
+  // Round-2 Important #1 regression: a pooled sibling that fails sequence_no
+  // parsing (not just amount/date) must still poison the WHOLE owner — the
+  // valid JELLO row must not migrate alone as if its 300.00 were the real
+  // 600.00 total, just because the failure mode was sequence_no this time.
+  it("quarantines the whole pooled owner when a sibling's sequence_no is unparseable, not just the bad row", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+    ];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped).toHaveLength(2);
+    expect(result.skipped.map((s) => s.rowIndex).sort()).toEqual([0, 1]);
+  });
+
+  it("quarantines the whole pooled owner when a sibling fails the XOR check (not just sequence_no), same poisoning logic", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+      // both po_number and shipment_ref given — XOR failure, but shipment_ref still genuinely names the pooled container
+      { po_number: "PO1", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+    ];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped).toHaveLength(2);
+    expect(result.skipped.map((s) => s.rowIndex).sort()).toEqual([0, 1]);
+  });
+
+  // A validation failure on a row naming a PLAIN, never-pooled shipment ref
+  // must NOT poison an unrelated, otherwise-valid row on that same shipment —
+  // there's no pooling ambiguity for a non-Container-N ref, so a sibling row
+  // failing for an unrelated reason (e.g. giving both po_number and
+  // shipment_ref) must not take down the genuinely valid payment row.
+  it("does not poison a plain (non-pooled) shipment owner when an unrelated row referencing it fails validation", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "19056.71", expected_date: "2026-07-21", currency: "EUR" },
+      { po_number: "PO1", shipment_ref: "PO1-W3", sequence_no: "2", expected_amount: "1.00", expected_date: "2026-07-21", currency: "EUR" }, // XOR failure, unrelated sequence
+    ];
+    const result = transformPayments(rows);
+    expect(result.payments).toHaveLength(1);
+    expect(result.payments[0]).toMatchObject({ shipmentRef: "PO1-W3", sequenceNo: 1, expectedAmount: "19056.71" });
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0].reason).toContain("exactly one of po_number / shipment_ref");
+  });
+
+  // Extra finding surfaced while verifying Important #4 (round 2): the same
+  // false-positive-pooling risk exists here, not just in transaction
+  // matching. A lone payment row naming a real, legitimately-unpooled
+  // Container-N-looking shipment (the same false positive
+  // transformShipments' own sku cross-check guards against, e.g.
+  // "...Container9-Notes") must keep its OWN raw ref as its owner — not the
+  // Container-N-pattern candidate, which corresponds to no real shipment
+  // since this ref was never actually pooled with anything.
+  it("keeps a lone payment row's own raw shipment_ref when it only LOOKS like a pooled-container line (no genuine sibling)", () => {
+    const rows = [{ po_number: "", shipment_ref: "PO1-Wave1-Container9-Notes", sequence_no: "1", expected_amount: "50.00", expected_date: "2026-07-21", currency: "EUR" }];
+    const result = transformPayments(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.payments[0]).toMatchObject({ shipmentRef: "PO1-Wave1-Container9-Notes", sequenceNo: 1, expectedAmount: "50.00" });
+  });
 });
 
 describe("transformTransactions", () => {
@@ -526,29 +643,30 @@ describe("transformTransactions", () => {
     expect(result.transactions[1].matchedRef).toBeNull();
   });
 
-  // Important #2: a ref naming a per-SKU pooled-container line normalizes to
-  // the pooled owner ref, ported from the source branch's ea7d1b3
-  // ("collapse pooled-container refs on transactions") — without this, a
-  // real Sheet hint naming e.g. "...Container2-Jello" would resolve to
-  // nothing (paymentsByOwner/shipmentRefs are keyed by pooled refs only) and
-  // reject as "no migrated PO or shipment with this ref".
-  it("normalizes a matched_ref naming a single pooled-container line to the pooled owner ref", () => {
+  // Important #4 (round 2): pooled-owner normalization for matched_ref moved
+  // OUT of this transform and into runMigration (see reconcile-migration.ts
+  // and its tests) — this layer has no way to know whether a Container-N-
+  // looking ref is genuinely pooled or one transformShipments deliberately
+  // left standalone (that needs the real shipmentIdByRef/paymentsByOwner
+  // runMigration builds), so it must transfer matched_ref completely as-is,
+  // never rewriting it, even when it looks like a pooled-container line.
+  it("carries a ref naming what looks like a pooled-container line through unchanged (normalization happens in runMigration, not here)", () => {
     const rows = [
       { date: "2026-07-21", amount: "19056.71", currency: "EUR", fx_rate: "1", counterparty: "F", description: "freight", matched_ref: "PO1-Wave4-Container2-JELLO" },
     ];
     const result = transformTransactions(rows);
-    expect(result.transactions[0].matchedRef).toBe("PO1-Wave4-Container2");
+    expect(result.transactions[0].matchedRef).toBe("PO1-Wave4-Container2-JELLO");
   });
 
-  it("collapses a comma-separated ref naming several lines of the SAME pooled container to one ref", () => {
+  it("carries a comma-separated multi-line ref through unchanged, only trimmed", () => {
     const rows = [
       { date: "2026-07-21", amount: "19056.71", currency: "EUR", fx_rate: "1", counterparty: "F", description: "freight", matched_ref: "PO1-Wave4-Container2-JELLO, PO1-Wave4-Container2-MIXER, PO1-Wave4-Container2-STRAW" },
     ];
     const result = transformTransactions(rows);
-    expect(result.transactions[0].matchedRef).toBe("PO1-Wave4-Container2");
+    expect(result.transactions[0].matchedRef).toBe("PO1-Wave4-Container2-JELLO, PO1-Wave4-Container2-MIXER, PO1-Wave4-Container2-STRAW");
   });
 
-  it("leaves a ref naming genuinely distinct owners comma-joined (still reported as untransferable downstream)", () => {
+  it("carries a ref naming genuinely distinct owners through unchanged", () => {
     const rows = [
       { date: "2026-07-01", amount: "10.00", currency: "EUR", fx_rate: "1", counterparty: "F", description: "split", matched_ref: "PO1, PO1-W1" },
     ];

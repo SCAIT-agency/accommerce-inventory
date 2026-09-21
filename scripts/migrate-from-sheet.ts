@@ -164,10 +164,20 @@ export async function reconcileMigration(
   if (landedCostDeps) {
     for (const total of landedCostTotals) {
       const actual = await landedCostDeps.getMigratedLandedCost(total.shipmentRef, total.sku);
-      // NaN (a line the platform could not cost at all) must count as a
-      // mismatch — every comparison with NaN is false, so an unguarded ">"
-      // check alone would silently pass it; !Number.isFinite catches it.
-      if (!Number.isFinite(actual) || Math.abs(total.landedCostFromSheet - actual) > tolerance(total.landedCostFromSheet)) {
+      // NaN on either side must count as a mismatch. actual NaN (a line the
+      // platform could not cost at all): every comparison with NaN is false,
+      // so an unguarded ">" check alone would silently pass it — caught by
+      // !Number.isFinite(actual). A non-finite total.landedCostFromSheet
+      // (a malformed Sheet export value) is a second, independent way the
+      // same silent-pass could happen: tolerance(NaN) is itself NaN
+      // (Math.max(0.01, NaN) === NaN in JS), and "anything > NaN" is always
+      // false, so the diff check alone would wrongly report "no mismatch" —
+      // caught by the explicit !Number.isFinite(total.landedCostFromSheet).
+      if (
+        !Number.isFinite(actual) ||
+        !Number.isFinite(total.landedCostFromSheet) ||
+        Math.abs(total.landedCostFromSheet - actual) > tolerance(total.landedCostFromSheet)
+      ) {
         mismatches.push({
           sku: total.sku,
           warehouseCode: total.shipmentRef,
@@ -475,7 +485,9 @@ export interface TransformedPayment {
 // shipment rows), so this applies the pattern alone — an acceptable
 // relaxation since the Container-N-<SKU> naming is reserved for pooled
 // container lines in the real Sheet, never used for an unrelated shipment.
-function pooledPaymentOwnerRef(shipmentRef: string): string {
+// Exported: reconcile-migration.ts's transaction-matching also needs this,
+// as a fallback when a matched_ref doesn't resolve on its own (see there).
+export function pooledPaymentOwnerRef(shipmentRef: string): string {
   const m = POOLED_SHIPMENT_PATTERN.exec(shipmentRef);
   return m ? m[1] : shipmentRef;
 }
@@ -483,7 +495,8 @@ function pooledPaymentOwnerRef(shipmentRef: string): string {
 interface RawPaymentRow {
   rowIndex: number;
   poNumber: string | null;
-  shipmentRef: string | null; // already resolved to the pooled owner ref
+  shipmentRef: string | null; // resolved pooled owner ref — the grouping key
+  shipmentRefRaw: string | null; // the raw, un-pooled ref exactly as the Sheet gave it
   sequenceNo: number;
   row: PaymentSheetRow;
 }
@@ -518,6 +531,17 @@ function findPaymentMergeConflict(rows: RawPaymentRow[]): string | null {
 export function transformPayments(rows: PaymentSheetRow[]): { payments: TransformedPayment[]; skipped: SkippedRow[] } {
   const skipped: SkippedRow[] = [];
   const preGroup: RawPaymentRow[] = [];
+  // Shipment owner refs where a row genuinely naming a pooled-container line
+  // (its ref actually matches the Container-N pattern) failed pass-1
+  // validation for an unrelated reason (bad sequence_no, or the XOR check).
+  // We cannot know which sequence that row belonged to, so every sequence
+  // group under that owner is now suspect — poisoning the whole owner is the
+  // only safe response to that ambiguity. Scoped to genuine Container-N refs
+  // only (checked via pooledPaymentOwnerRef actually rewriting the ref) —
+  // a plain, never-pooled shipment ref (e.g. "PO1-W3") has no such ambiguity:
+  // a bad row referencing it can't have "belonged to" any other sequence,
+  // so it must not poison that shipment's own, otherwise-valid payment rows.
+  const poisonedShipmentOwners = new Set<string>();
 
   // Pass 1: only the fields needed to determine which group a row belongs to
   // (owner, sequence) are validated here. Everything else — amount, date,
@@ -528,38 +552,39 @@ export function transformPayments(rows: PaymentSheetRow[]): { payments: Transfor
   // signal that anything was lost. Grouping first and validating the whole
   // group together means a bad sibling always quarantines the WHOLE group.
   rows.forEach((row, rowIndex) => {
-    const poNumber = row.po_number.trim() || null;
+    const poNumber = (row.po_number ?? "").trim() || null;
     const shipmentRefRaw = (row.shipment_ref ?? "").trim() || null;
+    const candidateOwner = shipmentRefRaw ? pooledPaymentOwnerRef(shipmentRefRaw) : null;
+    const isGenuinePooledRef = candidateOwner !== null && candidateOwner !== shipmentRefRaw;
+
     if ((poNumber === null) === (shipmentRefRaw === null)) {
+      if (isGenuinePooledRef) poisonedShipmentOwners.add(candidateOwner!);
       skipped.push({
         rowIndex,
         reason: `payment must belong to exactly one of po_number / shipment_ref (got "${row.po_number}" / "${row.shipment_ref ?? ""}")`,
       });
       return;
     }
-    if (!INTEGER_PATTERN.test(row.sequence_no)) {
+    if (!INTEGER_PATTERN.test(row.sequence_no) || Number.isNaN(parseInt(row.sequence_no, 10))) {
+      if (isGenuinePooledRef) poisonedShipmentOwners.add(candidateOwner!);
       skipped.push({ rowIndex, reason: `unparseable sequence_no "${row.sequence_no}"` });
       return;
     }
     const sequenceNo = parseInt(row.sequence_no, 10);
-    if (Number.isNaN(sequenceNo)) {
-      skipped.push({ rowIndex, reason: `unparseable sequence_no "${row.sequence_no}"` });
-      return;
-    }
     preGroup.push({
       rowIndex,
       poNumber,
-      shipmentRef: shipmentRefRaw ? pooledPaymentOwnerRef(shipmentRefRaw) : null,
+      shipmentRef: candidateOwner,
+      shipmentRefRaw,
       sequenceNo,
       row,
     });
   });
 
   // PO-owned and shipment-owned rows share the same owner+sequence grouping
-  // (a PO-owned group is normally size 1 — POs don't pool — but routing both
-  // through one pipeline means a genuine duplicate po_number+sequence_no data
-  // error gets the same safe "quarantine the whole group" treatment instead
-  // of silently producing two payment rows with the same sequence).
+  // so a duplicate/corrupt data pattern gets the same safe handling either
+  // way — see the pooled/duplicate check below for what "the same owner and
+  // sequence, more than one row" actually means for each ownership kind.
   const groups = new Map<string, RawPaymentRow[]>();
   for (const p of preGroup) {
     const ownerKey = p.poNumber !== null ? `po:${p.poNumber}` : `shipment:${p.shipmentRef}`;
@@ -570,7 +595,33 @@ export function transformPayments(rows: PaymentSheetRow[]): { payments: Transfor
   const payments: TransformedPayment[] = [];
   for (const group of groups.values()) {
     const owner = group[0].poNumber ?? group[0].shipmentRef!;
-    const pooled = group.length > 1;
+    const isPoOwned = group[0].poNumber !== null;
+
+    // A shipment owner with a pass-1 casualty elsewhere under the SAME
+    // genuinely-pooled ref: we don't know which sequence that row belonged
+    // to, so this group (any sequence under that owner) can't be trusted.
+    if (!isPoOwned && poisonedShipmentOwners.has(owner)) {
+      const reason = `payment quarantined: another row naming pooled owner "${owner}" failed validation with an unusable sequence_no, so this owner's payment total cannot be trusted`;
+      for (const g of group) skipped.push({ rowIndex: g.rowIndex, reason });
+      continue;
+    }
+
+    // Only a GENUINE pooled container — rows merging from at least two
+    // DISTINCT raw shipment_ref values (real per-SKU container lines) — may
+    // ever sum. POs never pool at all (per the design, only Container-N
+    // shipment refs pool); an exact-duplicate row pair (same raw ref/PO
+    // number, same sequence) is a duplicate, not a pool, and both quarantine
+    // outright rather than silently doubling the real amount.
+    const distinctRawRefs = new Set(group.map((g) => g.shipmentRefRaw ?? g.poNumber));
+    const pooled = group.length > 1 && !isPoOwned && distinctRawRefs.size > 1;
+    if (group.length > 1 && !pooled) {
+      const reason = isPoOwned
+        ? `duplicate payment rows: ${group.length} rows share PO "${owner}" sequence ${group[0].sequenceNo} — purchase orders don't pool, expected exactly one row per PO×sequence`
+        : `duplicate payment rows: ${group.length} rows share the exact same shipment_ref "${group[0].shipmentRefRaw}" and sequence ${group[0].sequenceNo} — not a genuine pooled container (no distinct per-SKU lines), so this is a duplicate, not a sum`;
+      for (const g of group) skipped.push({ rowIndex: g.rowIndex, reason });
+      continue;
+    }
+
     const label = (detail: string) =>
       pooled ? `conflicting merge: ${group.length} payment rows share owner "${owner}" sequence ${group[0].sequenceNo} but ${detail}` : detail;
 
@@ -635,9 +686,20 @@ export function transformPayments(rows: PaymentSheetRow[]): { payments: Transfor
     const total = amounts.reduce((a, b) => a + b, 0);
     const expectedAmount = pooled ? total.toFixed(2) : group[0].row.expected_amount;
 
+    // Same reasoning as the pooled/duplicate check above, applied to the
+    // OUTPUT ref: a group that isn't genuinely pooled (only one distinct raw
+    // shipment_ref feeds it) must be owned by that RAW ref, not the
+    // Container-N-pattern candidate — a standalone shipment whose ref
+    // happens to look poolable (the same false-positive transformShipments'
+    // own sku cross-check guards against, e.g. "...Container9-Notes") would
+    // otherwise get a payment row pointing at a pooled owner ref that
+    // doesn't correspond to any real migrated shipment, and quarantine at
+    // runtime as "unresolved owner" even though its raw ref was real all along.
+    const outputShipmentRef = pooled ? group[0].shipmentRef : group[0].shipmentRefRaw;
+
     payments.push({
       poNumber: group[0].poNumber,
-      shipmentRef: group[0].shipmentRef,
+      shipmentRef: outputShipmentRef,
       sequenceNo: group[0].sequenceNo,
       expectedAmount,
       expectedDate,
@@ -677,23 +739,6 @@ export interface TransformedTransaction {
   matchedRef: string | null;
 }
 
-// A Sheet ref may list several per-SKU Shipment IDs of one pooled container
-// ("…Container2-Jello, …Container2-Mixer, …Container2-Straw"); after the
-// pooled merge (transformShipments/transformPayments) those all resolve to
-// ONE platform shipment, so the ref collapses to it — ported from the source
-// branch's ea7d1b3 commit ("collapse pooled-container refs on transactions").
-// A ref still naming several genuinely distinct owners after normalization
-// stays comma-joined, and runMigration's own "several refs on one
-// transaction" check (unchanged) reports it as untransferable, same as today.
-function normalizeMatchedRef(raw: string): string {
-  const parts = raw
-    .split(",")
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map(pooledPaymentOwnerRef);
-  return [...new Set(parts)].join(", ");
-}
-
 export function transformTransactions(rows: TransactionSheetRow[]): { transactions: TransformedTransaction[]; skipped: SkippedRow[] } {
   const skipped: SkippedRow[] = [];
   const transactions: TransformedTransaction[] = [];
@@ -713,11 +758,16 @@ export function transformTransactions(rows: TransactionSheetRow[]): { transactio
       skipped.push({ rowIndex, reason: `unparseable amount "${row.amount}"` });
       return;
     }
-    // The transform itself never matches — matchedRef is only a carried hint
-    // that downstream migration code resolves against a migrated PO's own
-    // payments (a transfer of a link a human already made in the Sheet);
-    // automated matching stays out, per the design's decision.
-    const rawRef = (row.matched_ref ?? "").trim();
+    // The transform itself never matches or normalizes — matchedRef is only
+    // a carried hint, transferred exactly as the Sheet gave it. Pooled-owner
+    // normalization (collapsing a per-SKU container-line hint to its pooled
+    // shipment ref) happens in runMigration instead, as a fallback ONLY when
+    // the raw ref doesn't already resolve on its own — this transform layer
+    // has no way to know whether a Container-N-looking ref is genuinely
+    // pooled or one transformShipments deliberately left standalone (that
+    // decision needs the real shipmentIdByRef/paymentsByOwner runMigration
+    // builds), so rewriting it here risks breaking a ref that would have
+    // resolved correctly as-is.
     transactions.push({
       date,
       amount: row.amount,
@@ -725,7 +775,7 @@ export function transformTransactions(rows: TransactionSheetRow[]): { transactio
       fxRate: row.fx_rate,
       counterparty: row.counterparty,
       description: row.description,
-      matchedRef: rawRef ? normalizeMatchedRef(rawRef) : null,
+      matchedRef: (row.matched_ref ?? "").trim() || null,
     });
   });
 
