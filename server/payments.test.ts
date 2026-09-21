@@ -3,7 +3,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { payments, transactions, purchaseOrders, vendors, changeLog, users } from "../drizzle/schema";
-import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listUnpaidPayments, listTransactions } from "./payments";
+import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listUnpaidPayments, listTransactions, correctPaymentAmount } from "./payments";
+import { listChangeLog } from "./changeLog";
 import { createVendor, createUser } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 
@@ -268,5 +269,61 @@ describe("payments and transactions", () => {
     expect(result.map((t) => t.id)).toEqual([tx2.id, tx1.id]);
     expect(result.find((t) => t.id === tx1.id)?.matchedPaymentId).toBe(payment.id);
     expect(result.find((t) => t.id === tx2.id)?.matchedPaymentId).toBeNull();
+  });
+
+  it("correctPaymentAmount corrects an already-paid payment's amount, date, and fxRate", async () => {
+    const vendor = await createVendor({ name: "MBS Logistics" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
+    const payment = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "1000.00", expectedDate: new Date("2026-09-01"), currency: "USD" });
+    await markPaymentPaid(payment.id, { amount: "1000.00", fxRate: "0.90", paidDate: new Date("2026-09-05"), reasonCategory: "payment_timing", changedBy: userId });
+
+    const corrected = await correctPaymentAmount(payment.id, {
+      amount: "950.00",
+      fxRate: "0.92",
+      paidDate: new Date("2026-09-06"),
+      changedBy: userId,
+      reasonNote: "bank statement shows a different actual amount",
+    });
+
+    expect(corrected.paidAmount).toBe("950.0000");
+    expect(parseFloat(corrected.fxRate ?? "0")).toBeCloseTo(0.92, 6);
+
+    const history = await listChangeLog("payment", payment.id);
+    const paidAmountEntry = history.find((h) => h.field === "paidAmount" && h.reasonCategory === "data_correction");
+    expect(paidAmountEntry).toBeDefined();
+    expect(paidAmountEntry?.oldValue).toBe("1000");
+    expect(paidAmountEntry?.newValue).toBe("950");
+  });
+
+  it("correctPaymentAmount rejects correcting a payment that hasn't been paid yet", async () => {
+    const vendor = await createVendor({ name: "MBS Logistics" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
+    const payment = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "1000.00", expectedDate: new Date("2026-09-01"), currency: "USD" });
+
+    await expect(
+      correctPaymentAmount(payment.id, { amount: "950.00", fxRate: "0.92", paidDate: new Date("2026-09-06"), changedBy: userId, reasonNote: "test" }),
+    ).rejects.toThrow(/is not yet paid/);
+  });
+
+  it("correctPaymentAmount rejects a nonexistent payment id", async () => {
+    await expect(
+      correctPaymentAmount(999999, { amount: "1.00", fxRate: "1", paidDate: new Date(), changedBy: userId, reasonNote: "test" }),
+    ).rejects.toThrow();
+  });
+
+  it("correctPaymentAmount rejects a blank reasonNote and writes nothing", async () => {
+    const vendor = await createVendor({ name: "MBS Logistics" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
+    const payment = await createExpectedPayment({ poId: po.id, sequenceNo: 1, expectedAmount: "1000.00", expectedDate: new Date("2026-09-01"), currency: "USD" });
+    await markPaymentPaid(payment.id, { amount: "1000.00", fxRate: "0.90", paidDate: new Date("2026-09-05"), reasonCategory: "payment_timing", changedBy: userId });
+
+    await expect(
+      correctPaymentAmount(payment.id, { amount: "950.00", fxRate: "0.92", paidDate: new Date("2026-09-06"), changedBy: userId, reasonNote: "   " }),
+    ).rejects.toThrow(/reasonNote is required/);
+
+    const [unchanged] = await db.select().from(payments).where(sql`${payments.id} = ${payment.id}`);
+    expect(unchanged.paidAmount).toBe("1000.0000");
+    const history = await listChangeLog("payment", payment.id);
+    expect(history.filter((h) => h.reasonCategory === "data_correction")).toHaveLength(0);
   });
 });

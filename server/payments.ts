@@ -84,6 +84,71 @@ export async function markPaymentPaid(id: number, opts: MarkPaymentPaidOpts): Pr
   return db.transaction((tx) => markPaymentPaidCore(id, opts, tx));
 }
 
+export interface CorrectPaymentAmountOpts {
+  amount: string;
+  fxRate: string;
+  paidDate: Date;
+  changedBy: number;
+  /**
+   * Required here even though MarkPaymentPaidOpts leaves it optional: every
+   * correction entry point in this codebase records why it was made. The
+   * runtime check below is what actually holds that — a type-only requirement
+   * still lets a caller past with "".
+   */
+  reasonNote: string;
+}
+
+/**
+ * Corrects an already-recorded payment's amount, date and/or fxRate.
+ *
+ * Only corrects an existing value (mirrors correctShipmentActualDepartDate):
+ * a not-yet-paid payment is refused, because recording a payment for the
+ * first time is markPaymentPaid's job and going through here would file that
+ * first record under "data_correction" in the audit trail.
+ *
+ * `reasonCategory` is always the literal "data_correction" — deliberately not
+ * a parameter, same as correctLedgerReceipt/correctShipmentReceiptQty/
+ * correctShipmentLandedCost. That literal is what makes corrections
+ * distinguishable from ordinary payment writes in change_log.
+ *
+ * Delegates the write itself to markPaymentPaidCore — the same path
+ * markPaymentPaid uses, so there is one place that writes paid/paidAmount/
+ * paidDate/fxRate/baseCurrencyAmount and logs them. The precondition reads
+ * and that write share one transaction, so a refusal leaves nothing behind.
+ */
+export async function correctPaymentAmount(id: number, opts: CorrectPaymentAmountOpts): Promise<Payment> {
+  return db.transaction(async (tx) => {
+    const [payment] = await tx.select().from(payments).where(eq(payments.id, id));
+    if (!payment) {
+      throw new Error(`correctPaymentAmount: no payment found with id ${id}`);
+    }
+    if (!payment.paid) {
+      throw new Error(
+        `correctPaymentAmount: payment ${id} is not yet paid — use markPaymentPaid to record the first payment, ` +
+        `correctPaymentAmount only corrects an already-recorded one`,
+      );
+    }
+    if (opts.reasonNote.trim() === "") {
+      throw new Error(
+        `correctPaymentAmount: reasonNote is required on every correction — payment ${id} cannot be corrected ` +
+        `without a recorded explanation of what changed and why`,
+      );
+    }
+    return markPaymentPaidCore(
+      id,
+      {
+        amount: opts.amount,
+        fxRate: opts.fxRate,
+        paidDate: opts.paidDate,
+        reasonCategory: "data_correction",
+        reasonNote: opts.reasonNote,
+        changedBy: opts.changedBy,
+      },
+      tx,
+    );
+  });
+}
+
 export interface RecordTransactionInput {
   date: Date;
   amount: string;
