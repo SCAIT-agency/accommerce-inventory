@@ -27,7 +27,7 @@ export interface MarkPaymentPaidOpts {
   changedBy: number;
 }
 
-async function markPaymentPaidCore(id: number, opts: MarkPaymentPaidOpts, dbClient: DbClient): Promise<Payment> {
+export async function markPaymentPaidCore(id: number, opts: MarkPaymentPaidOpts, dbClient: DbClient): Promise<Payment> {
   const [before] = await dbClient.select().from(payments).where(eq(payments.id, id));
   if (!before) {
     throw new Error(`markPaymentPaid: no payment found with id ${id}`);

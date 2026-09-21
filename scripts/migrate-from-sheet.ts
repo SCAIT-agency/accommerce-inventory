@@ -102,6 +102,7 @@ export interface ReconciliationDeps {
 
 export interface Mismatch {
   sku: string;
+  /** Warehouse code for a "soh" mismatch; the shipment ref for a "landed_cost" one. */
   warehouseCode: string;
   expected: number;
   actual: number | null;
@@ -109,14 +110,16 @@ export interface Mismatch {
   kind: "soh" | "landed_cost";
 }
 
+// Landed cost is compared at the grain the Sheet actually has: one landed
+// unit cost per shipment line (Landed Cost Summary), not per SKU/warehouse.
 export interface LandedCostTotal {
+  shipmentRef: string;
   sku: string;
-  warehouseCode: string;
   landedCostFromSheet: number;
 }
 
 export interface LandedCostReconciliationDeps {
-  getMigratedLandedCost: (sku: string, warehouseCode: string) => Promise<number>;
+  getMigratedLandedCost: (shipmentRef: string, sku: string) => Promise<number>;
 }
 
 const LANDED_COST_TOLERANCE_MIN = 0.01;
@@ -153,11 +156,15 @@ export async function reconcileMigration(
 
   if (landedCostDeps) {
     for (const total of landedCostTotals) {
-      const actual = await landedCostDeps.getMigratedLandedCost(total.sku, total.warehouseCode);
+      const actual = await landedCostDeps.getMigratedLandedCost(total.shipmentRef, total.sku);
+      // NaN (a line the platform could not cost at all) must count as a
+      // mismatch — withinLandedCostTolerance's <= comparison already returns
+      // false for NaN, so this falls through to a reported mismatch rather
+      // than a silent pass.
       if (!withinLandedCostTolerance(total.landedCostFromSheet, actual)) {
         mismatches.push({
           sku: total.sku,
-          warehouseCode: total.warehouseCode,
+          warehouseCode: total.shipmentRef,
           expected: total.landedCostFromSheet,
           actual,
           diff: actual - total.landedCostFromSheet,
@@ -430,7 +437,9 @@ export function transformShipments(rows: ShipmentSheetRow[]): { shipments: Trans
 // --- Payments ---
 
 export interface PaymentSheetRow {
+  /** Owner: exactly one of po_number / shipment_ref must be non-blank. */
   po_number: string;
+  shipment_ref?: string;
   sequence_no: string;
   expected_amount: string;
   expected_date: string;
@@ -443,7 +452,8 @@ export interface PaymentSheetRow {
 }
 
 export interface TransformedPayment {
-  poNumber: string;
+  poNumber: string | null;
+  shipmentRef: string | null;
   sequenceNo: number;
   expectedAmount: string;
   expectedDate: Date;
@@ -452,11 +462,69 @@ export interface TransformedPayment {
   paidDate: Date | null;
 }
 
+interface ParsedPaymentRow {
+  rowIndex: number;
+  poNumber: string | null;
+  shipmentRef: string | null;
+  sequenceNo: number;
+  amount: number;
+  amountRaw: string;
+  expectedDate: Date;
+  currency: string;
+  paid: boolean;
+  paidDate: Date | null;
+}
+
+// A container's several per-row freight/customs payment slots (same
+// convention as transformShipments' pooling: "<prefix>Container<N>-<SKU>")
+// share one physical invoice and sum into the pooled shipment's own payment
+// sequence. Payment rows carry no `sku` field to cross-check against (unlike
+// shipment rows), so this applies the pattern alone — an acceptable
+// relaxation since the Container-N-<SKU> naming is reserved for pooled
+// container lines in the real Sheet, never used for an unrelated shipment.
+function pooledPaymentOwnerRef(shipmentRef: string): string {
+  const m = POOLED_SHIPMENT_PATTERN.exec(shipmentRef);
+  return m ? m[1] : shipmentRef;
+}
+
+// Rows pooling into one payment slot (same owner + sequence) must agree on
+// everything but the amount — otherwise summing would silently blend two
+// genuinely different slots (e.g. one row paid, another not).
+const PAYMENT_MERGE_KEYS = ["currency", "paid", "paidDateKey"] as const;
+
+function findPaymentMergeConflict(rows: ParsedPaymentRow[]): string | null {
+  const [first, ...rest] = rows;
+  const key = (r: ParsedPaymentRow) => ({
+    currency: r.currency,
+    paid: String(r.paid),
+    paidDateKey: r.paidDate ? r.paidDate.toISOString() : "",
+  });
+  const firstKey = key(first);
+  for (const row of rest) {
+    const rowKey = key(row);
+    for (const k of PAYMENT_MERGE_KEYS) {
+      if (firstKey[k] !== rowKey[k]) {
+        return `disagree on ${k} ("${firstKey[k]}" vs "${rowKey[k]}")`;
+      }
+    }
+  }
+  return null;
+}
+
 export function transformPayments(rows: PaymentSheetRow[]): { payments: TransformedPayment[]; skipped: SkippedRow[] } {
   const skipped: SkippedRow[] = [];
-  const payments: TransformedPayment[] = [];
+  const parsed: ParsedPaymentRow[] = [];
 
   rows.forEach((row, rowIndex) => {
+    const poNumber = row.po_number || null;
+    const shipmentRef = (row.shipment_ref ?? "").trim() || null;
+    if ((poNumber === null) === (shipmentRef === null)) {
+      skipped.push({
+        rowIndex,
+        reason: `payment must belong to exactly one of po_number / shipment_ref (got "${row.po_number}" / "${row.shipment_ref ?? ""}")`,
+      });
+      return;
+    }
     if (!DECIMAL_PATTERN.test(row.expected_amount)) {
       skipped.push({ rowIndex, reason: `unparseable expected_amount "${row.expected_amount}"` });
       return;
@@ -487,19 +555,70 @@ export function transformPayments(rows: PaymentSheetRow[]): { payments: Transfor
       return;
     }
     if (paid && paidDate === null) {
-      skipped.push({ rowIndex, reason: `paid without a paid_date (${row.po_number} #${row.sequence_no})` });
+      skipped.push({ rowIndex, reason: `paid without a paid_date (${poNumber ?? shipmentRef} #${row.sequence_no})` });
       return;
     }
-    payments.push({
-      poNumber: row.po_number,
+    parsed.push({
+      rowIndex,
+      poNumber,
+      shipmentRef: shipmentRef ? pooledPaymentOwnerRef(shipmentRef) : null,
       sequenceNo,
-      expectedAmount: row.expected_amount,
+      amount,
+      amountRaw: row.expected_amount,
       expectedDate: date,
       currency: row.currency,
       paid,
       paidDate: paid ? paidDate : null,
     });
   });
+
+  // PO-owned rows never pool (each PO×sequence is already its own slot);
+  // shipment-owned rows pool when they share a resolved owner ref + sequence
+  // (a plain, non-pooled shipment ref is its own group of one).
+  const poOwned = parsed.filter((p) => p.poNumber !== null);
+  const shipmentOwned = parsed.filter((p) => p.shipmentRef !== null);
+  const groups = new Map<string, ParsedPaymentRow[]>();
+  for (const p of shipmentOwned) {
+    const key = `${p.shipmentRef}::${p.sequenceNo}`;
+    groups.set(key, [...(groups.get(key) ?? []), p]);
+  }
+
+  const payments: TransformedPayment[] = [];
+  for (const p of poOwned) {
+    payments.push({
+      poNumber: p.poNumber,
+      shipmentRef: null,
+      sequenceNo: p.sequenceNo,
+      expectedAmount: p.amountRaw,
+      expectedDate: p.expectedDate,
+      currency: p.currency,
+      paid: p.paid,
+      paidDate: p.paidDate,
+    });
+  }
+  for (const group of groups.values()) {
+    const conflict = findPaymentMergeConflict(group);
+    if (conflict) {
+      const reason = `conflicting merge: ${group.length} payment rows share owner "${group[0].shipmentRef}" sequence ${group[0].sequenceNo} but ${conflict}`;
+      for (const g of group) skipped.push({ rowIndex: g.rowIndex, reason });
+      continue;
+    }
+    const first = group[0];
+    // A single (non-pooled) shipment row keeps its own raw amount string,
+    // exactly like a PO-owned row; only a genuine multi-row pooled group's
+    // summed total needs recomputing.
+    const expectedAmount = group.length === 1 ? first.amountRaw : group.reduce((sum, g) => sum + g.amount, 0).toFixed(2);
+    payments.push({
+      poNumber: null,
+      shipmentRef: first.shipmentRef,
+      sequenceNo: first.sequenceNo,
+      expectedAmount,
+      expectedDate: first.expectedDate,
+      currency: first.currency,
+      paid: first.paid,
+      paidDate: first.paidDate,
+    });
+  }
 
   return { payments, skipped };
 }

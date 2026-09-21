@@ -121,7 +121,7 @@ describe("reconcileMigration", () => {
     const result = await reconcileMigration(
       [],
       { getMigratedSoh: async () => 0 },
-      [{ sku: "JELLO-CAL-500", warehouseCode: "FF-DE", landedCostFromSheet: 1000.0 }],
+      [{ shipmentRef: "PO1-W1", sku: "JELLO-CAL-500", landedCostFromSheet: 1000.0 }],
       { getMigratedLandedCost: async () => 1000.5 }, // 0.05% off — within the 0.1% tolerance
     );
     expect(result.passed).toBe(true);
@@ -131,7 +131,7 @@ describe("reconcileMigration", () => {
     const result = await reconcileMigration(
       [],
       { getMigratedSoh: async () => 0 },
-      [{ sku: "JELLO-CAL-500", warehouseCode: "FF-DE", landedCostFromSheet: 1000.0 }],
+      [{ shipmentRef: "PO1-W1", sku: "JELLO-CAL-500", landedCostFromSheet: 1000.0 }],
       { getMigratedLandedCost: async () => 1010.0 }, // 1% off — beyond tolerance
     );
     expect(result.passed).toBe(false);
@@ -387,6 +387,50 @@ describe("transformPayments", () => {
     const result = transformPayments(rows);
     expect(result.payments).toEqual([]);
     expect(result.skipped[0].reason).toContain("paid_date");
+  });
+
+  it("maps a well-formed shipment-owned payment row (shipment_ref instead of po_number)", () => {
+    const rows = [{ po_number: "", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "19056.71", expected_date: "2026-07-21", currency: "EUR" }];
+    const result = transformPayments(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.payments[0]).toMatchObject({ poNumber: null, shipmentRef: "PO1-W3", sequenceNo: 1, expectedAmount: "19056.71" });
+  });
+
+  it("quarantines a row that gives both po_number and shipment_ref", () => {
+    const rows = [{ po_number: "PO1", shipment_ref: "PO1-W3", sequence_no: "1", expected_amount: "1.00", expected_date: "2026-07-21", currency: "EUR" }];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped[0].reason).toContain("exactly one of po_number / shipment_ref");
+  });
+
+  it("quarantines a row that gives neither po_number nor shipment_ref", () => {
+    const rows = [{ po_number: "", sequence_no: "1", expected_amount: "1.00", expected_date: "2026-07-21", currency: "EUR" }];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped[0].reason).toContain("exactly one of po_number / shipment_ref");
+  });
+
+  it("sums a pooled container's per-row payment slots (same sequence) under the pooled shipment ref", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR", paid: "TRUE", paid_date: "2026-07-21" },
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR", paid: "TRUE", paid_date: "2026-07-21" },
+    ];
+    const result = transformPayments(rows);
+    expect(result.skipped).toEqual([]);
+    expect(result.payments).toEqual([
+      expect.objectContaining({ shipmentRef: "PO1-Wave4-Container2", sequenceNo: 1, expectedAmount: "600.00", paid: true }),
+    ]);
+  });
+
+  it("quarantines a pooled group that disagrees on currency instead of silently summing across currencies", () => {
+    const rows = [
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-JELLO", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "EUR" },
+      { po_number: "", shipment_ref: "PO1-Wave4-Container2-STRAW", sequence_no: "1", expected_amount: "300.00", expected_date: "2026-07-21", currency: "USD" },
+    ];
+    const result = transformPayments(rows);
+    expect(result.payments).toEqual([]);
+    expect(result.skipped).toHaveLength(2);
+    expect(result.skipped[0].reason).toContain("disagree on currency");
   });
 });
 
