@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { trpc } from "../lib/trpc";
 import { formatMoney } from "../lib/labels";
-import { REASON_CATEGORIES } from "../../../shared/constants";
+import { MANUAL_REASON_CATEGORIES } from "../../../shared/constants";
 
-type ReasonCategory = (typeof REASON_CATEGORIES)[number];
+type ReasonCategory = (typeof MANUAL_REASON_CATEGORIES)[number];
 
 function MatchTransactionRow({ transaction, unpaidPayments, onMatched }: { transaction: { id: number; amount: string; currency: string; date: Date; counterparty?: string | null }; unpaidPayments: Array<{ id: number; sequenceNo: number; expectedAmount: string; currency: string; poNumber: string | null }>; onMatched: () => void }) {
   const [selectedPaymentId, setSelectedPaymentId] = useState<string>("");
@@ -27,7 +27,7 @@ function MatchTransactionRow({ transaction, unpaidPayments, onMatched }: { trans
         ))}
       </select>
       <select value={reasonCategory} onChange={(e) => setReasonCategory(e.target.value as ReasonCategory)}>
-        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       {noteRequired && (
         <input placeholder="reason note (required)" value={reasonNote} onChange={(e) => setReasonNote(e.target.value)} />

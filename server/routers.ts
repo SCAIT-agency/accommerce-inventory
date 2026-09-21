@@ -7,10 +7,19 @@ import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlan
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation, upsertWeeklyInput, listWeeklyInputs } from "./salesPlan";
-import { REASON_CATEGORIES, PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES } from "../drizzle/schema";
+import { PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES } from "../drizzle/schema";
+import { MANUAL_REASON_CATEGORIES } from "../shared/constants";
 import { listChangeLog } from "./changeLog";
 
-const reasonCategorySchema = z.enum(REASON_CATEGORIES);
+// "data_correction" is reserved for the 3 correction procedures below
+// (correctReceiptQty/correctLandedCost/correctAmount), which hardcode it
+// server-side and don't accept a reasonCategory field at all — every OTHER
+// procedure that takes a reasonCategory is an ordinary, first-time write and
+// must use this narrower schema so an operator can't hand-pick
+// "data_correction" there, which would make it indistinguishable from a real
+// correction in change_log (see server/payments.ts's doc comment on
+// correctPaymentAmount).
+const manualReasonCategorySchema = z.enum(MANUAL_REASON_CATEGORIES);
 
 // Non-negative, plain-decimal string (no exponent/scientific notation, no
 // sign) — same shape as scripts/migrate-from-sheet.ts's DECIMAL_PATTERN with
@@ -88,10 +97,10 @@ export const appRouter = router({
       }))
       .mutation(({ input, ctx }) => createPurchaseOrder({ ...input, createdBy: ctx.user.id })),
     updateStatus: editorProcedure
-      .input(z.object({ id: z.number(), newStatus: z.enum(PO_STATUSES), reasonCategory: reasonCategorySchema.optional(), reasonNote: z.string().optional() }))
+      .input(z.object({ id: z.number(), newStatus: z.enum(PO_STATUSES), reasonCategory: manualReasonCategorySchema.optional(), reasonNote: z.string().optional() }))
       .mutation(({ input, ctx }) => updatePurchaseOrderStatus(input.id, input.newStatus, { ...input, changedBy: ctx.user.id })),
     updatePlannedReadyDate: editorProcedure
-      .input(z.object({ id: z.number(), newDate: z.date(), reasonCategory: reasonCategorySchema, reasonNote: z.string().optional() }))
+      .input(z.object({ id: z.number(), newDate: z.date(), reasonCategory: manualReasonCategorySchema, reasonNote: z.string().optional() }))
       .mutation(({ input, ctx }) =>
         updatePurchaseOrderPlannedReadyDate(input.id, input.newDate.toISOString().slice(0, 10), { ...input, changedBy: ctx.user.id }),
       ),
@@ -112,7 +121,7 @@ export const appRouter = router({
       }))
       .mutation(({ input, ctx }) => createShipment({ ...input, createdBy: ctx.user.id })),
     updatePlannedDepartDate: editorProcedure
-      .input(z.object({ id: z.number(), newDate: z.date(), reasonCategory: reasonCategorySchema, reasonNote: z.string().optional() }))
+      .input(z.object({ id: z.number(), newDate: z.date(), reasonCategory: manualReasonCategorySchema, reasonNote: z.string().optional() }))
       .mutation(({ input, ctx }) => updateShipmentPlannedDepartDate(input.id, input.newDate, { ...input, changedBy: ctx.user.id })),
     markDeparted: editorProcedure
       .input(z.object({ id: z.number(), actualDate: z.date() }))
@@ -121,7 +130,7 @@ export const appRouter = router({
       .input(z.object({
         id: z.number(),
         newStatus: z.enum(SHIPMENT_STATUSES),
-        reasonCategory: reasonCategorySchema.optional(),
+        reasonCategory: manualReasonCategorySchema.optional(),
         reasonNote: z.string().optional(),
       }))
       .mutation(({ input, ctx }) =>
@@ -137,7 +146,7 @@ export const appRouter = router({
         freightCost: z.string(),
         dutyCost: z.string(),
         costCurrency: z.string(),
-        reasonCategory: reasonCategorySchema,
+        reasonCategory: manualReasonCategorySchema,
         reasonNote: z.string().optional(),
       }))
       .mutation(({ input, ctx }) =>
@@ -151,7 +160,7 @@ export const appRouter = router({
       .input(z.object({
         id: z.number(),
         newStatus: z.enum(CUSTOMS_STATUSES),
-        reasonCategory: reasonCategorySchema,
+        reasonCategory: manualReasonCategorySchema,
         reasonNote: z.string().optional(),
       }))
       .mutation(({ input, ctx }) =>
@@ -165,7 +174,7 @@ export const appRouter = router({
       .input(z.object({
         id: z.number(),
         actualArrivalDate: z.date(),
-        reasonCategory: reasonCategorySchema,
+        reasonCategory: manualReasonCategorySchema,
         reasonNote: z.string().optional(),
       }))
       .mutation(({ input, ctx }) =>
@@ -179,7 +188,7 @@ export const appRouter = router({
       .input(z.object({
         id: z.number(),
         newDate: z.date(),
-        reasonCategory: reasonCategorySchema,
+        reasonCategory: manualReasonCategorySchema,
         reasonNote: z.string().optional(),
       }))
       .mutation(({ input, ctx }) =>
@@ -193,7 +202,11 @@ export const appRouter = router({
       .input(z.object({
         shipmentId: z.number(),
         lineItemId: z.number(),
-        newQty: z.number().int().positive(),
+        // nonnegative, not positive: correctLedgerReceipt documents qty: 0 as
+        // a legitimate correction ("this shipment never actually arrived") —
+        // positive() would silently make that unreachable through the only
+        // API/UI path that exists for it.
+        newQty: z.number().int().nonnegative(),
         reasonNote: z.string().min(1),
         allowNegativeSoh: z.boolean().optional(),
       }))
@@ -242,7 +255,7 @@ export const appRouter = router({
         amount: z.string(),
         fxRate: z.string(),
         paidDate: z.date(),
-        reasonCategory: reasonCategorySchema,
+        reasonCategory: manualReasonCategorySchema,
         reasonNote: z.string().optional(),
       }))
       .mutation(({ input, ctx }) =>
@@ -286,7 +299,7 @@ export const appRouter = router({
       .input(z.object({
         transactionId: z.number(),
         paymentId: z.number(),
-        reasonCategory: reasonCategorySchema,
+        reasonCategory: manualReasonCategorySchema,
         reasonNote: z.string().optional(),
       }))
       .mutation(({ input, ctx }) =>

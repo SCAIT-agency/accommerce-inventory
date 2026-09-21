@@ -4,12 +4,12 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
 import { skuLabel, formatMoney } from "../lib/labels";
-import { REASON_CATEGORIES } from "../../../shared/constants";
+import { MANUAL_REASON_CATEGORIES } from "../../../shared/constants";
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type ShipmentListItem = RouterOutputs["shipments"]["list"][number];
 
-type ReasonCategory = (typeof REASON_CATEGORIES)[number];
+type ReasonCategory = (typeof MANUAL_REASON_CATEGORIES)[number];
 
 const SHIPMENT_STATUS_BADGE_CLASS: Record<string, string> = {
   delivered: "badge badge-ok",
@@ -150,7 +150,7 @@ function PlannedDepartureControl({ shipment, onUpdated }: { shipment: ShipmentLi
         value={form.reasonCategory}
         onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
       >
-        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       {noteRequired && (
         <input
@@ -218,7 +218,7 @@ function StatusTransitionControl({ shipment, onUpdated }: { shipment: ShipmentLi
         value={form.reasonCategory}
         onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
       >
-        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       {noteRequired && (
         <input
@@ -278,7 +278,7 @@ function CustomsArrivalControl({ shipment, onUpdated }: { shipment: ShipmentList
         value={form.reasonCategory}
         onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
       >
-        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       {noteRequired && (
         <input
@@ -343,7 +343,7 @@ function DepartDateCorrectionControl({ shipment, onUpdated }: { shipment: Shipme
         value={form.reasonCategory}
         onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
       >
-        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       {noteRequired && (
         <input
@@ -389,9 +389,20 @@ function DepartDateCorrectionControl({ shipment, onUpdated }: { shipment: Shipme
 // ("...would drive SOH negative..."), which the same flag bypasses but never
 // names in its own message. Matched by message text (both procedures throw
 // plain Errors, no typed error here) against /allowNegativeSoh/i OR
-// /negative/i — surfaced as a distinct "Force this correction anyway" button
-// that resubmits the exact same payload with allowNegativeSoh: true. Never
-// shown by default, only after a refusal matching one of those patterns.
+// /drive SOH negative/i — surfaced as a distinct "Force this correction
+// anyway" button that resubmits the exact same payload with
+// allowNegativeSoh: true. Never shown by default, only after a refusal
+// matching one of those patterns.
+//
+// Deliberately NOT a bare /negative/i: the router's own Zod validation on
+// freightCost/dutyCost/amount/fxRate (server/routers.ts's
+// nonNegativeDecimalString) produces "...must be a non-negative number in
+// plain decimal notation" for an ordinary malformed input (e.g. a comma
+// decimal separator) — that message contains "negative" too, and a bare
+// /negative/i would wrongly surface this bypass button (plus its scary
+// inconsistency warning) for a typo instead of a real stock-integrity
+// refusal. /drive SOH negative/i matches only recordLedgerEvent's actual
+// refusal text.
 function CorrectReceiptControl({
   shipment,
   lineItems,
@@ -404,8 +415,16 @@ function CorrectReceiptControl({
   const correctReceiptQty = trpc.shipments.correctReceiptQty.useMutation({ onSuccess: onUpdated });
   const correctLandedCost = trpc.shipments.correctLandedCost.useMutation({ onSuccess: onUpdated });
   const [form, setForm] = useState<ReceiptCorrectionFormState>(() => defaultReceiptCorrectionForm(shipment));
-  const [lastQtyResult, setLastQtyResult] = useState<{ consumedFromOtherBatches: boolean } | null>(null);
-  const [lastCostResult, setLastCostResult] = useState<{ correctedCount: number; consumedFromOtherBatches: boolean } | null>(null);
+  // `forced` records whether THIS successful submission carried
+  // allowNegativeSoh: true — distinct from consumedFromOtherBatches (which
+  // can be true even on an un-forced correction, e.g. plain FIFO reordering).
+  // Drives the persistent post-success notice below: the ongoing consequence
+  // of forcing (remaining-batch/Daily COGS may keep erroring for the
+  // affected SKU(s)) doesn't go away once the mutation succeeds, so it can't
+  // live only in the transient error-state warning the way the rest of this
+  // component's error copy does.
+  const [lastQtyResult, setLastQtyResult] = useState<{ consumedFromOtherBatches: boolean; forced: boolean } | null>(null);
+  const [lastCostResult, setLastCostResult] = useState<{ correctedCount: number; consumedFromOtherBatches: boolean; forced: boolean } | null>(null);
 
   if (shipment.status !== "delivered") return null;
 
@@ -425,8 +444,14 @@ function CorrectReceiptControl({
   // the same fix applying — widened 2026-09-21 per controller ruling.
   // mutation.error naturally clears when a new mutate() call starts, so this
   // hides itself again as soon as the forced retry is in flight.
+  //
+  // /drive SOH negative/i (not a bare /negative/i, narrowed 2026-09-21 per
+  // final-review finding): the router's Zod validation on freightCost/
+  // dutyCost/amount/fxRate throws "...must be a non-negative number in plain
+  // decimal notation" for an ordinary malformed input, which also contains
+  // "negative" — a bare /negative/i wrongly caught that typo case too.
   const needsForce = (error: { message: string } | null | undefined) =>
-    error != null && (/allowNegativeSoh/i.test(error.message) || /negative/i.test(error.message));
+    error != null && (/allowNegativeSoh/i.test(error.message) || /drive SOH negative/i.test(error.message));
   const qtyNeedsForce = needsForce(correctReceiptQty.error);
   const costNeedsForce = needsForce(correctLandedCost.error);
 
@@ -439,7 +464,7 @@ function CorrectReceiptControl({
         reasonNote: form.reasonNote,
         allowNegativeSoh,
       },
-      { onSuccess: (result) => setLastQtyResult(result) },
+      { onSuccess: (result) => setLastQtyResult({ ...result, forced: allowNegativeSoh === true }) },
     );
   };
 
@@ -457,6 +482,7 @@ function CorrectReceiptControl({
           setLastCostResult({
             correctedCount: result.corrections.length,
             consumedFromOtherBatches: result.corrections.some((c) => c.consumedFromOtherBatches),
+            forced: allowNegativeSoh === true,
           }),
       },
     );
@@ -530,8 +556,8 @@ function CorrectReceiptControl({
           Failed to correct: {correctLandedCost.error.message}
           {costNeedsForce && (
             <div>
-              This correction would leave some stock data temporarily inconsistent until the underlying issue is
-              resolved — remaining-batch and Daily COGS figures for this SKU may error out until the over-sale is
+              Forcing this correction will apply to every line item on this shipment that needs it, not just
+              one — remaining-batch and Daily COGS figures for those SKUs may error out until the over-sale is
               separately resolved.
             </div>
           )}
@@ -539,6 +565,12 @@ function CorrectReceiptControl({
       )}
       {lastQtyResult?.consumedFromOtherBatches && (
         <div>This correction drew from a different batch than the one being corrected, because the original batch was already partly or fully sold — past Daily COGS is not recalculated.</div>
+      )}
+      {lastQtyResult?.forced && (
+        <div>
+          This correction was forced past the negative-stock guard — remaining-batch and Daily COGS figures for
+          this SKU may keep erroring out until the underlying over-sale is separately resolved.
+        </div>
       )}
       {lastCostResult && (
         <div>
@@ -548,6 +580,13 @@ function CorrectReceiptControl({
             : "."}
           {lastCostResult.consumedFromOtherBatches &&
             " This correction drew from a different batch than the one being corrected, because the original batch was already partly or fully sold — past Daily COGS is not recalculated."}
+        </div>
+      )}
+      {lastCostResult?.forced && (
+        <div>
+          This correction was forced past the negative-stock guard for every line item that needed it —
+          remaining-batch and Daily COGS figures for those SKUs may keep erroring out until the underlying
+          over-sale is separately resolved.
         </div>
       )}
     </div>
@@ -636,7 +675,7 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
           value={form.reasonCategory}
           onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
         >
-          {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
         {noteRequired && (
           <input

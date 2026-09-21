@@ -645,6 +645,35 @@ describe("shipments", () => {
     expect(secondLineReceipts[0].correctsEventId).toBeNull();
   });
 
+  it("correctShipmentReceiptQty accepts newQty: 0 -- 'this shipment never actually arrived' is a legitimate correction", async () => {
+    // correctLedgerReceipt documents qty: 0 as legitimate (server/inventoryLedger.ts),
+    // but the router previously validated newQty with z.number().int().positive(),
+    // which silently made this documented case unreachable through the only
+    // API/UI path that exists for it. This proves it now works end-to-end
+    // through the real function, not just that a schema accepts the value.
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container-NeverArrived",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    const { lineItems } = await getShipmentWithLineItems(shipment.id);
+    const result = await correctShipmentReceiptQty(shipment.id, lineItems[0].id, 0, {
+      changedBy: userId,
+      reasonNote: "shipment never actually arrived -- receipt recorded in error",
+    });
+
+    expect(result.consumedFromOtherBatches).toBe(false);
+    expect(await getSoh(skuId, ffWarehouseId)).toBe(0);
+
+    const [replacement] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.id, result.correctedId));
+    expect(replacement.eventType).toBe("receipt");
+    expect(replacement.qty).toBe(0);
+  });
+
   it("correctShipmentReceiptQty rejects a nonexistent shipment/line item combination", async () => {
     await expect(
       correctShipmentReceiptQty(999999, 999999, 10, { changedBy: userId, reasonNote: "test" }),

@@ -4,10 +4,10 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 import { trpc } from "../lib/trpc";
 import { PO_STATUSES } from "../../../drizzle/schema";
-import { REASON_CATEGORIES } from "../../../shared/constants";
+import { MANUAL_REASON_CATEGORIES } from "../../../shared/constants";
 import { skuLabel, formatMoney } from "../lib/labels";
 
-type ReasonCategory = (typeof REASON_CATEGORIES)[number];
+type ReasonCategory = (typeof MANUAL_REASON_CATEGORIES)[number];
 
 const PO_STATUS_BADGE_CLASS: Record<string, string> = {
   delivered: "badge badge-ok",
@@ -126,7 +126,7 @@ function MarkPaidRow({ payment, onPaid }: { payment: Payment; onPaid: () => void
         value={form.reasonCategory}
         onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
       >
-        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       {noteRequired && (
         <input
@@ -439,7 +439,7 @@ function AdvanceStatusControl({ po, onAdvanced }: { po: { id: number; status: (t
   return (
     <div>
       <select value={reasonCategory} onChange={(e) => setReasonCategory(e.target.value as ReasonCategory)}>
-        {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       {noteRequired && (
         <input placeholder="required note" value={reasonNote} onChange={(e) => setReasonNote(e.target.value)} />
@@ -505,7 +505,7 @@ export function PurchaseOrdersPage() {
                       setRow(po.id, po.plannedReadyDate, { reasonCategory: e.target.value as ReasonCategory })
                     }
                   >
-                    {REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                    {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                   {noteRequired && (
                     <input
