@@ -477,3 +477,35 @@ One fix-wave dispatch addressed all 3 Important findings plus 6 selected Minor o
 - Test suite: 227 tests, 24 files (up from 218 at the end of the Operational cleanup: −3 dead-code tests, +2 PO atomicity, +4 shipment atomicity, +3 decimal round-trip, +3 final-review fix-wave). `pnpm check` clean throughout.
 - Every bounded Engineering (Cherny) item from Stream I's tracked list is now closed; the design doc's explicitly-deferred items (router-layer input validation, `markShipmentArrived`'s read-outside-transaction pattern, `nightlyExport.ts`'s hand-maintained table list) remain tracked in `BACKLOG.md`.
 - Next per the user's explicit priority order: Product (Jobs)-lens items.
+
+# Build History — Backlog Stream K: Product Coherence
+
+Built 2026-09-21, directly on `main`, via subagent-driven-development. Third and final tier of the priority order set after Stream I (Operational → Engineering → Product). Design doc: [`2026-09-21-product-coherence-design.md`](./2026-09-21-product-coherence-design.md). Plan: [`docs/superpowers/plans/2026-09-21-product-coherence.md`](./superpowers/plans/2026-09-21-product-coherence.md).
+
+## What Was Built
+
+Six tasks addressing every bounded Product (Jobs) finding from Stream I's tracked list:
+
+1. **Extracted shared `skuLabel`/`warehouseLabel` helpers** into a new `client/src/lib/labels.ts`, deduplicating logic `StockPage.tsx` and `MoneyPage.tsx` had each independently reinvented, and applied them everywhere a raw numeric id was still shown (`ShipmentsPage.tsx`, `PurchaseOrdersPage.tsx`, `MoneyPage.tsx`'s Landed Cost tab, and a full rewrite of `InventoryLedgerPage.tsx`, which previously showed zero real names anywhere).
+2. **Added `formatMoney`** (currency symbols for EUR/USD/CNY/GBP, falling back to the uppercased code) and standardized 4 raw `Date.toString()` displays to this codebase's dominant `.toISOString().slice(0, 10)` convention.
+3. **Made the Change Log reachable** (links from Purchase Orders and Shipments to the shared `/change-log/:entityType/:entityId` route, which had zero links anywhere despite working correctly) and fixed a second, previously-unnamed instance of a "guaranteed-to-fail control" bug class: `StatusTransitionControl` offered "advance to delivered" for a `customs`-status shipment, which the backend unconditionally rejects (a dedicated control already handles that transition).
+4. **Replaced the fixed 21/45/90-day stockout thresholds** with a per-SKU reorder point — `skus.leadTimeDays`/`safetyStockDays`, defaulting to Jello's real known 66/14-day replenishment cycle, editable per SKU.
+5. **Made Home's 4 static counters clickable**, linking each to the page where its underlying data can actually be worked.
+6. **Revived `updateSku`** (deleted as dead code by the prior Engineering stream, now with real callers) scoped narrowly to `status`/`leadTimeDays`/`safetyStockDays` — identifier fields stay create-only, since editing a live identifier has downstream implications out of scope for this task. Added `updateVendor`/`updateWarehouse` for edit. Vendor/Warehouse *archiving* deliberately deferred: neither table has a status column today, and what "archived" should mean for an entity with existing POs/shipments needs its own design pass.
+
+Every task went through fresh-implementer → task-reviewer → fix round(s) where needed → scoped re-review. Task reviewers independently verified nontrivial claims rather than trusting reports at face value: one hand-traced the exact SOH/avgDailySales/daysOfCover arithmetic in two new tests against the real ledger mechanics (not just checking the test passed); another checked Drizzle's actual `mapUpdateSet` source to correct an implementer's own speculation about a "silent no-op" (it actually throws `"No values to set"`); a third traced all 5 real shipment statuses through a control-visibility fix to confirm every guaranteed-to-fail path was genuinely eliminated, not just the two named in the brief.
+
+## Final Whole-Branch Review
+
+Dispatched on the most capable available model. Found 2 Important + 8 Minor issues — again, exactly the class of cross-task interaction no single task's own review could see:
+
+- **The `CustomsArrivalControl` fix from Task 3 was incomplete.** It correctly gated the arrival button on `shipment.status === "customs"`, but missed that `markShipmentArrived` has a SECOND, independent precondition (freight/duty costs must already be recorded) — so a shipment in the ordinary real-world state of "in customs, invoice not yet in" still showed a fully-enabled, guaranteed-to-fail button. The reviewer found this by reading the actual backend guard clause the earlier task's own reviewer hadn't cross-checked against.
+- **Task 2's date-format standardization broke the audit log.** `ChangeLogPage.tsx`'s `changedAt` is a real `timestamp`, not a date-only concept like the three payment/PO fields the same task correctly standardized — truncating it to a bare day destroyed same-day multi-edit ordering, the one place in the whole stream where "cleaning up" a format actually removed real information.
+
+One fix-wave dispatch addressed both Important findings plus 6 selected Minor ones (a dead half of a filter resting on a false premise about which shipment statuses were actually reachable, wrong hint copy for a terminal shipment status, three Catalog table column-count mismatches, a silent-zero-on-clear input gap, missing non-empty guards on the newly-added Warehouse/Vendor edit forms, and one remaining bare-currency display the earlier currency task's simple `{amount} {currency}` pattern-match had missed). A scoped re-review confirmed all 8 addressed with no new breakage.
+
+## Final State (Stream K)
+
+- Test suite: 232 tests, 24 files (up from 227 at the end of Stream J: +2 reorder-point tests, +3 catalog-update tests). `pnpm check` clean throughout.
+- Every bounded Product (Jobs) item from Stream I's tracked list is now closed. Deferred (need their own design pass or real-data validation, not bounded fixes): Vendor/Warehouse archiving; recalibrating the 66/14-day reorder-point defaults against real Jello data once available (flagged by the final review as likely to read most of a normal ~60-90-day-cover catalog as at-risk); no audit trail on the 3 new catalog `update*` functions (consistent with this app's existing PO/shipment/payment-only audit scope).
+- This closes out the full three-lens follow-through the user ordered after Stream I: Operational (2026-09-20/21) → Engineering (Stream J, 2026-09-21) → Product (Stream K, 2026-09-21), each tier fully closed before the next began.
