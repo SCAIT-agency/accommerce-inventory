@@ -250,6 +250,23 @@ Precision chosen with headroom above every confirmed write precision:
 | `salesPlanWeeklyInputs.primaryPercent` | `decimal(7,4)` | A percent, 0-100. |
 | `salesPlanWeeklyRecipeLines.unitsPer1000` | `decimal(12,4)` | Units per €1,000 revenue — can exceed 100. |
 
+**Correction (2026-09-21, Backlog Stream L)**: the "headroom above every
+confirmed write precision" rule above is wrong — it measures headroom
+against what the codebase happened to write at the time, not against real
+source-data precision or the reconciliation tolerance that actually
+consumes these values. This under-scaled `poLineItems.unitPrice` (real
+Jello Sheet data carries up to 7 decimal places, not the 4dp any write site
+happened to use), then `inventoryLedger.unitCost`, then
+`shipmentLineItems.weightShare`/`valueShare` — three real reconciliation
+failures during Stream L's real-data dry-run, only caught because that
+stream re-validated against live data. All three are now `decimal(18,8)`/
+`decimal(9,8)` respectively, confirmed via measured margin against the
+`1e-6` R4 tolerance at real data magnitudes (≥58× for the landed-cost path,
+≥8.75× for the ledger money path), not against a write site. The rule for
+any future decimal column: size scale against the tolerance of whatever
+check consumes the value at real data magnitudes, never against "what the
+code currently happens to write."
+
 Not changed: `payments.currency`/`transactions.currency`/`shipments.costCurrency`
 (3-letter codes, correctly `varchar`), every non-numeric `varchar` (names,
 refs, emails).
