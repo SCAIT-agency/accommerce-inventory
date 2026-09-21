@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql, eq, and } from "drizzle-orm";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments, warehouses, users } from "../drizzle/schema";
-import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty } from "./shipments";
+import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost } from "./shipments";
 import { createSku, createVendor, createWarehouse, createUser } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { listChangeLog } from "./changeLog";
@@ -667,5 +667,196 @@ describe("shipments", () => {
     await expect(
       correctShipmentReceiptQty(shipment.id, lineItems[0].id, 10, { changedBy: userId, reasonNote: "test" }),
     ).rejects.toThrow(/no uncorrected receipt found/);
+  });
+
+  it("correctShipmentLandedCost recomputes and corrects landed cost for every line item after a freight/duty restatement", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container13",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    const result = await correctShipmentLandedCost(
+      shipment.id,
+      { freightCost: "1800.00" },
+      { changedBy: userId, reasonNote: "real freight invoice arrived, double the estimate" },
+    );
+
+    expect(result.corrections).toHaveLength(1);
+    const [updatedShipment] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(updatedShipment.freightCost).toBe("1800.0000");
+    // dutyCost wasn't passed — it must survive untouched, and still be
+    // allocated into the recomputed landed cost below.
+    expect(updatedShipment.dutyCost).toBe("100.0000");
+
+    const events = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, skuId));
+    const correctedReceipt = events.find((e) => e.id === result.corrections[0].correctedId)!;
+    // (90000 * 0.15 EXW + 1800 freight * 1.0 share + 100 duty * 1.0 share) / 90000
+    expect(parseFloat(correctedReceipt.unitCost ?? "0")).toBeCloseTo((90000 * 0.15 + 1800 + 100) / 90000, 4);
+    // A cost-only correction reverses and re-receives the same quantity.
+    expect(await getSoh(skuId, ffWarehouseId)).toBe(90000);
+
+    const history = await listChangeLog("shipment", shipment.id);
+    const freightEntry = history.find((h) => h.field === "freightCost" && h.reasonCategory === "data_correction");
+    expect(freightEntry).toBeDefined();
+    expect(freightEntry?.oldValue).toBe("900");
+    expect(freightEntry?.newValue).toBe("1800");
+    // dutyCost wasn't part of this restatement, so it must not be audited as
+    // one — only the fields actually passed are written and logged.
+    expect(history.some((h) => h.field === "dutyCost" && h.reasonCategory === "data_correction")).toBe(false);
+  });
+
+  it("correctShipmentLandedCost corrects every line item on a multi-line shipment, each with its own share", async () => {
+    const vendor = await createVendor({ name: "MBS Logistics" });
+    const sku1 = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const sku2 = await createSku({ sku: "JELLO-STRAW-100", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W5",
+      vendorId: vendor.id,
+      lineItems: [
+        { skuId: sku1.id, qty: 50000, unitPrice: "0.15", currency: "USD" },
+        { skuId: sku2.id, qty: 40000, unitPrice: "0.16", currency: "USD" },
+      ],
+      createdBy: userId,
+    });
+    const poWithItems = await getPurchaseOrderWithLineItemsHelper(po.id);
+    const poLine1 = poWithItems.lineItems.find((li) => li.skuId === sku1.id)!;
+    const poLine2 = poWithItems.lineItems.find((li) => li.skuId === sku2.id)!;
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W5-Container1",
+      warehouseId: ffWarehouseId,
+      lineItems: [
+        { poLineItemId: poLine1.id, skuId: sku1.id, qty: 50000, weightShare: "0.6", valueShare: "0.5" },
+        { poLineItemId: poLine2.id, skuId: sku2.id, qty: 40000, weightShare: "0.4", valueShare: "0.5" },
+      ],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    const result = await correctShipmentLandedCost(
+      shipment.id,
+      { freightCost: "1800.00", dutyCost: "200.00" },
+      { changedBy: userId, reasonNote: "final forwarder invoice and customs assessment" },
+    );
+
+    expect(result.corrections).toHaveLength(2);
+    const correctedIds = new Set(result.corrections.map((c) => c.correctedId));
+    const events = await db.select().from(inventoryLedger);
+    const corrected = events.filter((e) => correctedIds.has(e.id));
+    const forSku1 = corrected.find((e) => e.skuId === sku1.id)!;
+    const forSku2 = corrected.find((e) => e.skuId === sku2.id)!;
+    expect(parseFloat(forSku1.unitCost ?? "0")).toBeCloseTo((50000 * 0.15 + 1800 * 0.6 + 200 * 0.5) / 50000, 6);
+    expect(parseFloat(forSku2.unitCost ?? "0")).toBeCloseTo((40000 * 0.16 + 1800 * 0.4 + 200 * 0.5) / 40000, 6);
+    expect(await getSoh(sku1.id, ffWarehouseId)).toBe(50000);
+    expect(await getSoh(sku2.id, ffWarehouseId)).toBe(40000);
+  });
+
+  it("correctShipmentLandedCost corrects a line item that was already corrected once, via its replacement receipt", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container14",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    const { lineItems } = await getShipmentWithLineItems(shipment.id);
+    const qtyCorrection = await correctShipmentReceiptQty(shipment.id, lineItems[0].id, 89000, {
+      changedBy: userId,
+      reasonNote: "recount found 1000 short",
+    });
+
+    // The qty correction's replacement receipt carries a non-null
+    // correctsEventId but is the line item's current, still-correctable
+    // receipt — a landed-cost restatement must correct THAT one, not report
+    // "no uncorrected receipt found".
+    const result = await correctShipmentLandedCost(
+      shipment.id,
+      { dutyCost: "200.00" },
+      { changedBy: userId, reasonNote: "customs re-assessed the duty" },
+    );
+
+    expect(result.corrections).toHaveLength(1);
+    const [reversal] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.id, result.corrections[0].reversalId));
+    expect(reversal.correctsEventId).toBe(qtyCorrection.correctedId);
+    expect(reversal.qty).toBe(-89000);
+    const [correctedReceipt] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.id, result.corrections[0].correctedId));
+    // Qty carries over from the receipt being corrected (89000, not the
+    // original 90000); only the unit cost changes.
+    expect(correctedReceipt.qty).toBe(89000);
+    expect(parseFloat(correctedReceipt.unitCost ?? "0")).toBeCloseTo((90000 * 0.15 + 900 + 200) / 90000, 6);
+    expect(await getSoh(skuId, ffWarehouseId)).toBe(89000);
+  });
+
+  it("correctShipmentLandedCost rolls back entirely if one line item's correction fails", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container15",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    // A second line item added to the shipment AFTER it was delivered: it
+    // carries no ledger receipt, so correctShipmentLandedCost finds zero
+    // candidates for it and must fail the whole transaction. Zero freight/
+    // value shares keep the share sums at 1, so the recompute itself is valid
+    // and the failure is genuinely the missing receipt.
+    await db.insert(shipmentLineItems).values({
+      shipmentId: shipment.id,
+      poLineItemId: lineItemId,
+      skuId,
+      qty: 1000,
+      weightShare: "0",
+      valueShare: "0",
+    });
+
+    await expect(
+      correctShipmentLandedCost(shipment.id, { dutyCost: "200.00" }, { changedBy: userId, reasonNote: "test rollback" }),
+    ).rejects.toThrow(/no uncorrected receipt found/);
+
+    // freightCost/dutyCost on the shipments row must be unchanged — the
+    // update inside the failed transaction must have rolled back too.
+    const [unchangedShipment] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(unchangedShipment.dutyCost).toBe("100.0000");
+    expect(unchangedShipment.freightCost).toBe("900.0000");
+    // Nor may the audit trail or the ledger keep anything: whichever order the
+    // loop visited the two line items in, no correction rows survive.
+    const history = await listChangeLog("shipment", shipment.id);
+    expect(history.some((h) => h.reasonCategory === "data_correction")).toBe(false);
+    const events = await db.select().from(inventoryLedger);
+    expect(events).toHaveLength(1);
+    expect(events[0].eventType).toBe("receipt");
+    expect(events[0].correctsEventId).toBeNull();
+    expect(await getSoh(skuId, ffWarehouseId)).toBe(90000);
+  });
+
+  it("correctShipmentLandedCost refuses a call that restates no cost field at all", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container16",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    await expect(
+      correctShipmentLandedCost(shipment.id, {}, { changedBy: userId, reasonNote: "nothing to change" }),
+    ).rejects.toThrow(/no cost fields provided/);
+    // An explicit `undefined` is the same request as an empty object — it must
+    // not reach the UPDATE as a column-less write.
+    await expect(
+      correctShipmentLandedCost(shipment.id, { freightCost: undefined }, { changedBy: userId, reasonNote: "nothing to change" }),
+    ).rejects.toThrow(/no cost fields provided/);
+
+    await expect(
+      correctShipmentLandedCost(999999, { dutyCost: "10.00" }, { changedBy: userId, reasonNote: "no such shipment" }),
+    ).rejects.toThrow(/no shipment found with id 999999/);
   });
 });

@@ -365,7 +365,7 @@ async function findUncorrectedReceipt(
     ));
   const uncorrectedBySku = await filterUncorrected(tx, bySku);
   if (uncorrectedBySku.length === 0) {
-    throw new Error(`correctShipmentReceiptQty: no uncorrected receipt found for shipment ref ${shipmentRef} / line item ${lineItemId}`);
+    throw new Error(`findUncorrectedReceipt: no uncorrected receipt found for shipment ref ${shipmentRef} / line item ${lineItemId}`);
   }
   if (uncorrectedBySku.length > 1) {
     throw new Error(
@@ -404,5 +404,81 @@ export async function correctShipmentReceiptQty(
     }
     const receipt = await findUncorrectedReceipt(tx, shipment.shipmentRef, lineItemId, line.skuId);
     return correctLedgerReceipt(receipt.id, { qty: newQty }, opts, tx);
+  });
+}
+
+/**
+ * Restates a shipment's freight and/or duty cost and corrects every line
+ * item's receipt to the landed unit cost that recomputes from it.
+ *
+ * All-or-nothing across the whole shipment: the `shipments` row update, its
+ * change_log entries, and every line item's correction pair share one
+ * transaction, so a single line whose receipt is missing, ambiguous, already
+ * corrected, or whose reversal cannot replay rolls back the cost restatement
+ * too. A shipment is never left with a new freight cost on the row and stale
+ * landed costs in the ledger.
+ *
+ * Only the cost fields actually passed are written and audited, but the
+ * recompute always re-reads the whole row — so restating freight alone still
+ * yields a landed cost carrying the shipment's existing duty allocation.
+ */
+export async function correctShipmentLandedCost(
+  shipmentId: number,
+  costs: { freightCost?: string; dutyCost?: string },
+  opts: { changedBy: number; reasonNote: string; allowNegativeSoh?: boolean },
+): Promise<{ corrections: LedgerCorrectionResult[] }> {
+  // An explicit `undefined` is dropped rather than written: `{ freightCost:
+  // undefined }` is the same request as `{}` and must hit the same refusal,
+  // not reach the UPDATE as a column-less write.
+  const updates: { freightCost?: string; dutyCost?: string } = {};
+  if (costs.freightCost !== undefined) updates.freightCost = costs.freightCost;
+  if (costs.dutyCost !== undefined) updates.dutyCost = costs.dutyCost;
+  if (Object.keys(updates).length === 0) {
+    throw new Error("correctShipmentLandedCost: no cost fields provided to correct");
+  }
+
+  return db.transaction(async (tx) => {
+    const [before] = await tx.select().from(shipments).where(eq(shipments.id, shipmentId));
+    if (!before) {
+      throw new Error(`correctShipmentLandedCost: no shipment found with id ${shipmentId}`);
+    }
+    await tx.update(shipments).set(updates).where(eq(shipments.id, shipmentId));
+    if (updates.freightCost !== undefined) {
+      await logChange({
+        entityType: "shipment",
+        entityId: shipmentId,
+        field: "freightCost",
+        oldValue: normalizeDecimalForAudit(before.freightCost),
+        newValue: normalizeDecimalForAudit(updates.freightCost),
+        reasonCategory: "data_correction",
+        reasonNote: opts.reasonNote,
+        changedBy: opts.changedBy,
+      }, tx);
+    }
+    if (updates.dutyCost !== undefined) {
+      await logChange({
+        entityType: "shipment",
+        entityId: shipmentId,
+        field: "dutyCost",
+        oldValue: normalizeDecimalForAudit(before.dutyCost),
+        newValue: normalizeDecimalForAudit(updates.dutyCost),
+        reasonCategory: "data_correction",
+        reasonNote: opts.reasonNote,
+        changedBy: opts.changedBy,
+      }, tx);
+    }
+
+    // Reads back through `tx`, so it sees the restated costs above.
+    const landedCosts = await getShipmentLandedUnitCost(shipmentId, tx);
+    const corrections: LedgerCorrectionResult[] = [];
+    for (const lc of landedCosts) {
+      const receipt = await findUncorrectedReceipt(tx, before.shipmentRef, lc.lineItemId, lc.skuId);
+      // toFixed(8) matches both the ledger column's scale and the exact
+      // formatting markShipmentArrived writes, so a restatement that lands on
+      // the same cost is recognised as a no-op by correctLedgerReceipt rather
+      // than written as a cost-changing correction pair.
+      corrections.push(await correctLedgerReceipt(receipt.id, { unitCost: lc.landedUnitCost.toFixed(8) }, opts, tx));
+    }
+    return { corrections };
   });
 }

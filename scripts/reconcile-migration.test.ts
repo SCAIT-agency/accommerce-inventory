@@ -1,29 +1,44 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { db } from "../server/dbClient";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { skus, vendors, warehouses, purchaseOrders, poLineItems, shipments, shipmentLineItems, payments, transactions, inventoryLedger, salesActuals, salesPlan, changeLog, appSettings, users } from "../drizzle/schema";
 import { runMigration } from "./reconcile-migration";
 import { setAppSetting } from "../server/db";
 import { ALLOW_BACKORDERS_SETTING } from "../server/inventoryLedger";
 
 beforeEach(async () => {
-  await db.delete(changeLog);
-  await db.delete(appSettings);
-  await db.delete(salesActuals);
-  await db.delete(salesPlan);
-  await db.delete(inventoryLedger);
-  await db.delete(transactions);
-  await db.delete(payments);
-  await db.delete(shipmentLineItems);
-  await db.delete(shipments);
-  await db.delete(poLineItems);
-  await db.delete(purchaseOrders);
-  await db.delete(skus);
-  await db.delete(vendors);
-  await db.delete(warehouses);
-  // runMigration attributes migrated rows to a get-or-create system user
-  // (createdBy is a real FK now) — clean it up too so each test starts fresh.
-  await db.delete(users);
+  // Same order-independent reset the server-side suites use: real FKs tie
+  // these tables together, and inventory_ledger now carries a SELF-referencing
+  // FK (correctsEventId), so correction rows another file left behind can
+  // block a plain, FK-checked DELETE here regardless of file order.
+  //
+  // SET is session-scoped in MySQL and `db` is a pool — only a real
+  // db.transaction pins the toggle-off, the deletes, and the toggle-on to one
+  // connection.
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
+    try {
+      await tx.delete(changeLog);
+      await tx.delete(appSettings);
+      await tx.delete(salesActuals);
+      await tx.delete(salesPlan);
+      await tx.delete(inventoryLedger);
+      await tx.delete(transactions);
+      await tx.delete(payments);
+      await tx.delete(shipmentLineItems);
+      await tx.delete(shipments);
+      await tx.delete(poLineItems);
+      await tx.delete(purchaseOrders);
+      await tx.delete(skus);
+      await tx.delete(vendors);
+      await tx.delete(warehouses);
+      // runMigration attributes migrated rows to a get-or-create system user
+      // (createdBy is a real FK now) — clean it up too so each test starts fresh.
+      await tx.delete(users);
+    } finally {
+      await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
+    }
+  });
 });
 
 describe("runMigration (widened scope)", () => {
