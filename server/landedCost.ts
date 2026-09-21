@@ -1,5 +1,5 @@
 import { eq, inArray } from "drizzle-orm";
-import { db } from "./dbClient";
+import { db, type DbClient } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems } from "../drizzle/schema";
 
 /**
@@ -14,9 +14,10 @@ import { shipments, shipmentLineItems, poLineItems } from "../drizzle/schema";
  */
 export async function getShipmentLandedUnitCost(
   shipmentId: number,
+  dbClient: DbClient = db,
 ): Promise<{ lineItemId: number; skuId: number; landedUnitCost: number }[]> {
-  const [shipment] = await db.select().from(shipments).where(eq(shipments.id, shipmentId));
-  const lines = await db.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, shipmentId));
+  const [shipment] = await dbClient.select().from(shipments).where(eq(shipments.id, shipmentId));
+  const lines = await dbClient.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, shipmentId));
 
   const freightCost = parseFloat(shipment.freightCost ?? "0");
   const dutyCost = parseFloat(shipment.dutyCost ?? "0");
@@ -70,7 +71,7 @@ export async function getShipmentLandedUnitCost(
   const poLinesById = new Map(
     poLineIds.length === 0
       ? []
-      : (await db.select().from(poLineItems).where(inArray(poLineItems.id, poLineIds))).map((pl) => [pl.id, pl]),
+      : (await dbClient.select().from(poLineItems).where(inArray(poLineItems.id, poLineIds))).map((pl) => [pl.id, pl]),
   );
 
   const results = [];
@@ -103,4 +104,129 @@ export async function getShipmentLandedUnitCost(
     results.push({ lineItemId: line.id, skuId: line.skuId, landedUnitCost });
   }
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Single-pass FIFO daily series (Control Tower "Daily COGS" convention)
+// ---------------------------------------------------------------------------
+
+export interface LandedBatch {
+  qty: number;
+  unitCost: number;
+  date: Date;
+}
+
+export interface SaleEvent {
+  qty: number;
+  date: Date;
+}
+
+export interface DailyFifoRow {
+  /** YYYY-MM-DD (UTC calendar day) */
+  date: string;
+  /** Physical stock at the start of the day — only batches landed on an earlier day; never negative. */
+  openingQty: number;
+  /** FIFO value of openingQty. */
+  openingValue: number;
+  soldQty: number;
+  cogs: number;
+  /** Units sold this day that no batch (landed or not) can price. */
+  unpricedQty: number;
+  /** Net position: landed through this day − sold through this day. Negative = backorder. */
+  closingQty: number;
+}
+
+function utcDayKey(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+/**
+ * The Sheet's Daily COGS convention (buildDailyCogs in jello-sc-tables.gs, after
+ * the 2026-09-17 retroactive-pricing fix), expressed per batch b ranked by
+ * landing date (ties by input order), with cumRec_b = cumulative received
+ * through b:
+ *
+ *   remStart_b(d) = clamp(cumRec_b − soldBefore(d), 0, qty_b)
+ *   remEnd_b(d)   = clamp(cumRec_b − soldThrough(d), 0, qty_b)
+ *   opening(d)    = Σ_{b landed before d} remStart_b(d)             (landing-gated)
+ *   cogs(d)       = Σ_{all b} (remStart_b(d) − remEnd_b(d)) × cost_b  (ungated: retroactive)
+ *
+ * A batch landing on day d is available from d+1 (matches StockModel's
+ * IN-on-day-r → Stock[r+1]). A sale before any batch has landed is a backorder:
+ * physically absent from opening stock, but priced from the batch that later
+ * covers it. `unpricedQty` is non-zero only when sales exceed everything ever
+ * received. Batches are a snapshot: receipts dated after `to` still rank.
+ *
+ * O(batches × days) per SKU/warehouse with cumulative sums precomputed.
+ */
+export function computeFifoDailySeries(
+  receipts: LandedBatch[],
+  sales: SaleEvent[],
+  from: Date,
+  to: Date,
+): DailyFifoRow[] {
+  const batches = receipts
+    .map((r, idx) => ({ qty: r.qty, unitCost: r.unitCost, day: utcDayKey(r.date), idx }))
+    .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.idx - b.idx));
+  const cumRec: number[] = [];
+  let running = 0;
+  for (const b of batches) {
+    running += b.qty;
+    cumRec.push(running);
+  }
+
+  const soldByDay = new Map<string, number>();
+  for (const s of sales) {
+    const key = utcDayKey(s.date);
+    soldByDay.set(key, (soldByDay.get(key) ?? 0) + s.qty);
+  }
+
+  const fromKey = utcDayKey(from);
+  const toKey = utcDayKey(to);
+  let soldBefore = 0;
+  for (const [key, qty] of soldByDay) if (key < fromKey) soldBefore += qty;
+
+  const rows: DailyFifoRow[] = [];
+  const cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
+  while (utcDayKey(cursor) <= toKey) {
+    const key = utcDayKey(cursor);
+    const soldToday = soldByDay.get(key) ?? 0;
+    const soldThrough = soldBefore + soldToday;
+
+    let openingQty = 0;
+    let openingValue = 0;
+    let cogs = 0;
+    let priced = 0;
+    let landedThrough = 0;
+    for (let i = 0; i < batches.length; i++) {
+      const b = batches[i];
+      const remStart = clamp(cumRec[i] - soldBefore, 0, b.qty);
+      const remEnd = clamp(cumRec[i] - soldThrough, 0, b.qty);
+      const consumed = remStart - remEnd;
+      cogs += consumed * b.unitCost;
+      priced += consumed;
+      if (b.day < key) {
+        openingQty += remStart;
+        openingValue += remStart * b.unitCost;
+      }
+      if (b.day <= key) landedThrough += b.qty;
+    }
+
+    rows.push({
+      date: key,
+      openingQty,
+      openingValue,
+      soldQty: soldToday,
+      cogs,
+      unpricedQty: soldToday - priced,
+      closingQty: landedThrough - soldThrough,
+    });
+    soldBefore = soldThrough;
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return rows;
 }
