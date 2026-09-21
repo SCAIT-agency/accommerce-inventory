@@ -34,12 +34,15 @@ export async function createSalesPlanEntry(
   return row;
 }
 
-export async function recordSalesActual(input: RecordSalesActualInput): Promise<void> {
+export async function recordSalesActual(input: RecordSalesActualInput, dbClient: DbClient = db): Promise<void> {
   // Both writes must land or neither does — recordLedgerEvent can now throw
   // (negative-stock guard), and an unguarded sequential write would leave a
   // sales_actuals row with no matching ledger event, breaking the
-  // ledger-as-single-source-of-truth invariant silently.
-  await db.transaction(async (tx) => {
+  // ledger-as-single-source-of-truth invariant silently. A caller already
+  // inside a transaction (e.g. the Control Tower migration) passes its
+  // client and the pair joins that transaction instead of opening a nested
+  // one.
+  const write = async (tx: DbClient) => {
     await tx.insert(salesActuals).values(input);
     await recordLedgerEvent(
       {
@@ -56,7 +59,12 @@ export async function recordSalesActual(input: RecordSalesActualInput): Promise<
       },
       tx,
     );
-  });
+  };
+  if (dbClient === db) {
+    await db.transaction(write);
+  } else {
+    await write(dbClient);
+  }
 }
 
 export async function getSalesVolatility(skuId: number, warehouseId: number, weeks: number): Promise<number> {
