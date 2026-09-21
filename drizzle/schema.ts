@@ -173,8 +173,8 @@ export const shipmentLineItems = mysqlTable("shipment_line_items", {
   poLineItemId: int("poLineItemId").notNull().references(() => poLineItems.id),
   skuId: int("skuId").notNull().references(() => skus.id),
   qty: int("qty").notNull(),
-  weightShare: decimal("weightShare", { precision: 9, scale: 6, mode: "string" }).notNull(),
-  valueShare: decimal("valueShare", { precision: 9, scale: 6, mode: "string" }).notNull(),
+  weightShare: decimal("weightShare", { precision: 9, scale: 8, mode: "string" }).notNull(),
+  valueShare: decimal("valueShare", { precision: 9, scale: 8, mode: "string" }).notNull(),
 });
 export type ShipmentLineItem = typeof shipmentLineItems.$inferSelect;
 

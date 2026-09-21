@@ -225,8 +225,8 @@ describe("shipments", () => {
 
   it("sheetSplitShares applies only when every line carries the Sheet's split", () => {
     expect(sheetSplitShares([{ freight: 75, duty: 10 }, { freight: 25, duty: 30 }])).toEqual([
-      { weightShare: "0.750000", valueShare: "0.250000" },
-      { weightShare: "0.250000", valueShare: "0.750000" },
+      { weightShare: "0.75000000", valueShare: "0.25000000" },
+      { weightShare: "0.25000000", valueShare: "0.75000000" },
     ]);
     expect(sheetSplitShares([{ freight: 75, duty: 10 }, { freight: null, duty: 30 }])).toBeNull();
     expect(sheetSplitShares([{ freight: 75, duty: 10 }])).toBeNull();
@@ -238,8 +238,8 @@ describe("shipments", () => {
       { sku: "B", qty: 100, kgPerUnit: 0.3, unitPrice: 1 },
     ]);
     expect(shares).toEqual([
-      { weightShare: "0.250000", valueShare: "0.666667" },
-      { weightShare: "0.750000", valueShare: "0.333333" },
+      { weightShare: "0.25000000", valueShare: "0.66666667" },
+      { weightShare: "0.75000000", valueShare: "0.33333333" },
     ]);
   });
 });

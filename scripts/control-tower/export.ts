@@ -257,7 +257,8 @@ interface ShipmentLine {
  * Pooled-container allocation shares. A single-line shipment gets 1/1. A
  * multi-line one splits freight by gross weight (SKU Master carton kg ÷ units
  * per carton) and duty by value (PO line price × qty), both normalised to sum
- * to 1 and printed at 6 dp — the shipment_line_items columns are varchar(16).
+ * to 1 and printed at 8 dp — the shipment_line_items columns are
+ * decimal(9,8) (always a 0-1 fraction, so 1 integer digit is enough headroom).
  */
 export function computeShares(lines: ShipmentLine[]): { weightShare: string; valueShare: string }[] {
   if (lines.length === 1) return [{ weightShare: "1", valueShare: "1" }];
@@ -266,8 +267,8 @@ export function computeShares(lines: ShipmentLine[]): { weightShare: string; val
   const wTotal = weights.reduce((a, b) => a + b, 0);
   const vTotal = values.reduce((a, b) => a + b, 0);
   return lines.map((_, i) => ({
-    weightShare: (wTotal > 0 ? weights[i] / wTotal : 1 / lines.length).toFixed(6),
-    valueShare: (vTotal > 0 ? values[i] / vTotal : 1 / lines.length).toFixed(6),
+    weightShare: (wTotal > 0 ? weights[i] / wTotal : 1 / lines.length).toFixed(8),
+    valueShare: (vTotal > 0 ? values[i] / vTotal : 1 / lines.length).toFixed(8),
   }));
 }
 
@@ -299,7 +300,7 @@ export function sheetSplitShares(lines: { freight: number | null; duty: number |
   const freightTotal = lines.reduce((a, l) => a + l.freight!, 0);
   const dutyTotal = lines.reduce((a, l) => a + l.duty!, 0);
   if (freightTotal <= 0 || dutyTotal <= 0) return null;
-  return lines.map((l) => ({ weightShare: (l.freight! / freightTotal).toFixed(6), valueShare: (l.duty! / dutyTotal).toFixed(6) }));
+  return lines.map((l) => ({ weightShare: (l.freight! / freightTotal).toFixed(8), valueShare: (l.duty! / dutyTotal).toFixed(8) }));
 }
 
 /**

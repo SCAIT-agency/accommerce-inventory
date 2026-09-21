@@ -72,7 +72,7 @@ describe("shipments", () => {
       createdBy: userId,
     });
     const withItems = await getShipmentWithLineItems(shipment.id);
-    expect(withItems.lineItems[0].weightShare).toBe("0.500000");
+    expect(withItems.lineItems[0].weightShare).toBe("0.50000000");
   });
 
   it("records freight/duty cost on a shipment for later per-line landed-cost allocation", async () => {

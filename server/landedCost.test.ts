@@ -262,7 +262,7 @@ describe("getShipmentLandedUnitCost", () => {
   });
 
   it("rejects a weightShare/valueShare that's a valid decimal but out of the [0,1] range, via the app-level guard", async () => {
-    // decimal(9,6) happily stores an out-of-range value like 1.5 or -0.5 —
+    // decimal(9,8) happily stores an out-of-range value like 1.5 or -0.5 —
     // only the non-numeric half of the original guard became unreachable
     // after the varchar->decimal migration (see test above). The range half
     // is still live app logic in getShipmentLandedUnitCost and needs its own
@@ -286,7 +286,7 @@ describe("getShipmentLandedUnitCost", () => {
     const shipment = await createShipment({
       shipmentRef: "PO1-W4-Container5",
       warehouseId: ff.id,
-      // weightShare 1.5 is a perfectly valid decimal(9,6) value (so the
+      // weightShare 1.5 is a perfectly valid decimal(9,8) value (so the
       // schema won't reject it), but out of the [0,1] range the app-level
       // guard requires — this must be caught by getShipmentLandedUnitCost's
       // own validation, not the schema. The rest of the shares are left not

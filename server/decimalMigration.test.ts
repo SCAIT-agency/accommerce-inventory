@@ -54,6 +54,10 @@ describe("decimal column migration round-trips every value at its real precision
   });
 
   it("shipment weightShare/valueShare survive a real createShipment write exactly", async () => {
+    // Column widened decimal(9,6) -> decimal(9,8) (2026-09-21): 6dp still
+    // truncated real fractional shares closely enough to exceed the R4
+    // landed-cost reconciliation tolerance (1e-6) on real pooled-container
+    // volumes. This asserts the new column's full scale, not the old 6dp one.
     const user = await createUser({ email: "decimal-migration-test-2@accommerce.example", role: "editor" });
     const vendor = await createVendor({ name: "Test Vendor" });
     const po = await createPurchaseOrder({ poNumber: "PO-DECIMAL-TEST-2", vendorId: vendor.id, lineItems: [], createdBy: user.id });
@@ -62,10 +66,10 @@ describe("decimal column migration round-trips every value at its real precision
     const [poLine] = await db.insert(poLineItems).values({ poId: po.id, skuId: sku.id, qty: 100, unitPrice: "1.2346", currency: "USD" });
     const shipment = await createShipment({
       shipmentRef: "SHIP-DECIMAL-TEST", warehouseId: wh.id, createdBy: user.id,
-      lineItems: [{ poLineItemId: poLine.insertId, skuId: sku.id, qty: 100, weightShare: "0.333333", valueShare: "0.666667" }],
+      lineItems: [{ poLineItemId: poLine.insertId, skuId: sku.id, qty: 100, weightShare: "0.33333333", valueShare: "0.66666667" }],
     });
     const [line] = await db.select().from(shipmentLineItems).where(sql`${shipmentLineItems.shipmentId} = ${shipment.id}`);
-    expect(line.weightShare).toBe("0.333333");
-    expect(line.valueShare).toBe("0.666667");
+    expect(line.weightShare).toBe("0.33333333");
+    expect(line.valueShare).toBe("0.66666667");
   });
 });
