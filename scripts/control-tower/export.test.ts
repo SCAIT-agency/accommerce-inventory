@@ -143,6 +143,13 @@ describe("shipments", () => {
     expect(platformShipmentRef("PO1-Wave4-Container1 WAE2026071000047", ["Jello", "Mixer", "Straw"])).toBe("PO1-Wave4-Container1 WAE2026071000047");
     expect(platformShipmentRef("PO1-Wave1-Jello", ["Jello", "Mixer", "Straw"])).toBe("PO1-Wave1-Jello");
     expect(platformShipmentRef("PO1-Wave4-Container2-Nope", ["Jello", "Mixer", "Straw"])).toBe("PO1-Wave4-Container2-Nope");
+    // The second argument must be the SKU(s) actually present on the row, not
+    // the full catalog — a ref whose suffix is a valid catalog SKU that just
+    // isn't present on THIS row must not be treated as pooled (bug fixed
+    // 2026-09-21: this call used to receive the whole catalog, so a row
+    // named "...Container5-Straw" whose only filled qty column was Mixer got
+    // silently pooled with the real Container5-Mixer/-Straw rows).
+    expect(platformShipmentRef("PO1-Wave4-Container2-Straw", ["Mixer"])).toBe("PO1-Wave4-Container2-Straw");
 
     const { rows } = exportShipments(snap);
     const c2 = rows.filter((r) => r.shipment_ref.startsWith("PO1-Wave4-Container2-"));
@@ -172,6 +179,48 @@ describe("shipments", () => {
     expect(pooled.lineItems.map((li) => li.sku).sort()).toEqual(["Jello", "Mixer", "Straw"]);
     expect(pooled.lineItems.reduce((a, li) => a + parseFloat(li.weightShare), 0)).toBeCloseTo(1, 5);
     expect(pooled.lineItems.reduce((a, li) => a + parseFloat(li.valueShare), 0)).toBeCloseTo(1, 5);
+  });
+
+  it("does not pool two unrelated rows just because a fabricated Container ref's suffix happens to be a valid catalog SKU — it must be that row's own present SKU", () => {
+    // Two real, independent single-SKU Mixer shipments. Renamed so their raw
+    // refs share a Container-N prefix but the SECOND row's suffix names a
+    // SKU ("Straw") that is a real catalog SKU yet is NOT what this row
+    // actually carries (only "Mixer Qty" is filled on it) — the exact
+    // failure scenario from the 2026-09-21 bug: export.ts used to pool this
+    // with the first row purely because "Straw" is some valid SKU, mirroring
+    // the mismatch onto both rows' freight/duty totals and shares even
+    // though migrate-from-sheet.ts would (correctly) keep the row standalone
+    // once it reached its own per-row `sku` check.
+    const shipIdx = snap.shipments.header.indexOf("Shipment ID");
+    const renameRef = (rows: string[][], oldRef: string, newRef: string) =>
+      rows.map((r) => (r[shipIdx] === oldRef ? r.map((v, i) => (i === shipIdx ? newRef : v)) : r));
+    let rows = snap.shipments.rows;
+    rows = renameRef(rows, "PO1-Wave1-Mixer", "TestGroup-Container9-Mixer");
+    rows = renameRef(rows, "PO1-Wave2-Mixer", "TestGroup-Container9-Straw");
+    const mutated = { ...snap, shipments: { ...snap.shipments, rows } };
+
+    const { rows: out } = exportShipments(mutated);
+    const g1 = out.find((r) => r.shipment_ref === "TestGroup-Container9-Mixer")!;
+    const g2 = out.find((r) => r.shipment_ref === "TestGroup-Container9-Straw")!;
+    expect(g1).toBeDefined();
+    expect(g2).toBeDefined();
+
+    // Each stays a standalone (1-line) shipment — not merged into one pooled
+    // group — so both keep whole (1/1) shares, not a fractional split.
+    expect(g1.weight_share).toBe("1");
+    expect(g1.value_share).toBe("1");
+    expect(g2.weight_share).toBe("1");
+    expect(g2.value_share).toBe("1");
+
+    // And each keeps its OWN freight/duty — not summed with the other row's,
+    // which is what pooling them would have done.
+    const original = exportShipments(snap).rows;
+    const origWave1 = original.find((r) => r.shipment_ref === "PO1-Wave1-Mixer")!;
+    const origWave2 = original.find((r) => r.shipment_ref === "PO1-Wave2-Mixer")!;
+    expect(g1.freight_cost).toBe(origWave1.freight_cost);
+    expect(g1.duty_cost).toBe(origWave1.duty_cost);
+    expect(g2.freight_cost).toBe(origWave2.freight_cost);
+    expect(g2.duty_cost).toBe(origWave2.duty_cost);
   });
 
   it("sheetSplitShares applies only when every line carries the Sheet's split", () => {

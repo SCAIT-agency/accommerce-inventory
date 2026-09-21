@@ -152,7 +152,7 @@ export function exportShipmentPayments(snap: ControlTowerSnapshot): PaymentSheet
   const rows: PaymentSheetRow[] = [];
   const groups = new Map<string, string[][]>();
   for (const r of tab.rows) {
-    const ref = platformShipmentRef(cell(tab, r, "Shipment ID"), skus);
+    const ref = platformShipmentRef(cell(tab, r, "Shipment ID"), presentSkusOnRow(tab, r, skus));
     groups.set(ref, [...(groups.get(ref) ?? []), r]);
   }
   for (const group of groups.values()) {
@@ -203,9 +203,31 @@ export function exportShipmentPayments(snap: ControlTowerSnapshot): PaymentSheet
  */
 export const POOLED_SHIPMENT_PATTERN = /^(.*Container\d+)-(.+)$/;
 
-export function platformShipmentRef(sheetRef: string, skus: readonly string[]): string {
+/**
+ * `presentSkus` must be the SKU(s) actually present on the row the ref came
+ * from (a non-null, non-zero `<SKU> Qty` cell for a raw Shipments row, or the
+ * row's own `sku` for an already-SKU-scoped row like a Landed Cost Summary
+ * line) — NOT the full SKU catalog. migrate-from-sheet.ts's own
+ * platformShipmentRef checks the suffix against one row's own `sku`; this is
+ * the equivalent check for a raw (pre-SKU-split) row that can carry several
+ * SKUs' qty columns at once. Passing the full catalog here would treat a ref
+ * like "...Container5-Straw" as pooled merely because "Straw" is a valid SKU
+ * somewhere, even when this particular row's own qty column is for a
+ * different SKU — silently pooling rows that don't belong together and
+ * mis-attributing freight/duty cost (see the R4 landed-cost regression this
+ * function's divergence from migrate-from-sheet.ts caused, 2026-09-21).
+ */
+export function platformShipmentRef(sheetRef: string, presentSkus: readonly string[]): string {
   const m = POOLED_SHIPMENT_PATTERN.exec(sheetRef);
-  return m && skus.includes(m[2]) ? m[1] : sheetRef;
+  return m && presentSkus.includes(m[2]) ? m[1] : sheetRef;
+}
+
+/** SKUs with a non-null, non-zero `<SKU> Qty` cell on this specific raw Shipments row — see platformShipmentRef above. */
+function presentSkusOnRow(tab: ControlTowerSnapshot["shipments"], r: string[], skus: readonly string[]): string[] {
+  return skus.filter((sku) => {
+    const qty = num(tab, r, `${sku} Qty`);
+    return qty !== null && qty !== 0;
+  });
 }
 
 // --- Shipments ----------------------------------------------------------------
@@ -300,7 +322,7 @@ export function exportShipments(snap: ControlTowerSnapshot): { rows: ShipmentShe
 
   const shareGroups = new Map<string, string[][]>();
   for (const r of tab.rows) {
-    const ref = platformShipmentRef(cell(tab, r, "Shipment ID"), skus);
+    const ref = platformShipmentRef(cell(tab, r, "Shipment ID"), presentSkusOnRow(tab, r, skus));
     shareGroups.set(ref, [...(shareGroups.get(ref) ?? []), r]);
   }
 
@@ -384,14 +406,15 @@ function sumFreight(tab: ControlTowerSnapshot["shipments"], r: string[]): number
 export function exportLedgerReceipts(snap: ControlTowerSnapshot): { rows: SheetExportRow[]; issues: ExportIssue[] } {
   const costByLine = new Map(readLandedCostTarget(snap).map((t) => [`${t.shipmentRef}::${t.sku}`, t.landedCost]));
   const tab = snap.shipments;
+  const skus = skuCodes(snap);
   const rows: SheetExportRow[] = [];
   const issues: ExportIssue[] = [];
   for (const r of tab.rows) {
     const landed = normalizeDate(cell(tab, r, "Actual Arrival Date"));
     if (!landed) continue;
     const ref = cell(tab, r, "Shipment ID");
-    const platformRef = platformShipmentRef(ref, skuCodes(snap));
-    for (const sku of skuCodes(snap)) {
+    const platformRef = platformShipmentRef(ref, presentSkusOnRow(tab, r, skus));
+    for (const sku of skus) {
       const qty = num(tab, r, `${sku} Qty`);
       if (qty === null || qty === 0) continue;
       const cost = costByLine.get(`${ref}::${sku}`);
@@ -414,8 +437,9 @@ export function exportLedgerReceipts(snap: ControlTowerSnapshot): { rows: SheetE
 }
 
 export function exportLandedCostTotals(snap: ControlTowerSnapshot): LandedCostTotal[] {
-  const skus = skuCodes(snap);
-  return readLandedCostTarget(snap).map((t) => ({ shipmentRef: platformShipmentRef(t.shipmentRef, skus), sku: t.sku, landedCostFromSheet: t.landedCost }));
+  // Each Landed Cost Summary row is already scoped to one SKU (t.sku), so the
+  // presence check is exact — same as migrate-from-sheet.ts's own per-row check.
+  return readLandedCostTarget(snap).map((t) => ({ shipmentRef: platformShipmentRef(t.shipmentRef, [t.sku]), sku: t.sku, landedCostFromSheet: t.landedCost }));
 }
 
 // --- Sales, plan, transactions, totals -----------------------------------------

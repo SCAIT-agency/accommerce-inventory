@@ -174,10 +174,13 @@ export async function reconcile(input: ReconcileInput, deps: ReconcileDeps, clas
 
   // R4 — landed cost per shipment line (and the line's qty, which the Sheet's
   // Landed Cost Summary restates from Shipments and can disagree with)
-  const skus = skuCodes(snap);
   for (const fact of readLandedCostTarget(snap)) {
     checked.R4++;
-    const platformRef = platformShipmentRef(fact.shipmentRef, skus);
+    // Each Landed Cost Summary row is already scoped to one SKU (fact.sku),
+    // so the pooled-ref suffix check is exact — same as migrate-from-sheet.ts's
+    // own per-row check, not "any SKU in the catalog" (see export.ts's
+    // platformShipmentRef doc for the bug that loose check caused).
+    const platformRef = platformShipmentRef(fact.shipmentRef, [fact.sku]);
     const platform = await deps.getLandedCost(platformRef, fact.sku);
     if (numbersDiffer(fact.landedCost, platform, TOLERANCE.landedCost)) {
       add("R4", `${fact.shipmentRef} / ${fact.sku}`, fact.landedCost, Number.isFinite(platform) ? platform : null, Number.isFinite(platform) ? platform - fact.landedCost : undefined);
