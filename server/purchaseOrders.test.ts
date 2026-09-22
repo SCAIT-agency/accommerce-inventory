@@ -131,4 +131,8 @@ describe("purchase orders", () => {
       updatePurchaseOrderPlannedReadyDate(999999, "2026-10-01", { reasonCategory: "logistics_delay", changedBy: userId }),
     ).rejects.toThrow(/no purchase order found/);
   });
+
+  it("rejects getPurchaseOrderWithLineItems for a nonexistent purchase order with a clear error", async () => {
+    await expect(getPurchaseOrderWithLineItems(999999)).rejects.toThrow(/no purchase order found with id 999999/);
+  });
 });

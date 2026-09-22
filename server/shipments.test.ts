@@ -254,6 +254,10 @@ describe("shipments", () => {
     ).rejects.toThrow(/no shipment found/);
   });
 
+  it("getShipmentWithLineItems rejects a nonexistent shipment id with a clear error instead of returning a silent empty-shaped object", async () => {
+    await expect(getShipmentWithLineItems(999999)).rejects.toThrow(/no shipment found with id 999999/);
+  });
+
   it("rejects an invalid shipment status transition", async () => {
     const shipment = await createShipment({ shipmentRef: "PO1-W4-Container2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
     await expect(updateShipmentStatus(shipment.id, "customs", { changedBy: userId })).rejects.toThrow(/invalid transition/);

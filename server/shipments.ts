@@ -54,6 +54,9 @@ export async function listShipments() {
 
 export async function getShipmentWithLineItems(id: number) {
   const [shipment] = await db.select().from(shipments).where(eq(shipments.id, id));
+  if (!shipment) {
+    throw new Error(`getShipmentWithLineItems: no shipment found with id ${id}`);
+  }
   const lineItems = await db.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, id));
   return { ...shipment, lineItems };
 }

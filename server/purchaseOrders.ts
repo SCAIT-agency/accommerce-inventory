@@ -41,6 +41,9 @@ export async function createPurchaseOrder(input: CreatePoInput, dbClient: DbClie
 
 export async function getPurchaseOrderWithLineItems(id: number, dbClient: DbClient = db) {
   const [po] = await dbClient.select().from(purchaseOrders).where(eq(purchaseOrders.id, id));
+  if (!po) {
+    throw new Error(`getPurchaseOrderWithLineItems: no purchase order found with id ${id}`);
+  }
   // Explicit ORDER BY: callers (e.g. migration) zip this array against the
   // original transform-order line items by index — insertion-order return
   // with no ORDER BY is a MySQL convention, not a guarantee.
