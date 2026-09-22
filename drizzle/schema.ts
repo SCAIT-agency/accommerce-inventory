@@ -1,6 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 import { date, decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, index, unique, foreignKey, type AnyMySqlColumn } from "drizzle-orm/mysql-core";
-import { REASON_CATEGORIES } from "../shared/constants";
+import { REASON_CATEGORIES, SKU_IDENTIFIER_TYPES } from "../shared/constants";
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -21,7 +21,10 @@ export const appSettings = mysqlTable("app_settings", {
 });
 export type AppSetting = typeof appSettings.$inferSelect;
 
-export const SKU_IDENTIFIER_TYPES = ["sku", "ssku", "asin", "ean", "fnsku", "name"] as const;
+// Single source of truth is shared/constants.ts — re-exported here so
+// existing server imports of SKU_IDENTIFIER_TYPES from this schema module
+// keep working unchanged.
+export { SKU_IDENTIFIER_TYPES };
 
 export const skus = mysqlTable(
   "skus",

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { trpc } from "../lib/trpc";
-import { SKU_IDENTIFIER_TYPES } from "../../../drizzle/schema";
+import { SKU_IDENTIFIER_TYPES } from "../../../shared/constants";
 
 // The 4 non-sku/non-name identifier types have no dedicated field on this
 // form — sku/name double as free reference fields for those, and this one
