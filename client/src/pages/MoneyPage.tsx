@@ -120,10 +120,10 @@ export function MoneyPage() {
           <div>Failed to compute landed cost: {data.landedCostError}</div>
         ) : (
           <table>
-            <thead><tr><th>SKU</th><th>Landed unit cost</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Line item</th><th>Landed unit cost</th></tr></thead>
             <tbody>
               {data.landedCost.map((row) => (
-                <tr key={row.skuId}><td>{skuLabel(skusById.get(row.skuId) ?? { id: row.skuId })}</td><td>{row.landedUnitCost.toFixed(4)}</td></tr>
+                <tr key={row.lineItemId}><td>{skuLabel(skusById.get(row.skuId) ?? { id: row.skuId })}</td><td>{row.lineItemId}</td><td>{row.landedUnitCost.toFixed(4)}</td></tr>
               ))}
             </tbody>
           </table>

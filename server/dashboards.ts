@@ -143,7 +143,7 @@ export async function getMoneyDashboard(
     }
   }
 
-  let landedCost: { skuId: number; landedUnitCost: number }[] = [];
+  let landedCost: { lineItemId: number; skuId: number; landedUnitCost: number }[] = [];
   let landedCostError: string | null = null;
   if (opts?.shipmentId) {
     try {

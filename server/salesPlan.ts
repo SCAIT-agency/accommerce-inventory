@@ -200,6 +200,17 @@ export async function regenerateSalesPlanForWeek(weekStartDate: string, dbClient
   for (const date of weekDates) {
     for (const line of recipeLines) {
       const rawUnits = (dailyRevenue / 1000) * parseFloat(line.unitsPer1000);
+      // dailyRevenue is a flat 1/7 split of the week, not a real per-day
+      // forecast, so rawUnits is the SAME value on all 7 days for a given
+      // SKU -- rounding it independently each day doesn't average out the
+      // way per-day noise normally would, since the same fractional
+      // remainder rounds the same way every time. The week's summed
+      // plannedQty can therefore drift from the mathematically exact weekly
+      // total (revenue/1000 * unitsPer1000) by more than a single unit.
+      // Accepted by design: the spec's largest-remainder allocation rule
+      // (see the primary/secondary split below) covers only the warehouse
+      // split, not this day split. If someone reports "the week's planned
+      // quantities don't sum to what I typed," this is why.
       const totalUnitsRounded = Math.round(rawUnits);
       const primaryUnits = Math.round(totalUnitsRounded * primaryPct);
       const secondaryUnits = totalUnitsRounded - primaryUnits;

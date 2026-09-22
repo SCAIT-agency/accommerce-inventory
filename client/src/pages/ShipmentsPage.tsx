@@ -316,6 +316,7 @@ function CustomsArrivalControl({ shipment, onUpdated }: { shipment: ShipmentList
       </button>
       {shipment.status !== "customs" && shipment.status !== "delivered" && <p>Available once the shipment has reached customs.</p>}
       {shipment.status === "customs" && !costsRecorded && <p>Available once freight/duty costs are recorded.</p>}
+      {shipment.status === "delivered" && <p>Already arrived — arrival date saved, "Save arrival date" is disabled.</p>}
       {(setCustomsStatus.error ?? markArrived.error) && <div>Failed to save: {(setCustomsStatus.error ?? markArrived.error)!.message}</div>}
     </div>
   );
