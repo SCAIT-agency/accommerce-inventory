@@ -372,28 +372,17 @@ function DepartDateCorrectionControl({ shipment, onUpdated }: { shipment: Shipme
   );
 }
 
-// Only meaningful once a receipt has actually been written to the ledger
-// (shipment.status === "delivered") — before that, there is nothing to
-// correct. No reasonCategory here at all, per the design's Global Constraint
-// for this whole stream: every correction is "data_correction" by
-// construction, server-side. Copy stays neutral ("Correct quantity",
-// "Correct cost restated"), never "Fix"/"mistake"/"wrong".
-//
-// correctLandedCost skips (does not fail on) a line whose recomputed cost is
-// unchanged — lastCostResult reports "N of M" honestly rather than implying
-// every line was touched.
-//
-// Either mutation can be refused for a reason allowNegativeSoh:true legitimately
-// overrides — either correctLedgerReceipt's own FIFO-replayability self-check
-// ("...pass allowNegativeSoh to record the correction anyway") or the earlier,
-// more commonly-hit negative-stock guard on the reversal write itself
-// ("...would drive SOH negative..."), which the same flag bypasses but never
-// names in its own message. Matched by message text (both procedures throw
-// plain Errors, no typed error here) against /allowNegativeSoh/i OR
-// /drive SOH negative/i — surfaced as a distinct "Force this correction
-// anyway" button that resubmits the exact same payload with
-// allowNegativeSoh: true. Never shown by default, only after a refusal
-// matching one of those patterns.
+// Shared across every control whose mutation can be refused for a reason
+// allowNegativeSoh:true legitimately overrides — either correctLedgerReceipt's
+// own FIFO-replayability self-check ("...pass allowNegativeSoh to record the
+// correction anyway") or the earlier, more commonly-hit negative-stock guard
+// on the reversal write itself ("...would drive SOH negative..."), which the
+// same flag bypasses but never names in its own message. Matched by message
+// text (these procedures throw plain Errors, no typed error here) against
+// /allowNegativeSoh/i OR /drive SOH negative/i — callers surface a distinct
+// "Force this correction anyway" button that resubmits the exact same
+// payload with allowNegativeSoh: true. Never shown by default, only after a
+// refusal matching one of those patterns.
 //
 // Deliberately NOT a bare /negative/i: the router's own Zod validation on
 // freightCost/dutyCost/amount/fxRate (server/routers.ts's
@@ -404,6 +393,20 @@ function DepartDateCorrectionControl({ shipment, onUpdated }: { shipment: Shipme
 // inconsistency warning) for a typo instead of a real stock-integrity
 // refusal. /drive SOH negative/i matches only recordLedgerEvent's actual
 // refusal text.
+function needsForceBypass(error: { message: string } | null | undefined): boolean {
+  return error != null && (/allowNegativeSoh/i.test(error.message) || /drive SOH negative/i.test(error.message));
+}
+
+// Only meaningful once a receipt has actually been written to the ledger
+// (shipment.status === "delivered") — before that, there is nothing to
+// correct. No reasonCategory here at all, per the design's Global Constraint
+// for this whole stream: every correction is "data_correction" by
+// construction, server-side. Copy stays neutral ("Correct quantity",
+// "Correct cost restated"), never "Fix"/"mistake"/"wrong".
+//
+// correctLandedCost skips (does not fail on) a line whose recomputed cost is
+// unchanged — lastCostResult reports "N of M" honestly rather than implying
+// every line was touched.
 function CorrectReceiptControl({
   shipment,
   lineItems,
@@ -434,27 +437,12 @@ function CorrectReceiptControl({
   const canCorrectCost = costsChanged && form.reasonNote.trim().length > 0;
 
   // Present only after a refusal whose message names this escape hatch OR
-  // describes the negative-stock condition it exists to bypass —
-  // allowNegativeSoh is threaded through both correctLedgerReceipt's own
-  // FIFO-replayability self-check ("...pass allowNegativeSoh to record the
-  // correction anyway") AND recordLedgerEvent's earlier, more commonly-hit
-  // guard on the reversal write itself ("...would drive SOH negative for sku
-  // X/warehouse Y... — refusing to write"), which resolves the same way but
-  // never names the flag in its own message. Matching only the first pattern
-  // would leave the more common refusal with no actionable button despite
-  // the same fix applying — widened 2026-09-21 per controller ruling.
-  // mutation.error naturally clears when a new mutate() call starts, so this
-  // hides itself again as soon as the forced retry is in flight.
-  //
-  // /drive SOH negative/i (not a bare /negative/i, narrowed 2026-09-21 per
-  // final-review finding): the router's Zod validation on freightCost/
-  // dutyCost/amount/fxRate throws "...must be a non-negative number in plain
-  // decimal notation" for an ordinary malformed input, which also contains
-  // "negative" — a bare /negative/i wrongly caught that typo case too.
-  const needsForce = (error: { message: string } | null | undefined) =>
-    error != null && (/allowNegativeSoh/i.test(error.message) || /drive SOH negative/i.test(error.message));
-  const qtyNeedsForce = needsForce(correctReceiptQty.error);
-  const costNeedsForce = needsForce(correctLandedCost.error);
+  // describes the negative-stock condition it exists to bypass — see
+  // needsForceBypass above for the matching rationale. mutation.error
+  // naturally clears when a new mutate() call starts, so this hides itself
+  // again as soon as the forced retry is in flight.
+  const qtyNeedsForce = needsForceBypass(correctReceiptQty.error);
+  const costNeedsForce = needsForceBypass(correctLandedCost.error);
 
   const submitQty = (allowNegativeSoh?: boolean) => {
     correctReceiptQty.mutate(
@@ -594,6 +582,35 @@ function CorrectReceiptControl({
   );
 }
 
+// Visible only once a shipment has arrived and isn't locked yet — locking a
+// not-yet-arrived shipment has no real meaning (see
+// docs/2026-09-23-freight-duty-cost-lock-design.md §3), and once locked
+// there's no unlock path to render a control for.
+function LockCostsControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
+  const lockCosts = trpc.shipments.lockCosts.useMutation({ onSuccess: onUpdated });
+  const [reasonNote, setReasonNote] = useState("");
+
+  if (shipment.status !== "delivered" || shipment.costsLockedAt != null) return null;
+
+  return (
+    <div>
+      <input
+        type="text"
+        placeholder="why these costs are final"
+        value={reasonNote}
+        onChange={(e) => setReasonNote(e.target.value)}
+      />
+      <button
+        disabled={reasonNote.trim().length === 0 || lockCosts.isPending}
+        onClick={() => lockCosts.mutate({ id: shipment.id, reasonNote })}
+      >
+        Lock costs
+      </button>
+      {lockCosts.error && <div>Failed to lock: {lockCosts.error.message}</div>}
+    </div>
+  );
+}
+
 function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
   const { data, error, isLoading, refetch } = trpc.shipments.getWithLineItems.useQuery(shipment.id);
   const utils = trpc.useUtils();
@@ -611,9 +628,35 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
   if (error) return <tr><td colSpan={4}>Failed to load {shipment.shipmentRef}: {error.message}</td></tr>;
   if (isLoading || !data) return <tr><td colSpan={4}>Loading {shipment.shipmentRef}…</td></tr>;
 
-  const noteRequired = form.reasonCategory === "other";
+  // Once a shipment has arrived, the server requires reasonNote regardless of
+  // reasonCategory — this now performs a real ledger correction, not just an
+  // ordinary field edit. Pre-arrival, the old "only required for 'other'"
+  // rule still applies.
+  const noteRequired = form.reasonCategory === "other" || shipment.status === "delivered";
   const canSave = form.freightCost.trim().length > 0 && form.dutyCost.trim().length > 0 && form.costCurrency.trim().length > 0
     && (!noteRequired || form.reasonNote.trim().length > 0);
+
+  // Post-arrival, recordCosts performs a real ledger correction (via
+  // applyShipmentCostChange) and can hit the same negative-stock guard
+  // CorrectReceiptControl's two actions can — but this plain "Save costs"
+  // form had no way to supply the allowNegativeSoh escape hatch. Mirrors
+  // CorrectReceiptControl's pattern exactly: needsForceBypass matches the
+  // refusal, a "Force this correction anyway" button resubmits the same
+  // payload with allowNegativeSoh: true, never shown until that refusal
+  // happens.
+  const costSaveNeedsForce = needsForceBypass(recordCosts.error);
+
+  const submitCosts = (allowNegativeSoh?: boolean) => {
+    recordCosts.mutate({
+      id: shipment.id,
+      freightCost: form.freightCost,
+      dutyCost: form.dutyCost,
+      costCurrency: form.costCurrency,
+      reasonCategory: form.reasonCategory,
+      reasonNote: noteRequired ? form.reasonNote : undefined,
+      allowNegativeSoh,
+    });
+  };
 
   return (
     <tr>
@@ -654,16 +697,24 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
           {" · "}
           Duty: {shipment.dutyCost != null && shipment.costCurrency ? formatMoney(shipment.dutyCost, shipment.costCurrency) : "—"}
         </div>
+        {shipment.costsLockedAt != null && (
+          <p>
+            🔒 Locked on {new Date(shipment.costsLockedAt).toISOString().slice(0, 10)} — use the correction form
+            above ("Correct cost restated") to make further changes.
+          </p>
+        )}
         <input
           type="text"
           placeholder="freight cost"
           value={form.freightCost}
+          disabled={shipment.costsLockedAt != null}
           onChange={(e) => setForm((prev) => ({ ...prev, freightCost: e.target.value }))}
         />
         <input
           type="text"
           placeholder="duty cost"
           value={form.dutyCost}
+          disabled={shipment.costsLockedAt != null}
           onChange={(e) => setForm((prev) => ({ ...prev, dutyCost: e.target.value }))}
         />
         <input
@@ -687,21 +738,31 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
           />
         )}
         <button
-          disabled={!canSave || recordCosts.isPending}
-          onClick={() =>
-            recordCosts.mutate({
-              id: shipment.id,
-              freightCost: form.freightCost,
-              dutyCost: form.dutyCost,
-              costCurrency: form.costCurrency,
-              reasonCategory: form.reasonCategory,
-              reasonNote: noteRequired ? form.reasonNote : undefined,
-            })
-          }
+          disabled={!canSave || shipment.costsLockedAt != null || recordCosts.isPending}
+          onClick={() => submitCosts()}
         >
           Save costs
         </button>
-        {recordCosts.error && <div>Failed to save: {recordCosts.error.message}</div>}
+        {costSaveNeedsForce && (
+          <button disabled={recordCosts.isPending} onClick={() => submitCosts(true)}>
+            Force this correction anyway
+          </button>
+        )}
+        {recordCosts.error && (
+          <div>
+            Failed to save: {recordCosts.error.message}
+            {costSaveNeedsForce && (
+              <div>
+                Forcing this correction will apply to every line item on this shipment that needs it, not just
+                one — remaining-batch and Daily COGS figures for those SKUs may error out until the over-sale is
+                separately resolved.
+              </div>
+            )}
+          </div>
+        )}
+        <div style={{ marginTop: "8px" }}>
+          <LockCostsControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+        </div>
       </td>
     </tr>
   );
