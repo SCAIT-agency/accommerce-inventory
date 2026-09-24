@@ -148,12 +148,18 @@ export const appRouter = router({
         costCurrency: z.string(),
         reasonCategory: manualReasonCategorySchema,
         reasonNote: z.string().optional(),
+        allowNegativeSoh: z.boolean().optional(),
       }))
       .mutation(({ input, ctx }) =>
         recordShipmentCosts(
           input.id,
           { freightCost: input.freightCost, dutyCost: input.dutyCost, costCurrency: input.costCurrency },
-          { reasonCategory: input.reasonCategory, reasonNote: input.reasonNote, changedBy: ctx.user.id },
+          {
+            reasonCategory: input.reasonCategory,
+            reasonNote: input.reasonNote,
+            changedBy: ctx.user.id,
+            allowNegativeSoh: input.allowNegativeSoh,
+          },
         ),
       ),
     setCustomsStatus: editorProcedure

@@ -1099,4 +1099,151 @@ describe("shipments", () => {
       correctShipmentLandedCost(999999, { dutyCost: "10.00" }, { changedBy: userId, reasonNote: "no such shipment" }),
     ).rejects.toThrow(/no shipment found with id 999999/);
   });
+
+  it("recordShipmentCosts corrects every affected line's ledger receipt once a shipment has arrived", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container-Lock2",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    const updated = await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "1800.00", dutyCost: "100.00", costCurrency: "USD" },
+      { reasonCategory: "freight_rate_change", reasonNote: "real forwarder invoice arrived", changedBy: userId },
+    );
+
+    expect(updated.freightCost).toBe("1800.0000");
+    // The shipment-level audit trail carries the caller's own real reason,
+    // never "data_correction" — only the ledger-side correction hardcodes that.
+    const history = await listChangeLog("shipment", shipment.id);
+    const freightEntries = history.filter((h) => h.field === "freightCost");
+    expect(freightEntries).toHaveLength(2); // one from driveShipmentToDelivered's initial recordShipmentCosts, one from this call
+    expect(freightEntries[1].reasonCategory).toBe("freight_rate_change");
+    expect(freightEntries[1].oldValue).toBe("900");
+    expect(freightEntries[1].newValue).toBe("1800");
+
+    const events = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, skuId));
+    const corrected = events.find((e) => e.correctsEventId !== null && e.eventType === "receipt")!;
+    expect(corrected).toBeDefined();
+    // The ledger-side correction itself is always tagged data_correction,
+    // regardless of the caller's own reasonCategory above.
+    expect(corrected.reasonCategory).toBe("data_correction");
+    expect(parseFloat(corrected.unitCost ?? "0")).toBeCloseTo((90000 * 0.15 + 1800 + 100) / 90000, 4);
+    expect(await getSoh(skuId, ffWarehouseId)).toBe(90000);
+  });
+
+  it("recordShipmentCosts skips a line whose landed cost is unchanged, mirroring correctShipmentLandedCost's no-op skip", async () => {
+    const { shipment, movingSku, unchangedSku } = await seedShipmentWithAZeroFreightShareLine("PO1-W6-Lock1");
+
+    const [unchangedReceiptBefore] = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, unchangedSku.id));
+
+    // dutyCost passed unchanged ("100.00", matching driveShipmentToDelivered's
+    // fixed cost) — only freightCost moves, and the unchanged-share line's
+    // landed cost is driven entirely by dutyCost*valueShare, so it must not move.
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "1800.00", dutyCost: "100.00", costCurrency: "USD" },
+      { reasonCategory: "freight_rate_change", reasonNote: "final forwarder invoice", changedBy: userId },
+    );
+
+    const movingEvents = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, movingSku.id));
+    expect(movingEvents.some((e) => e.correctsEventId !== null && e.eventType === "receipt")).toBe(true);
+
+    const unchangedEvents = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, unchangedSku.id));
+    expect(unchangedEvents).toHaveLength(1);
+    expect(unchangedEvents[0].id).toBe(unchangedReceiptBefore.id);
+    expect(unchangedEvents[0].correctsEventId).toBeNull();
+    expect(unchangedEvents[0].unitCost).toBe(unchangedReceiptBefore.unitCost);
+  });
+
+  it("recordShipmentCosts rejects a post-arrival call with a blank reasonNote before writing anything", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container-Lock3",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+    const historyBefore = await listChangeLog("shipment", shipment.id);
+
+    await expect(
+      recordShipmentCosts(
+        shipment.id,
+        { freightCost: "1800.00", dutyCost: "100.00", costCurrency: "USD" },
+        { reasonCategory: "freight_rate_change", reasonNote: "   ", changedBy: userId },
+      ),
+    ).rejects.toThrow(/reasonNote is required/);
+
+    const [unchanged] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(unchanged.freightCost).toBe("900.0000");
+    const historyAfter = await listChangeLog("shipment", shipment.id);
+    expect(historyAfter).toHaveLength(historyBefore.length);
+    const events = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, skuId));
+    expect(events.every((e) => e.correctsEventId === null)).toBe(true);
+  });
+
+  it("recordShipmentCosts refuses a locked shipment before writing anything", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container-Lock4",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+    // lockShipmentCosts doesn't exist until Task 3 — simulate the locked
+    // state directly, the same column recordShipmentCosts itself reads.
+    await db.update(shipments).set({ costsLockedAt: new Date(), costsLockedBy: userId }).where(eq(shipments.id, shipment.id));
+    const historyBefore = await listChangeLog("shipment", shipment.id);
+
+    await expect(
+      recordShipmentCosts(
+        shipment.id,
+        { freightCost: "1800.00", dutyCost: "100.00", costCurrency: "USD" },
+        { reasonCategory: "freight_rate_change", reasonNote: "trying anyway", changedBy: userId },
+      ),
+    ).rejects.toThrow(/costs are locked/);
+
+    const [unchanged] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(unchanged.freightCost).toBe("900.0000");
+    const historyAfter = await listChangeLog("shipment", shipment.id);
+    expect(historyAfter).toHaveLength(historyBefore.length);
+    const events = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, skuId));
+    expect(events.every((e) => e.correctsEventId === null)).toBe(true);
+  });
+
+  it("recordShipmentCosts's post-arrival branch accepts allowNegativeSoh to bypass the FIFO-replayability guard", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container-Lock5",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+    // Sell past what a plain reversal-and-re-receive can replay without going
+    // negative, forcing correctLedgerReceipt's guard to fire — the same setup
+    // Stream M's own correctShipmentLandedCost force-bypass tests use.
+    await recordLedgerEvent({ skuId, warehouseId: ffWarehouseId, eventType: "sale", qty: -85000, unitCost: null, date: new Date("2026-09-21"), sourceRef: "SO1" });
+
+    await expect(
+      recordShipmentCosts(
+        shipment.id,
+        { freightCost: "1800.00", dutyCost: "100.00", costCurrency: "USD" },
+        { reasonCategory: "freight_rate_change", reasonNote: "final invoice", changedBy: userId },
+      ),
+    ).rejects.toThrow(/allowNegativeSoh|drive SOH negative/i);
+
+    const forced = await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "1800.00", dutyCost: "100.00", costCurrency: "USD" },
+      { reasonCategory: "freight_rate_change", reasonNote: "final invoice, forced", changedBy: userId, allowNegativeSoh: true },
+    );
+    expect(forced.freightCost).toBe("1800.0000");
+  });
 });

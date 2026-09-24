@@ -170,35 +170,69 @@ export async function markShipmentDeparted(id: number, actualDate: Date, opts: {
 export async function recordShipmentCosts(
   id: number,
   costs: { freightCost: string; dutyCost: string; costCurrency: string },
-  opts: { reasonCategory: ReasonCategory; reasonNote?: string; changedBy: number },
+  opts: { reasonCategory: ReasonCategory; reasonNote?: string; changedBy: number; allowNegativeSoh?: boolean },
 ): Promise<Shipment> {
   return db.transaction(async (tx) => {
     const [before] = await tx.select().from(shipments).where(eq(shipments.id, id));
     if (!before) {
       throw new Error(`recordShipmentCosts: no shipment found with id ${id}`);
     }
-    await tx.update(shipments).set(costs).where(eq(shipments.id, id));
 
-    await logChange({
-      entityType: "shipment",
-      entityId: id,
-      field: "freightCost",
-      oldValue: normalizeDecimalForAudit(before.freightCost),
-      newValue: normalizeDecimalForAudit(costs.freightCost),
-      reasonCategory: opts.reasonCategory,
-      reasonNote: opts.reasonNote,
-      changedBy: opts.changedBy,
-    }, tx);
-    await logChange({
-      entityType: "shipment",
-      entityId: id,
-      field: "dutyCost",
-      oldValue: normalizeDecimalForAudit(before.dutyCost),
-      newValue: normalizeDecimalForAudit(costs.dutyCost),
-      reasonCategory: opts.reasonCategory,
-      reasonNote: opts.reasonNote,
-      changedBy: opts.changedBy,
-    }, tx);
+    if (before.status !== "delivered") {
+      // Unchanged from before this design: no ledger involvement, reasonNote
+      // stays optional. Preserves every existing caller's pre-arrival
+      // behavior exactly.
+      await tx.update(shipments).set(costs).where(eq(shipments.id, id));
+      await logChange({
+        entityType: "shipment",
+        entityId: id,
+        field: "freightCost",
+        oldValue: normalizeDecimalForAudit(before.freightCost),
+        newValue: normalizeDecimalForAudit(costs.freightCost),
+        reasonCategory: opts.reasonCategory,
+        reasonNote: opts.reasonNote,
+        changedBy: opts.changedBy,
+      }, tx);
+      await logChange({
+        entityType: "shipment",
+        entityId: id,
+        field: "dutyCost",
+        oldValue: normalizeDecimalForAudit(before.dutyCost),
+        newValue: normalizeDecimalForAudit(costs.dutyCost),
+        reasonCategory: opts.reasonCategory,
+        reasonNote: opts.reasonNote,
+        changedBy: opts.changedBy,
+      }, tx);
+    } else if (before.costsLockedAt !== null) {
+      throw new Error(
+        `recordShipmentCosts: shipment ${id}'s costs are locked — use correctShipmentLandedCost to make further changes`,
+      );
+    } else {
+      // Delivered, unlocked: this now performs a real ledger correction under
+      // the hood, so reasonNote is required at the value level even though
+      // the type signature keeps it optional for the pre-arrival case above.
+      const reasonNote = opts.reasonNote?.trim();
+      if (!reasonNote) {
+        throw new Error(
+          `recordShipmentCosts: reasonNote is required to record costs for shipment ${id} after arrival — this now performs a real ledger correction`,
+        );
+      }
+      // costCurrency has no ledger dependency beyond the existing
+      // currency-mismatch guard inside getShipmentLandedUnitCost, so it's
+      // written directly, outside applyShipmentCostChange's own scope.
+      await tx.update(shipments).set({ costCurrency: costs.costCurrency }).where(eq(shipments.id, id));
+      await applyShipmentCostChange(
+        tx,
+        id,
+        { freightCost: costs.freightCost, dutyCost: costs.dutyCost },
+        {
+          changedBy: opts.changedBy,
+          reasonCategory: opts.reasonCategory,
+          reasonNote,
+          allowNegativeSoh: opts.allowNegativeSoh,
+        },
+      );
+    }
 
     const [row] = await tx.select().from(shipments).where(eq(shipments.id, id));
     return row;
@@ -424,6 +458,70 @@ function isNoOpCorrection(err: unknown): boolean {
   return err instanceof Error && /changes nothing/.test(err.message);
 }
 
+async function applyShipmentCostChange(
+  tx: DbClient,
+  shipmentId: number,
+  updates: { freightCost?: string; dutyCost?: string },
+  opts: { changedBy: number; reasonCategory: ReasonCategory; reasonNote: string; allowNegativeSoh?: boolean },
+): Promise<{ corrections: LedgerCorrectionResult[] }> {
+  const [before] = await tx.select().from(shipments).where(eq(shipments.id, shipmentId));
+  if (!before) {
+    throw new Error(`applyShipmentCostChange: no shipment found with id ${shipmentId}`);
+  }
+  await tx.update(shipments).set(updates).where(eq(shipments.id, shipmentId));
+  if (updates.freightCost !== undefined) {
+    await logChange({
+      entityType: "shipment",
+      entityId: shipmentId,
+      field: "freightCost",
+      oldValue: normalizeDecimalForAudit(before.freightCost),
+      newValue: normalizeDecimalForAudit(updates.freightCost),
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
+  }
+  if (updates.dutyCost !== undefined) {
+    await logChange({
+      entityType: "shipment",
+      entityId: shipmentId,
+      field: "dutyCost",
+      oldValue: normalizeDecimalForAudit(before.dutyCost),
+      newValue: normalizeDecimalForAudit(updates.dutyCost),
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
+  }
+
+  // Reads back through `tx`, so it sees the restated costs above.
+  const landedCosts = await getShipmentLandedUnitCost(shipmentId, tx);
+  const corrections: LedgerCorrectionResult[] = [];
+  for (const lc of landedCosts) {
+    const receipt = await findUncorrectedReceipt(tx, before.shipmentRef, lc.lineItemId, lc.skuId);
+    try {
+      // toFixed(8) matches both the ledger column's scale and the exact
+      // formatting markShipmentArrived writes, so a restatement that lands
+      // on the same cost is recognised as a no-op by correctLedgerReceipt
+      // rather than written as a cost-changing correction pair.
+      corrections.push(
+        await correctLedgerReceipt(
+          receipt.id,
+          { unitCost: lc.landedUnitCost.toFixed(8) },
+          { changedBy: opts.changedBy, reasonNote: opts.reasonNote, allowNegativeSoh: opts.allowNegativeSoh },
+          tx,
+        ),
+      );
+    } catch (err) {
+      // Narrow on purpose: ONLY correctLedgerReceipt's no-op refusal means
+      // "this line needed no correction". Every other refusal it can raise
+      // is a real failure and must still roll the whole change back.
+      if (!isNoOpCorrection(err)) throw err;
+    }
+  }
+  return { corrections };
+}
+
 /**
  * Restates a shipment's freight and/or duty cost and corrects every line
  * item's receipt to the landed unit cost that recomputes from it.
@@ -439,15 +537,8 @@ function isNoOpCorrection(err: unknown): boolean {
  * recompute always re-reads the whole row — so restating freight alone still
  * yields a landed cost carrying the shipment's existing duty allocation.
  *
- * One deliberate exception to "any failing line rolls everything back": a line
- * whose recomputed landed cost is unchanged is SKIPPED, not failed. That shape
- * is ordinary, not exceptional — a freight-only restatement leaves a line with
- * `weightShare = 0` exactly where it was, as does any line whose cost happens
- * to round to the same 8 decimals — and `correctLedgerReceipt` rejects such a
- * correction as a no-op (rightly: writing one would reshuffle FIFO order for
- * no reason). Refusing the whole shipment-wide restatement over it would make
- * the feature unusable on pooled containers. Skipped lines are absent from the
- * returned `corrections` array, and nothing is written for them.
+ * A line whose recomputed landed cost is unchanged is SKIPPED, not failed —
+ * see applyShipmentCostChange's own no-op handling above.
  */
 export async function correctShipmentLandedCost(
   shipmentId: number,
@@ -464,61 +555,7 @@ export async function correctShipmentLandedCost(
     throw new Error("correctShipmentLandedCost: no cost fields provided to correct");
   }
 
-  return db.transaction(async (tx) => {
-    const [before] = await tx.select().from(shipments).where(eq(shipments.id, shipmentId));
-    if (!before) {
-      throw new Error(`correctShipmentLandedCost: no shipment found with id ${shipmentId}`);
-    }
-    await tx.update(shipments).set(updates).where(eq(shipments.id, shipmentId));
-    if (updates.freightCost !== undefined) {
-      await logChange({
-        entityType: "shipment",
-        entityId: shipmentId,
-        field: "freightCost",
-        oldValue: normalizeDecimalForAudit(before.freightCost),
-        newValue: normalizeDecimalForAudit(updates.freightCost),
-        reasonCategory: "data_correction",
-        reasonNote: opts.reasonNote,
-        changedBy: opts.changedBy,
-      }, tx);
-    }
-    if (updates.dutyCost !== undefined) {
-      await logChange({
-        entityType: "shipment",
-        entityId: shipmentId,
-        field: "dutyCost",
-        oldValue: normalizeDecimalForAudit(before.dutyCost),
-        newValue: normalizeDecimalForAudit(updates.dutyCost),
-        reasonCategory: "data_correction",
-        reasonNote: opts.reasonNote,
-        changedBy: opts.changedBy,
-      }, tx);
-    }
-
-    // Reads back through `tx`, so it sees the restated costs above.
-    const landedCosts = await getShipmentLandedUnitCost(shipmentId, tx);
-    const corrections: LedgerCorrectionResult[] = [];
-    for (const lc of landedCosts) {
-      const receipt = await findUncorrectedReceipt(tx, before.shipmentRef, lc.lineItemId, lc.skuId);
-      try {
-        // toFixed(8) matches both the ledger column's scale and the exact
-        // formatting markShipmentArrived writes, so a restatement that lands
-        // on the same cost is recognised as a no-op by correctLedgerReceipt
-        // rather than written as a cost-changing correction pair.
-        corrections.push(await correctLedgerReceipt(receipt.id, { unitCost: lc.landedUnitCost.toFixed(8) }, opts, tx));
-      } catch (err) {
-        // Narrow on purpose: ONLY correctLedgerReceipt's no-op refusal means
-        // "this line needed no correction". Every other refusal it can raise
-        // — ambiguous receipt, unreplayable FIFO history, negative SOH,
-        // invalid qty/cost, blank reasonNote — is a real failure and must
-        // still roll the whole shipment-wide correction back.
-        //
-        // Safe to swallow here because that check runs before either ledger
-        // row is written, so a skipped line leaves no partial state behind in
-        // the open transaction.
-        if (!isNoOpCorrection(err)) throw err;
-      }
-    }
-    return { corrections };
-  });
+  return db.transaction((tx) =>
+    applyShipmentCostChange(tx, shipmentId, updates, { ...opts, reasonCategory: "data_correction" }),
+  );
 }
