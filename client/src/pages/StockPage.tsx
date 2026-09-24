@@ -256,10 +256,30 @@ function WeeklySalesPlanSection() {
   );
 }
 
+// Combines every warehouse's SOH/avg-daily-sales for one SKU into a single
+// "Total" row, so the whole picture and the per-warehouse breakdown are both
+// visible at once instead of switching between them. Status is recomputed
+// from the combined figures using the same day-of-cover bands the backend
+// already classifies individual rows with, rather than just picking the
+// worst of the per-warehouse statuses -- a SKU that's "low" in one warehouse
+// but well-stocked overall shouldn't read as critical in aggregate.
+function combinedRow(byWarehouse: { soh: number; avgDailySales: number }[]) {
+  const soh = byWarehouse.reduce((sum, w) => sum + w.soh, 0);
+  const avgDailySales = byWarehouse.reduce((sum, w) => sum + w.avgDailySales, 0);
+  const daysOfCover = avgDailySales > 0 ? soh / avgDailySales : null;
+  let status: keyof typeof STATUS_BADGE_CLASS = "unknown";
+  if (daysOfCover !== null) {
+    if (daysOfCover < 14) status = "critical";
+    else if (daysOfCover < 30) status = "low";
+    else if (daysOfCover > 120) status = "overstock";
+    else status = "ok";
+  }
+  return { soh, avgDailySales, daysOfCover, status };
+}
+
 export function StockPage() {
   const stockQuery = trpc.dashboards.stock.useQuery();
   const warehousesQuery = trpc.catalog.listWarehouses.useQuery();
-  const [warehouseFilter, setWarehouseFilter] = useState<number | "all">("all");
 
   const warehouseLabels = useMemo(() => {
     const map = new Map<number, string>();
@@ -274,17 +294,11 @@ export function StockPage() {
   const data = stockQuery.data;
   if (isLoading || !data) return <div>Loading…</div>;
 
+  const multiWarehouse = (warehousesQuery.data ?? []).length > 1;
+
   return (
     <div>
       <h1>Stock</h1>
-      <div>
-        <button onClick={() => setWarehouseFilter("all")} disabled={warehouseFilter === "all"}>All warehouses</button>
-        {(warehousesQuery.data ?? []).map((w) => (
-          <button key={w.id} onClick={() => setWarehouseFilter(w.id)} disabled={warehouseFilter === w.id}>
-            {w.code}
-          </button>
-        ))}
-      </div>
       <table>
         <thead>
           <tr>
@@ -298,24 +312,39 @@ export function StockPage() {
           </tr>
         </thead>
         <tbody>
-          {data.flatMap((row) =>
-            row.byWarehouse
-              .filter((w) => warehouseFilter === "all" || w.warehouseId === warehouseFilter)
-              .map((w) => (
-                <tr key={`${row.skuId}-${w.warehouseId}`}>
+          {data.flatMap((row) => {
+            const rows = row.byWarehouse.map((w) => (
+              <tr key={`${row.skuId}-${w.warehouseId}`}>
+                <td>{row.sku}</td>
+                <td>{warehouseLabels.get(w.warehouseId) ?? `#${w.warehouseId}`}</td>
+                <td>{w.soh}</td>
+                <td>{w.avgDailySales.toFixed(2)}</td>
+                <td>{w.daysOfCover === null ? "—" : w.daysOfCover.toFixed(1)}</td>
+                <td><span className={STATUS_BADGE_CLASS[w.status]}>{w.status}</span></td>
+                <td><Link to={`/inventory-ledger/${row.skuId}/${w.warehouseId}`}>Batches</Link></td>
+              </tr>
+            ));
+            // Only worth a combined row once there's more than one warehouse
+            // to combine — otherwise it would just repeat the single row above.
+            if (multiWarehouse && row.byWarehouse.length > 1) {
+              const total = combinedRow(row.byWarehouse);
+              rows.push(
+                <tr key={`${row.skuId}-total`} style={{ fontWeight: 600, background: "var(--surface)" }}>
                   <td>{row.sku}</td>
-                  <td>{warehouseLabels.get(w.warehouseId) ?? `#${w.warehouseId}`}</td>
-                  <td>{w.soh}</td>
-                  <td>{w.avgDailySales.toFixed(2)}</td>
-                  <td>{w.daysOfCover === null ? "—" : w.daysOfCover.toFixed(1)}</td>
-                  <td><span className={STATUS_BADGE_CLASS[w.status]}>{w.status}</span></td>
-                  <td><Link to={`/inventory-ledger/${row.skuId}/${w.warehouseId}`}>Batches</Link></td>
-                </tr>
-              )),
-          )}
+                  <td>Total</td>
+                  <td>{total.soh}</td>
+                  <td>{total.avgDailySales.toFixed(2)}</td>
+                  <td>{total.daysOfCover === null ? "—" : total.daysOfCover.toFixed(1)}</td>
+                  <td><span className={STATUS_BADGE_CLASS[total.status]}>{total.status}</span></td>
+                  <td></td>
+                </tr>,
+              );
+            }
+            return rows;
+          })}
         </tbody>
       </table>
-      <SalesPlanReportSection warehouseFilter={warehouseFilter} />
+      <SalesPlanReportSection warehouseFilter="all" />
       <WeeklySalesPlanSection />
     </div>
   );
