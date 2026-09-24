@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../dbClient";
-import { users } from "../../drizzle/schema";
+import { users, changeLog } from "../../drizzle/schema";
 import { hashPassword } from "./passwords";
 import { clearAttempts } from "./loginThrottle";
 import { attemptLogin, resolveSession, performLogout } from "./loginFlow";
@@ -11,7 +11,20 @@ const EMAIL = "julian@accommerce.example";
 const PASSWORD = "correct horse battery staple";
 
 beforeEach(async () => {
-  await db.delete(users);
+  // Same FK-disable-and-cleanup pattern as server/shipments.test.ts and
+  // server/purchaseOrders.test.ts: this DB is shared across test files with
+  // no per-file isolation, so a leftover change_log row from another file's
+  // last test (referencing a user via changedBy) can otherwise block this
+  // plain `delete(users)` regardless of run order.
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
+    try {
+      await tx.delete(changeLog);
+      await tx.delete(users);
+    } finally {
+      await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
+    }
+  });
   clearAttempts(EMAIL);
 });
 
