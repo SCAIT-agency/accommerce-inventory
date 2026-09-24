@@ -4,7 +4,7 @@ import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboar
 import { getRemainingBatches } from "./inventoryLedger";
 import { listSkus, createSku, updateSku, listVendors, createVendor, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
-import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
+import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation, upsertWeeklyInput, listWeeklyInputs } from "./salesPlan";
 import { PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES } from "../drizzle/schema";
@@ -238,6 +238,9 @@ export const appRouter = router({
           { changedBy: ctx.user.id, reasonNote: input.reasonNote, allowNegativeSoh: input.allowNegativeSoh },
         ),
       ),
+    lockCosts: editorProcedure
+      .input(z.object({ id: z.number(), reasonNote: z.string().min(1) }))
+      .mutation(({ input, ctx }) => lockShipmentCosts(input.id, { changedBy: ctx.user.id, reasonNote: input.reasonNote })),
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("shipment", input)),
   }),
   payments: router({

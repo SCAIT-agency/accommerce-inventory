@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql, eq, and } from "drizzle-orm";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments, warehouses, users } from "../drizzle/schema";
-import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost } from "./shipments";
+import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts } from "./shipments";
 import { createSku, createVendor, createWarehouse, createUser } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { listChangeLog } from "./changeLog";
@@ -1248,5 +1248,61 @@ describe("shipments", () => {
       { reasonCategory: "freight_rate_change", reasonNote: "final invoice, forced", changedBy: userId, allowNegativeSoh: true },
     );
     expect(forced.freightCost).toBe("1800.0000");
+  });
+
+  it("lockShipmentCosts locks a delivered shipment's costs", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container-Lock6", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await driveShipmentToDelivered(shipment.id);
+
+    await lockShipmentCosts(shipment.id, { changedBy: userId, reasonNote: "forwarder invoice reconciled, final" });
+
+    const [locked] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(locked.costsLockedAt).not.toBeNull();
+    expect(locked.costsLockedBy).toBe(userId);
+
+    const history = await listChangeLog("shipment", shipment.id);
+    const lockEntry = history.find((h) => h.field === "costsLockedAt");
+    expect(lockEntry).toBeDefined();
+    expect(lockEntry?.oldValue).toBeNull();
+    expect(lockEntry?.newValue).not.toBeNull();
+    expect(lockEntry?.reasonCategory).toBe("data_correction");
+    expect(lockEntry?.reasonNote).toBe("forwarder invoice reconciled, final");
+  });
+
+  it("lockShipmentCosts refuses a shipment that hasn't arrived yet", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container-Lock7", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+
+    await expect(
+      lockShipmentCosts(shipment.id, { changedBy: userId, reasonNote: "too early" }),
+    ).rejects.toThrow(/has not arrived yet/);
+
+    const [unchanged] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(unchanged.costsLockedAt).toBeNull();
+  });
+
+  it("lockShipmentCosts refuses a shipment that's already locked", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container-Lock8", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await driveShipmentToDelivered(shipment.id);
+    await lockShipmentCosts(shipment.id, { changedBy: userId, reasonNote: "first lock" });
+    const historyAfterFirstLock = await listChangeLog("shipment", shipment.id);
+
+    await expect(
+      lockShipmentCosts(shipment.id, { changedBy: userId, reasonNote: "second attempt" }),
+    ).rejects.toThrow(/already locked/);
+
+    const historyAfterSecondAttempt = await listChangeLog("shipment", shipment.id);
+    expect(historyAfterSecondAttempt).toHaveLength(historyAfterFirstLock.length);
+  });
+
+  it("lockShipmentCosts rejects a blank reasonNote", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container-Lock9", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await driveShipmentToDelivered(shipment.id);
+
+    await expect(
+      lockShipmentCosts(shipment.id, { changedBy: userId, reasonNote: "  " }),
+    ).rejects.toThrow(/reasonNote is required/);
+
+    const [unchanged] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(unchanged.costsLockedAt).toBeNull();
   });
 });

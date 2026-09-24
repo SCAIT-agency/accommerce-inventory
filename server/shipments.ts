@@ -239,6 +239,43 @@ export async function recordShipmentCosts(
   });
 }
 
+export async function lockShipmentCosts(
+  id: number,
+  opts: { changedBy: number; reasonNote: string },
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [shipment] = await tx.select().from(shipments).where(eq(shipments.id, id));
+    if (!shipment) {
+      throw new Error(`lockShipmentCosts: no shipment found with id ${id}`);
+    }
+    if (shipment.status !== "delivered") {
+      throw new Error(`lockShipmentCosts: shipment ${id} has not arrived yet — costs can only be locked after arrival`);
+    }
+    if (shipment.costsLockedAt !== null) {
+      throw new Error(`lockShipmentCosts: shipment ${id}'s costs are already locked`);
+    }
+    if (opts.reasonNote.trim() === "") {
+      throw new Error(`lockShipmentCosts: reasonNote is required to lock shipment ${id}'s costs`);
+    }
+    const lockedAt = new Date();
+    await tx.update(shipments).set({ costsLockedAt: lockedAt, costsLockedBy: opts.changedBy }).where(eq(shipments.id, id));
+    await logChange({
+      entityType: "shipment",
+      entityId: id,
+      field: "costsLockedAt",
+      oldValue: null,
+      // Full timestamp, not a calendar-day string like plannedDepartDate/
+      // actualArrivalDate elsewhere in this file — costsLockedAt records the
+      // exact moment of a deliberate, one-way commitment, not a business
+      // calendar-day concept.
+      newValue: lockedAt.toISOString(),
+      reasonCategory: "data_correction",
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
+  });
+}
+
 export async function setShipmentCustomsStatus(
   id: number,
   newStatus: (typeof CUSTOMS_STATUSES)[number],
