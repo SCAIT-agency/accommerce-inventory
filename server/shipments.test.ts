@@ -1122,9 +1122,12 @@ describe("shipments", () => {
     const history = await listChangeLog("shipment", shipment.id);
     const freightEntries = history.filter((h) => h.field === "freightCost");
     expect(freightEntries).toHaveLength(2); // one from driveShipmentToDelivered's initial recordShipmentCosts, one from this call
-    expect(freightEntries[1].reasonCategory).toBe("freight_rate_change");
-    expect(freightEntries[1].oldValue).toBe("900");
-    expect(freightEntries[1].newValue).toBe("1800");
+    // Select by the value this call actually wrote, not array position —
+    // listChangeLog orders by a second-precision changedAt, so a same-second
+    // tie with the seed write makes positional indexing nondeterministic.
+    const restatedFreight = freightEntries.find((h) => h.oldValue === "900" && h.newValue === "1800")!;
+    expect(restatedFreight).toBeDefined();
+    expect(restatedFreight.reasonCategory).toBe("freight_rate_change");
 
     const events = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, skuId));
     const corrected = events.find((e) => e.correctsEventId !== null && e.eventType === "receipt")!;
