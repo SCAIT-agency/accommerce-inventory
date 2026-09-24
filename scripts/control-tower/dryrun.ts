@@ -31,7 +31,7 @@ import { listSkus, listWarehouses, setAppSetting } from "../../server/db";
 import { ALLOW_BACKORDERS_SETTING, getSoh } from "../../server/inventoryLedger";
 import { computeFifoDailySeries, getShipmentLandedUnitCost } from "../../server/landedCost";
 import { runMigration, type RunMigrationResult } from "../reconcile-migration";
-import type { Mismatch } from "../migrate-from-sheet";
+import { computePlannedShipmentQty, type Mismatch } from "../migrate-from-sheet";
 import { buildMigrationInput, EXPORT_CONVENTIONS, type ExportIssue } from "./export";
 import { liveTabFetcher } from "./gviz";
 import { EMPTY_CHECKED, reconcile, TOLERANCE, unclassified, type Classifier, type Finding, type ReconcileDeps, type ReconcileResult } from "./reconcile";
@@ -208,7 +208,13 @@ export async function runDryRun(opts: DryRunOptions): Promise<DryRunResult> {
   try {
     migration = await runMigration(exported.input, { landedCostTolerance: () => TOLERANCE.landedCost });
     reconciliation = await reconcile(
-      { snap, today, untransferableLinks: migration.unmatchedManualLinks.length, linkVariances: migration.linkVariances },
+      {
+        snap,
+        today,
+        untransferableLinks: migration.unmatchedManualLinks.length,
+        linkVariances: migration.linkVariances,
+        plannedShipmentQtyBySkuWarehouse: computePlannedShipmentQty(exported.input.shipmentRows),
+      },
       await realReconcileDeps(),
       classify,
     );

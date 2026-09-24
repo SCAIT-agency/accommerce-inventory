@@ -85,6 +85,16 @@ export interface ReconcileInput {
   untransferableLinks: number;
   /** Links the migration transferred with an amount variance or onto a slot the Sheet had not marked paid. */
   linkVariances?: LinkVariance[];
+  /**
+   * Sum of qty across still-status="planned" (not yet departed) shipments,
+   * keyed by "sku|warehouse" — see migrate-from-sheet.ts's
+   * ReconcileOptions.plannedShipmentQtyBySkuWarehouse for why this exists
+   * and computePlannedShipmentQty to build it. The internal migration gate
+   * already tolerates this SOH gap; R1 here must reach the same verdict or
+   * an ordinary new planned PO keeps this report NOT SAFE every day it's
+   * still planned, even once the gate itself no longer rolls back over it.
+   */
+  plannedShipmentQtyBySkuWarehouse?: Map<string, number>;
 }
 
 export interface ReconcileResult {
@@ -116,7 +126,16 @@ export async function reconcile(input: ReconcileInput, deps: ReconcileDeps, clas
   for (const fact of readSohToday(snap)) {
     checked.R1++;
     const platform = await deps.getSoh(fact.sku, fact.warehouse);
-    if (platform !== fact.qty) add("R1", `${fact.sku}/${fact.warehouse}`, fact.qty, platform, platform - fact.qty);
+    const plannedQty = input.plannedShipmentQtyBySkuWarehouse?.get(`${fact.sku}|${fact.warehouse}`) ?? 0;
+    const adjustedExpected = fact.qty - plannedQty;
+    // Tolerate either the Sheet's raw total or the total minus a known
+    // still-planned quantity — never force one over the other (some
+    // SKU/warehouse pairs' Sheet formula inflates for a planned shipment,
+    // others don't; see ReconcileInput.plannedShipmentQtyBySkuWarehouse).
+    if (platform !== fact.qty && platform !== adjustedExpected) {
+      const expected = plannedQty > 0 ? adjustedExpected : fact.qty;
+      add("R1", `${fact.sku}/${fact.warehouse}`, expected, platform, platform - expected);
+    }
   }
 
   // R2 — SOH by day: StockModel Stock[r] is the start-of-day position, i.e.

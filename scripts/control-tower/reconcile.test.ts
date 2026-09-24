@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { computeFifoDailySeries } from "../../server/landedCost";
 import { exportPayments, exportShipmentPayments, exportShipments, platformShipmentRef } from "./export";
-import { transformPayments, transformShipments, resolveShipmentOwnerRef } from "../migrate-from-sheet";
+import { computePlannedShipmentQty, transformPayments, transformShipments, resolveShipmentOwnerRef } from "../migrate-from-sheet";
 import { reconcile, type ReconcileDeps } from "./reconcile";
 import { loadFixtureSnapshot, type ControlTowerSnapshot } from "./snapshot";
 import { pairKey, readLandedCostTarget, readReceipts, readSalesActuals, readSohToday, readStockByDay, seriesKey } from "./targets";
@@ -129,6 +129,35 @@ describe("reconcile", () => {
     expect(byTarget("R5")).toEqual([{ target: "R5", key: "PO1 Jello #3 paid", sheet: "false", platform: "true", diff: undefined, classification: "unclassified" }]);
     expect(byTarget("R6")).toEqual([]); // 20 hints − 3 untransferable = 17 expected
     expect(byTarget("R7")).toEqual([{ target: "R7", key: "Jello/FF", sheet: 158415, platform: 1, diff: 1 - 158415, classification: "unclassified" }]);
+  });
+
+  it("treats an R1 SOH gap fully explained by a still-planned (not yet departed) shipment as no mismatch", async () => {
+    // Same real-world situation the internal migration gate already tolerates
+    // (see reconcileMigration's plannedShipmentQtyBySkuWarehouse): the daily
+    // parallel-run's own R1-R7 report must reach the same verdict, or a new
+    // planned PO keeps reporting NOT SAFE TO CUT OVER here even after the
+    // gate itself stops rolling back the migration over it.
+    const deps = perfectDeps();
+    const broken: ReconcileDeps = {
+      ...deps,
+      getSoh: async (sku, wh, asOf) => (await deps.getSoh(sku, wh, asOf)) - (sku === "Straw" && wh === "Mutual" && !asOf ? 600 : 0),
+    };
+    const plannedShipmentQtyBySkuWarehouse = computePlannedShipmentQty([{ status: "planned", sku: "Straw", warehouse: "Mutual", qty: "600" }]);
+    const { findings } = await reconcile({ snap, today: TODAY, untransferableLinks: 0, plannedShipmentQtyBySkuWarehouse }, broken);
+    expect(findings.filter((f) => f.target === "R1")).toEqual([]);
+  });
+
+  it("still fails R1 when a SOH gap is only partly explained by planned shipments", async () => {
+    const deps = perfectDeps();
+    const broken: ReconcileDeps = {
+      ...deps,
+      getSoh: async (sku, wh, asOf) => (await deps.getSoh(sku, wh, asOf)) - (sku === "Straw" && wh === "Mutual" && !asOf ? 600 : 0),
+    };
+    const plannedShipmentQtyBySkuWarehouse = computePlannedShipmentQty([{ status: "planned", sku: "Straw", warehouse: "Mutual", qty: "400" }]);
+    const { findings } = await reconcile({ snap, today: TODAY, untransferableLinks: 0, plannedShipmentQtyBySkuWarehouse }, broken);
+    expect(findings.filter((f) => f.target === "R1")).toEqual([
+      { target: "R1", key: "Straw/Mutual", sheet: 2953 - 400, platform: 2953 - 600, diff: 2953 - 600 - (2953 - 400), classification: "unclassified" },
+    ]);
   });
 
   it("flags a missing platform day and money outside a cent as R3 findings", async () => {
