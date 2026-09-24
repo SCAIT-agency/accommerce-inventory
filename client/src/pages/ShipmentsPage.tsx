@@ -586,6 +586,81 @@ function CorrectReceiptControl({
 // not-yet-arrived shipment has no real meaning (see
 // docs/2026-09-23-freight-duty-cost-lock-design.md §3), and once locked
 // there's no unlock path to render a control for.
+interface ShipmentLinksFormState {
+  quoteLink: string;
+  invoiceLink: string;
+  customsInvoiceLink: string;
+  customsDeclarationLink: string;
+}
+
+function defaultShipmentLinksForm(shipment: ShipmentListItem): ShipmentLinksFormState {
+  return {
+    quoteLink: shipment.quoteLink ?? "",
+    invoiceLink: shipment.invoiceLink ?? "",
+    customsInvoiceLink: shipment.customsInvoiceLink ?? "",
+    customsDeclarationLink: shipment.customsDeclarationLink ?? "",
+  };
+}
+
+// Reference links only (Google Drive etc.) -- this platform never stores the
+// documents themselves. No reasonCategory/audit trail: these don't affect
+// delay or cost, the only things this codebase's change_log tracks.
+function ShipmentLinksControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
+  const updateLinks = trpc.shipments.updateLinks.useMutation({ onSuccess: onUpdated });
+  const [form, setForm] = useState<ShipmentLinksFormState>(() => defaultShipmentLinksForm(shipment));
+
+  const linkRow = (label: string, url: string | null) =>
+    url ? <div>{label}: <a href={url} target="_blank" rel="noreferrer">{label}</a></div> : null;
+
+  return (
+    <div>
+      {linkRow("Quote", shipment.quoteLink)}
+      {linkRow("Invoice", shipment.invoiceLink)}
+      {linkRow("Customs invoice", shipment.customsInvoiceLink)}
+      {linkRow("Customs declaration", shipment.customsDeclarationLink)}
+      <input
+        type="text"
+        placeholder="quote link"
+        value={form.quoteLink}
+        onChange={(e) => setForm((prev) => ({ ...prev, quoteLink: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="invoice link"
+        value={form.invoiceLink}
+        onChange={(e) => setForm((prev) => ({ ...prev, invoiceLink: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="customs invoice link"
+        value={form.customsInvoiceLink}
+        onChange={(e) => setForm((prev) => ({ ...prev, customsInvoiceLink: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="customs declaration link"
+        value={form.customsDeclarationLink}
+        onChange={(e) => setForm((prev) => ({ ...prev, customsDeclarationLink: e.target.value }))}
+      />
+      <button
+        disabled={updateLinks.isPending}
+        onClick={() =>
+          updateLinks.mutate({
+            id: shipment.id,
+            quoteLink: form.quoteLink.trim(),
+            invoiceLink: form.invoiceLink.trim(),
+            customsInvoiceLink: form.customsInvoiceLink.trim(),
+            customsDeclarationLink: form.customsDeclarationLink.trim(),
+          })
+        }
+      >
+        Save links
+      </button>
+      {updateLinks.error && <div>Failed to save: {updateLinks.error.message}</div>}
+    </div>
+  );
+}
+
 function LockCostsControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
   const lockCosts = trpc.shipments.lockCosts.useMutation({ onSuccess: onUpdated });
   const [reasonNote, setReasonNote] = useState("");
@@ -625,8 +700,8 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
   });
   const [form, setForm] = useState<CostsFormState>(() => defaultCostsForm(shipment));
 
-  if (error) return <tr><td colSpan={4}>Failed to load {shipment.shipmentRef}: {error.message}</td></tr>;
-  if (isLoading || !data) return <tr><td colSpan={4}>Loading {shipment.shipmentRef}…</td></tr>;
+  if (error) return <tr><td colSpan={5}>Failed to load {shipment.shipmentRef}: {error.message}</td></tr>;
+  if (isLoading || !data) return <tr><td colSpan={5}>Loading {shipment.shipmentRef}…</td></tr>;
 
   // Once a shipment has arrived, the server requires reasonNote regardless of
   // reasonCategory — this now performs a real ledger correction, not just an
@@ -769,6 +844,9 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
           <LockCostsControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
         </div>
       </td>
+      <td>
+        <ShipmentLinksControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+      </td>
     </tr>
   );
 }
@@ -894,7 +972,7 @@ export function ShipmentsPage() {
       <p>Each shipment lists the PO line items it carries — one shipment can pool cargo from multiple POs.</p>
       <CreateShipmentForm />
       <table>
-        <thead><tr><th>Ref</th><th>Status</th><th>Line items</th><th>Costs</th></tr></thead>
+        <thead><tr><th>Ref</th><th>Status</th><th>Line items</th><th>Costs</th><th>Links</th></tr></thead>
         <tbody>
           {shipmentsList.map((shipment) => (
             <ShipmentRow key={shipment.id} shipment={shipment} />

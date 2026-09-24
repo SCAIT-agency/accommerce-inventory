@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { sql } from "drizzle-orm";
+import { sql, eq } from "drizzle-orm";
 import { db } from "./dbClient";
 import { purchaseOrders, poLineItems, skus, vendors, changeLog, users } from "../drizzle/schema";
-import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems } from "./purchaseOrders";
+import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, getPurchaseOrderWithLineItems } from "./purchaseOrders";
 import { createSku, createVendor, createUser } from "./db";
 
 let userId: number;
@@ -134,5 +134,39 @@ describe("purchase orders", () => {
 
   it("rejects getPurchaseOrderWithLineItems for a nonexistent purchase order with a clear error", async () => {
     await expect(getPurchaseOrderWithLineItems(999999)).rejects.toThrow(/no purchase order found with id 999999/);
+  });
+
+  it("updatePurchaseOrderLinks sets the reference link fields, unaudited", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
+
+    const updated = await updatePurchaseOrderLinks(po.id, {
+      contractLink: "https://drive.google.com/contract",
+      invoiceLink: "https://drive.google.com/invoice",
+      addOnLink: "https://drive.google.com/addon",
+    });
+
+    expect(updated.contractLink).toBe("https://drive.google.com/contract");
+    expect(updated.invoiceLink).toBe("https://drive.google.com/invoice");
+    expect(updated.addOnLink).toBe("https://drive.google.com/addon");
+    const history = await db.select().from(changeLog).where(eq(changeLog.entityId, po.id));
+    expect(history).toHaveLength(0);
+  });
+
+  it("updatePurchaseOrderLinks only updates the fields actually passed, leaving others untouched", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
+    await updatePurchaseOrderLinks(po.id, { contractLink: "https://drive.google.com/contract" });
+
+    const updated = await updatePurchaseOrderLinks(po.id, { invoiceLink: "https://drive.google.com/invoice" });
+
+    expect(updated.contractLink).toBe("https://drive.google.com/contract");
+    expect(updated.invoiceLink).toBe("https://drive.google.com/invoice");
+  });
+
+  it("rejects updatePurchaseOrderLinks for a nonexistent purchase order with a clear error", async () => {
+    await expect(
+      updatePurchaseOrderLinks(999999, { contractLink: "https://drive.google.com/contract" }),
+    ).rejects.toThrow(/no purchase order found with id 999999/);
   });
 });

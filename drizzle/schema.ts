@@ -120,6 +120,12 @@ export const purchaseOrders = mysqlTable("purchase_orders", {
   status: mysqlEnum("status", PO_STATUSES).default("draft").notNull(),
   plannedReadyDate: date("plannedReadyDate", { mode: "string" }),
   notes: text("notes"),
+  /** External reference links (e.g. Google Drive) — kept as links, not stored
+   * files, so this platform never becomes the document store. Not audited:
+   * this codebase's change_log scope is delay/cost-affecting fields only. */
+  contractLink: varchar("contractLink", { length: 512 }),
+  invoiceLink: varchar("invoiceLink", { length: 512 }),
+  addOnLink: varchar("addOnLink", { length: 512 }),
   createdBy: int("createdBy").notNull().references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -147,6 +153,11 @@ export const shipments = mysqlTable("shipments", {
   status: mysqlEnum("status", SHIPMENT_STATUSES).default("planned").notNull(),
   customsStatus: mysqlEnum("customsStatus", CUSTOMS_STATUSES).default("not_declared").notNull(),
   customsDeclarationLink: varchar("customsDeclarationLink", { length: 512 }),
+  /** Same rationale as purchaseOrders' link fields above — external
+   * references (Google Drive etc.), not audited. */
+  quoteLink: varchar("quoteLink", { length: 512 }),
+  invoiceLink: varchar("invoiceLink", { length: 512 }),
+  customsInvoiceLink: varchar("customsInvoiceLink", { length: 512 }),
   warehouseId: int("warehouseId").notNull().references(() => warehouses.id),
   plannedDepartDate: timestamp("plannedDepartDate"),
   actualDepartDate: timestamp("actualDepartDate"),

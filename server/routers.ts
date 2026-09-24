@@ -3,8 +3,8 @@ import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { getRemainingBatches } from "./inventoryLedger";
 import { listSkus, createSku, updateSku, listVendors, createVendor, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
-import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
-import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
+import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
+import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation, upsertWeeklyInput, listWeeklyInputs } from "./salesPlan";
 import { PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES } from "../drizzle/schema";
@@ -104,6 +104,9 @@ export const appRouter = router({
       .mutation(({ input, ctx }) =>
         updatePurchaseOrderPlannedReadyDate(input.id, input.newDate.toISOString().slice(0, 10), { ...input, changedBy: ctx.user.id }),
       ),
+    updateLinks: editorProcedure
+      .input(z.object({ id: z.number(), contractLink: z.string().optional(), invoiceLink: z.string().optional(), addOnLink: z.string().optional() }))
+      .mutation(({ input }) => updatePurchaseOrderLinks(input.id, { contractLink: input.contractLink, invoiceLink: input.invoiceLink, addOnLink: input.addOnLink })),
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("purchase_order", input)),
   }),
   shipments: router({
@@ -241,6 +244,22 @@ export const appRouter = router({
     lockCosts: editorProcedure
       .input(z.object({ id: z.number(), reasonNote: z.string().min(1) }))
       .mutation(({ input, ctx }) => lockShipmentCosts(input.id, { changedBy: ctx.user.id, reasonNote: input.reasonNote })),
+    updateLinks: editorProcedure
+      .input(z.object({
+        id: z.number(),
+        quoteLink: z.string().optional(),
+        invoiceLink: z.string().optional(),
+        customsInvoiceLink: z.string().optional(),
+        customsDeclarationLink: z.string().optional(),
+      }))
+      .mutation(({ input }) =>
+        updateShipmentLinks(input.id, {
+          quoteLink: input.quoteLink,
+          invoiceLink: input.invoiceLink,
+          customsInvoiceLink: input.customsInvoiceLink,
+          customsDeclarationLink: input.customsDeclarationLink,
+        }),
+      ),
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("shipment", input)),
   }),
   payments: router({

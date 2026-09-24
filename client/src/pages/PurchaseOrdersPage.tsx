@@ -462,6 +462,73 @@ function AdvanceStatusControl({ po, onAdvanced }: { po: { id: number; status: (t
   );
 }
 
+type PoListItem = RouterOutputs["purchaseOrders"]["list"][number];
+
+interface PoLinksFormState {
+  contractLink: string;
+  invoiceLink: string;
+  addOnLink: string;
+}
+
+function defaultLinksForm(po: PoListItem): PoLinksFormState {
+  return {
+    contractLink: po.contractLink ?? "",
+    invoiceLink: po.invoiceLink ?? "",
+    addOnLink: po.addOnLink ?? "",
+  };
+}
+
+// Reference links only (Google Drive etc.) -- this platform never stores the
+// documents themselves. No reasonCategory/audit trail: these don't affect
+// delay or cost, the only things this codebase's change_log tracks.
+function PoLinksControl({ po, onUpdated }: { po: PoListItem; onUpdated: () => void }) {
+  const updateLinks = trpc.purchaseOrders.updateLinks.useMutation({ onSuccess: onUpdated });
+  const [form, setForm] = useState<PoLinksFormState>(() => defaultLinksForm(po));
+
+  const linkRow = (label: string, url: string | null) =>
+    url ? <div>{label}: <a href={url} target="_blank" rel="noreferrer">{label}</a></div> : null;
+
+  return (
+    <div>
+      {linkRow("Contract", po.contractLink)}
+      {linkRow("Invoice", po.invoiceLink)}
+      {linkRow("Add-on", po.addOnLink)}
+      <input
+        type="text"
+        placeholder="contract link"
+        value={form.contractLink}
+        onChange={(e) => setForm((prev) => ({ ...prev, contractLink: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="invoice link"
+        value={form.invoiceLink}
+        onChange={(e) => setForm((prev) => ({ ...prev, invoiceLink: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="add-on link"
+        value={form.addOnLink}
+        onChange={(e) => setForm((prev) => ({ ...prev, addOnLink: e.target.value }))}
+      />
+      <button
+        disabled={updateLinks.isPending}
+        onClick={() =>
+          updateLinks.mutate({
+            id: po.id,
+            contractLink: form.contractLink.trim(),
+            invoiceLink: form.invoiceLink.trim(),
+            addOnLink: form.addOnLink.trim(),
+          })
+        }
+      >
+        Save links
+      </button>
+      {updateLinks.error && <div>Failed to save: {updateLinks.error.message}</div>}
+    </div>
+  );
+}
+
 export function PurchaseOrdersPage() {
   const { data: pos, isLoading, error, refetch } = trpc.purchaseOrders.list.useQuery();
   const updateDate = trpc.purchaseOrders.updatePlannedReadyDate.useMutation({ onSuccess: () => refetch() });
@@ -478,7 +545,7 @@ export function PurchaseOrdersPage() {
       <h1>Purchase Orders</h1>
       <CreatePoForm />
       <table>
-        <thead><tr><th>PO</th><th>Status</th><th>Planned Ready</th><th>Change date</th><th>Payments</th><th>Shipments</th></tr></thead>
+        <thead><tr><th>PO</th><th>Status</th><th>Planned Ready</th><th>Change date</th><th>Payments</th><th>Shipments</th><th>Links</th></tr></thead>
         <tbody>
           {pos.map((po) => {
             const row = rowState[po.id] ?? defaultRowState(po.plannedReadyDate);
@@ -534,6 +601,9 @@ export function PurchaseOrdersPage() {
                 </td>
                 <td>
                   <PoShipmentsSection poId={po.id} />
+                </td>
+                <td>
+                  <PoLinksControl po={po} onUpdated={refetch} />
                 </td>
               </tr>
             );

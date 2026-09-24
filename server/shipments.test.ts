@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql, eq, and } from "drizzle-orm";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments, warehouses, users } from "../drizzle/schema";
-import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts } from "./shipments";
+import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks } from "./shipments";
 import { createSku, createVendor, createWarehouse, createUser } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { listChangeLog } from "./changeLog";
@@ -1304,5 +1304,39 @@ describe("shipments", () => {
 
     const [unchanged] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
     expect(unchanged.costsLockedAt).toBeNull();
+  });
+
+  it("updateShipmentLinks sets the reference link fields, unaudited", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container-Links1", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+
+    const updated = await updateShipmentLinks(shipment.id, {
+      quoteLink: "https://drive.google.com/quote",
+      invoiceLink: "https://drive.google.com/invoice",
+      customsInvoiceLink: "https://drive.google.com/customs-invoice",
+      customsDeclarationLink: "https://drive.google.com/customs-declaration",
+    });
+
+    expect(updated.quoteLink).toBe("https://drive.google.com/quote");
+    expect(updated.invoiceLink).toBe("https://drive.google.com/invoice");
+    expect(updated.customsInvoiceLink).toBe("https://drive.google.com/customs-invoice");
+    expect(updated.customsDeclarationLink).toBe("https://drive.google.com/customs-declaration");
+    const history = await listChangeLog("shipment", shipment.id);
+    expect(history).toHaveLength(0);
+  });
+
+  it("updateShipmentLinks only updates the fields actually passed, leaving others untouched", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container-Links2", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    await updateShipmentLinks(shipment.id, { quoteLink: "https://drive.google.com/quote" });
+
+    const updated = await updateShipmentLinks(shipment.id, { invoiceLink: "https://drive.google.com/invoice" });
+
+    expect(updated.quoteLink).toBe("https://drive.google.com/quote");
+    expect(updated.invoiceLink).toBe("https://drive.google.com/invoice");
+  });
+
+  it("rejects updateShipmentLinks for a nonexistent shipment with a clear error", async () => {
+    await expect(
+      updateShipmentLinks(999999, { quoteLink: "https://drive.google.com/quote" }),
+    ).rejects.toThrow(/no shipment found with id 999999/);
   });
 });

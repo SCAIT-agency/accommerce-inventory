@@ -82,6 +82,32 @@ export async function updatePurchaseOrderStatus(
   });
 }
 
+export interface PurchaseOrderLinks {
+  contractLink?: string;
+  invoiceLink?: string;
+  addOnLink?: string;
+}
+
+/**
+ * Sets external reference links (e.g. Google Drive) on a purchase order.
+ * Unaudited: change_log in this codebase is scoped to fields that affect
+ * delay or cost, which these don't. Only the fields actually passed are
+ * written — an omitted field leaves its current value untouched.
+ */
+export async function updatePurchaseOrderLinks(
+  id: number,
+  links: PurchaseOrderLinks,
+  dbClient: DbClient = db,
+): Promise<PurchaseOrder> {
+  const [po] = await dbClient.select().from(purchaseOrders).where(eq(purchaseOrders.id, id));
+  if (!po) {
+    throw new Error(`updatePurchaseOrderLinks: no purchase order found with id ${id}`);
+  }
+  await dbClient.update(purchaseOrders).set(links).where(eq(purchaseOrders.id, id));
+  const [updated] = await dbClient.select().from(purchaseOrders).where(eq(purchaseOrders.id, id));
+  return updated;
+}
+
 export async function updatePurchaseOrderPlannedReadyDate(
   id: number,
   newDate: string,

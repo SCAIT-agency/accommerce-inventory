@@ -239,6 +239,33 @@ export async function recordShipmentCosts(
   });
 }
 
+export interface ShipmentLinks {
+  quoteLink?: string;
+  invoiceLink?: string;
+  customsInvoiceLink?: string;
+  customsDeclarationLink?: string;
+}
+
+/**
+ * Sets external reference links (e.g. Google Drive) on a shipment.
+ * Unaudited: change_log in this codebase is scoped to fields that affect
+ * delay or cost, which these don't. Only the fields actually passed are
+ * written — an omitted field leaves its current value untouched.
+ */
+export async function updateShipmentLinks(
+  id: number,
+  links: ShipmentLinks,
+  dbClient: DbClient = db,
+): Promise<Shipment> {
+  const [shipment] = await dbClient.select().from(shipments).where(eq(shipments.id, id));
+  if (!shipment) {
+    throw new Error(`updateShipmentLinks: no shipment found with id ${id}`);
+  }
+  await dbClient.update(shipments).set(links).where(eq(shipments.id, id));
+  const [updated] = await dbClient.select().from(shipments).where(eq(shipments.id, id));
+  return updated;
+}
+
 export async function lockShipmentCosts(
   id: number,
   opts: { changedBy: number; reasonNote: string },
