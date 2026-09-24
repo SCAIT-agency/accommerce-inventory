@@ -842,6 +842,7 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
     },
   });
   const [form, setForm] = useState<CostsFormState>(() => defaultCostsForm(shipment));
+  const [expanded, setExpanded] = useState(false);
 
   if (error) return <tr><td colSpan={7}>Failed to load {shipment.shipmentRef}: {error.message}</td></tr>;
   if (isLoading || !data) return <tr><td colSpan={7}>Loading {shipment.shipmentRef}…</td></tr>;
@@ -879,154 +880,178 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
     });
   };
 
+  const costsSummary = (
+    <div>
+      Freight: {shipment.freightCost != null && shipment.costCurrency ? formatMoney(shipment.freightCost, shipment.costCurrency) : "—"}
+      {" · "}
+      Admin fees: {shipment.adminFeesCost != null && shipment.costCurrency ? formatMoney(shipment.adminFeesCost, shipment.costCurrency) : "—"}
+      {" · "}
+      Duty: {shipment.dutyCost != null && shipment.costCurrency ? formatMoney(shipment.dutyCost, shipment.costCurrency) : "—"}
+      {" · "}
+      EUST: {shipment.eustAmount != null && shipment.costCurrency ? formatMoney(shipment.eustAmount, shipment.costCurrency) : "—"}
+      {" · "}
+      VAT: {shipment.vatAmount != null && shipment.costCurrency ? formatMoney(shipment.vatAmount, shipment.costCurrency) : "—"}
+      {shipment.costsLockedAt != null && " 🔒"}
+    </div>
+  );
+
   return (
-    <tr>
-      <td>{shipment.shipmentRef}</td>
-      <td>
-        <span className={SHIPMENT_STATUS_BADGE_CLASS[shipment.status] ?? DEFAULT_STATUS_BADGE_CLASS}>{shipment.status}</span>
-        <div style={{ marginTop: "8px" }}>
-          <PlannedDepartureControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
-        </div>
-        <div style={{ marginTop: "8px" }}>
-          <StatusTransitionControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
-        </div>
-        <div style={{ marginTop: "8px" }}>
-          <CustomsArrivalControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
-        </div>
-        <div style={{ marginTop: "8px" }}>
-          <DepartDateCorrectionControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
-        </div>
-        <div style={{ marginTop: "8px" }}>
-          <CorrectReceiptControl
-            shipment={shipment}
-            lineItems={data.lineItems}
-            onUpdated={() => { refetch(); utils.shipments.list.invalidate(); utils.dashboards.money.invalidate(); utils.dashboards.stock.invalidate(); }}
-          />
-        </div>
-        <div style={{ marginTop: "8px" }}><Link to={`/change-log/shipment/${shipment.id}`}>History</Link></div>
-      </td>
-      <td>
-        <ul>
-          {data.lineItems.map((li) => (
-            <li key={li.id}>{skuLabel(skusById.get(li.skuId) ?? { id: li.skuId })} — qty {li.qty}</li>
-          ))}
-        </ul>
-      </td>
-      <td>
-        <div>
-          Freight: {shipment.freightCost != null && shipment.costCurrency ? formatMoney(shipment.freightCost, shipment.costCurrency) : "—"}
-          {" · "}
-          Admin fees: {shipment.adminFeesCost != null && shipment.costCurrency ? formatMoney(shipment.adminFeesCost, shipment.costCurrency) : "—"}
-          {" · "}
-          Duty: {shipment.dutyCost != null && shipment.costCurrency ? formatMoney(shipment.dutyCost, shipment.costCurrency) : "—"}
-          {" · "}
-          EUST: {shipment.eustAmount != null && shipment.costCurrency ? formatMoney(shipment.eustAmount, shipment.costCurrency) : "—"}
-          {" · "}
-          VAT: {shipment.vatAmount != null && shipment.costCurrency ? formatMoney(shipment.vatAmount, shipment.costCurrency) : "—"}
-        </div>
-        {shipment.costsLockedAt != null && (
-          <p>
-            🔒 Locked on {new Date(shipment.costsLockedAt).toISOString().slice(0, 10)} — use this shipment's
-            "Correct cost restated" control to make further changes.
-          </p>
-        )}
-        {shipment.status === "delivered" && shipment.costsLockedAt == null && (
-          <p>
-            This shipment has arrived — saving here restates the ledger receipt for every affected line.
-          </p>
-        )}
-        <input
-          type="text"
-          placeholder="freight (delivery) cost"
-          value={form.freightCost}
-          disabled={shipment.costsLockedAt != null}
-          onChange={(e) => setForm((prev) => ({ ...prev, freightCost: e.target.value }))}
-        />
-        <input
-          type="text"
-          placeholder="admin fees"
-          value={form.adminFeesCost}
-          disabled={shipment.costsLockedAt != null}
-          onChange={(e) => setForm((prev) => ({ ...prev, adminFeesCost: e.target.value }))}
-        />
-        <input
-          type="text"
-          placeholder="duty cost (non-refundable)"
-          value={form.dutyCost}
-          disabled={shipment.costsLockedAt != null}
-          onChange={(e) => setForm((prev) => ({ ...prev, dutyCost: e.target.value }))}
-        />
-        <input
-          type="text"
-          placeholder="EUST (refundable)"
-          value={form.eustAmount}
-          disabled={shipment.costsLockedAt != null}
-          onChange={(e) => setForm((prev) => ({ ...prev, eustAmount: e.target.value }))}
-        />
-        <input
-          type="text"
-          placeholder="VAT (refundable)"
-          value={form.vatAmount}
-          disabled={shipment.costsLockedAt != null}
-          onChange={(e) => setForm((prev) => ({ ...prev, vatAmount: e.target.value }))}
-        />
-        <input
-          type="text"
-          placeholder="currency"
-          value={form.costCurrency}
-          onChange={(e) => setForm((prev) => ({ ...prev, costCurrency: e.target.value }))}
-        />
-        <select
-          value={form.reasonCategory}
-          onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
-        >
-          {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        {noteRequired && (
-          <input
-            type="text"
-            placeholder="required note"
-            value={form.reasonNote}
-            onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
-          />
-        )}
-        <button
-          disabled={!canSave || shipment.costsLockedAt != null || recordCosts.isPending}
-          onClick={() => submitCosts()}
-        >
-          Save costs
-        </button>
-        {costSaveNeedsForce && (
-          <button disabled={recordCosts.isPending} onClick={() => submitCosts(true)}>
-            Force this correction anyway
-          </button>
-        )}
-        {recordCosts.error && (
-          <div>
-            Failed to save: {recordCosts.error.message}
-            {costSaveNeedsForce && (
-              <div>
-                Forcing this correction will apply to every line item on this shipment that needs it, not just
-                one — remaining-batch and Daily COGS figures for those SKUs may error out until the over-sale is
-                separately resolved.
-              </div>
-            )}
+    <>
+      <tr>
+        <td>{shipment.shipmentRef}</td>
+        <td>
+          <span className={SHIPMENT_STATUS_BADGE_CLASS[shipment.status] ?? DEFAULT_STATUS_BADGE_CLASS}>{shipment.status}</span>
+          <div style={{ marginTop: "8px" }}>
+            <button onClick={() => setExpanded((x) => !x)}>{expanded ? "Hide details ▴" : "Details ▾"}</button>
           </div>
-        )}
-        <div style={{ marginTop: "8px" }}>
-          <LockCostsControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
-        </div>
-      </td>
-      <td>
-        <ShipmentLinksControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
-      </td>
-      <td>
-        <ShipMethodControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
-      </td>
-      <td>
-        <ShipmentPaymentsSection shipmentId={shipment.id} />
-      </td>
-    </tr>
+        </td>
+        <td>{data.lineItems.length} line item{data.lineItems.length === 1 ? "" : "s"}</td>
+        <td>{costsSummary}</td>
+        <td>{shipment.quoteLink || shipment.invoiceLink || shipment.customsInvoiceLink || shipment.customsDeclarationLink ? "links set" : "—"}</td>
+        <td>{shipment.shipMethod ?? "—"}</td>
+        <td>{expanded ? null : "(see details)"}</td>
+      </tr>
+      {expanded && (
+        <tr>
+          <td colSpan={7}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              <div>
+                <div style={{ marginTop: "8px" }}>
+                  <PlannedDepartureControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+                </div>
+                <div style={{ marginTop: "8px" }}>
+                  <StatusTransitionControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+                </div>
+                <div style={{ marginTop: "8px" }}>
+                  <CustomsArrivalControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+                </div>
+                <div style={{ marginTop: "8px" }}>
+                  <DepartDateCorrectionControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+                </div>
+                <div style={{ marginTop: "8px" }}>
+                  <CorrectReceiptControl
+                    shipment={shipment}
+                    lineItems={data.lineItems}
+                    onUpdated={() => { refetch(); utils.shipments.list.invalidate(); utils.dashboards.money.invalidate(); utils.dashboards.stock.invalidate(); }}
+                  />
+                </div>
+                <div style={{ marginTop: "8px" }}><Link to={`/change-log/shipment/${shipment.id}`}>History</Link></div>
+              </div>
+              <div>
+                <ul>
+                  {data.lineItems.map((li) => (
+                    <li key={li.id}>{skuLabel(skusById.get(li.skuId) ?? { id: li.skuId })} — qty {li.qty}</li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                {shipment.status === "delivered" && shipment.costsLockedAt == null && (
+                  <p>
+                    This shipment has arrived — saving here restates the ledger receipt for every affected line.
+                  </p>
+                )}
+                {shipment.costsLockedAt != null && (
+                  <p>
+                    Locked on {new Date(shipment.costsLockedAt).toISOString().slice(0, 10)} — use this shipment's
+                    "Correct cost restated" control to make further changes.
+                  </p>
+                )}
+                <input
+                  type="text"
+                  placeholder="freight (delivery) cost"
+                  value={form.freightCost}
+                  disabled={shipment.costsLockedAt != null}
+                  onChange={(e) => setForm((prev) => ({ ...prev, freightCost: e.target.value }))}
+                />
+                <input
+                  type="text"
+                  placeholder="admin fees"
+                  value={form.adminFeesCost}
+                  disabled={shipment.costsLockedAt != null}
+                  onChange={(e) => setForm((prev) => ({ ...prev, adminFeesCost: e.target.value }))}
+                />
+                <input
+                  type="text"
+                  placeholder="duty cost (non-refundable)"
+                  value={form.dutyCost}
+                  disabled={shipment.costsLockedAt != null}
+                  onChange={(e) => setForm((prev) => ({ ...prev, dutyCost: e.target.value }))}
+                />
+                <input
+                  type="text"
+                  placeholder="EUST (refundable)"
+                  value={form.eustAmount}
+                  disabled={shipment.costsLockedAt != null}
+                  onChange={(e) => setForm((prev) => ({ ...prev, eustAmount: e.target.value }))}
+                />
+                <input
+                  type="text"
+                  placeholder="VAT (refundable)"
+                  value={form.vatAmount}
+                  disabled={shipment.costsLockedAt != null}
+                  onChange={(e) => setForm((prev) => ({ ...prev, vatAmount: e.target.value }))}
+                />
+                <input
+                  type="text"
+                  placeholder="currency"
+                  value={form.costCurrency}
+                  onChange={(e) => setForm((prev) => ({ ...prev, costCurrency: e.target.value }))}
+                />
+                <select
+                  value={form.reasonCategory}
+                  onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}
+                >
+                  {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+                {noteRequired && (
+                  <input
+                    type="text"
+                    placeholder="required note"
+                    value={form.reasonNote}
+                    onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))}
+                  />
+                )}
+                <button
+                  disabled={!canSave || shipment.costsLockedAt != null || recordCosts.isPending}
+                  onClick={() => submitCosts()}
+                >
+                  Save costs
+                </button>
+                {costSaveNeedsForce && (
+                  <button disabled={recordCosts.isPending} onClick={() => submitCosts(true)}>
+                    Force this correction anyway
+                  </button>
+                )}
+                {recordCosts.error && (
+                  <div>
+                    Failed to save: {recordCosts.error.message}
+                    {costSaveNeedsForce && (
+                      <div>
+                        Forcing this correction will apply to every line item on this shipment that needs it, not
+                        just one — remaining-batch and Daily COGS figures for those SKUs may error out until the
+                        over-sale is separately resolved.
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div style={{ marginTop: "8px" }}>
+                  <LockCostsControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+                </div>
+              </div>
+              <div>
+                <ShipmentLinksControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+              </div>
+              <div>
+                <ShipMethodControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+              </div>
+              <div>
+                <ShipmentPaymentsSection shipmentId={shipment.id} />
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 

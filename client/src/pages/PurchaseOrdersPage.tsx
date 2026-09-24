@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Link } from "react-router-dom";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
@@ -690,12 +690,20 @@ export function PurchaseOrdersPage() {
   const { data: pos, isLoading, error, refetch } = trpc.purchaseOrders.list.useQuery();
   const updateDate = trpc.purchaseOrders.updatePlannedReadyDate.useMutation({ onSuccess: () => refetch() });
   const [rowState, setRowState] = useState<Record<number, RowState>>({});
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
   if (error) return <div>Failed to load: {error.message}</div>;
   if (isLoading || !pos) return <div>Loading…</div>;
 
   const setRow = (id: number, plannedReadyDate: string | Date | null | undefined, patch: Partial<RowState>) =>
     setRowState((prev) => ({ ...prev, [id]: { ...(prev[id] ?? defaultRowState(plannedReadyDate)), ...patch } }));
+
+  const toggleExpanded = (id: number) =>
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
 
   return (
     <div>
@@ -708,67 +716,89 @@ export function PurchaseOrdersPage() {
             const row = rowState[po.id] ?? defaultRowState(po.plannedReadyDate);
             const noteRequired = row.reasonCategory === "other";
             const canSave = !noteRequired || row.reasonNote.trim().length > 0;
+            const expanded = expandedIds.has(po.id);
             return (
-              <tr key={po.id}>
-                <td>{po.poNumber}</td>
-                <td>
-                  <span className={PO_STATUS_BADGE_CLASS[po.status] ?? DEFAULT_STATUS_BADGE_CLASS}>{po.status}</span>
-                  <AdvanceStatusControl po={po} onAdvanced={refetch} />
-                  <div><Link to={`/change-log/purchase_order/${po.id}`}>History</Link></div>
-                </td>
-                <td>{po.plannedReadyDate ? new Date(po.plannedReadyDate).toISOString().slice(0, 10) : "—"}</td>
-                <td>
-                  <input
-                    type="date"
-                    value={row.newDate}
-                    onChange={(e) => setRow(po.id, po.plannedReadyDate, { newDate: e.target.value })}
-                  />
-                  <select
-                    value={row.reasonCategory}
-                    onChange={(e) =>
-                      setRow(po.id, po.plannedReadyDate, { reasonCategory: e.target.value as ReasonCategory })
-                    }
-                  >
-                    {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                  {noteRequired && (
-                    <input
-                      type="text"
-                      placeholder="required note"
-                      value={row.reasonNote}
-                      onChange={(e) => setRow(po.id, po.plannedReadyDate, { reasonNote: e.target.value })}
-                    />
-                  )}
-                  <button
-                    disabled={!canSave || updateDate.isPending}
-                    onClick={() =>
-                      updateDate.mutate({
-                        id: po.id,
-                        newDate: new Date(row.newDate),
-                        reasonCategory: row.reasonCategory,
-                        reasonNote: noteRequired ? row.reasonNote : undefined,
-                      })
-                    }
-                  >
-                    Save
-                  </button>
-                </td>
-                <td>
-                  <ActualReadyDateControl po={po} onUpdated={refetch} />
-                </td>
-                <td>
-                  <PoPaymentsSection poId={po.id} />
-                </td>
-                <td>
-                  <PoShipmentsSection poId={po.id} />
-                </td>
-                <td>
-                  <PoLineItemsSection poId={po.id} onUpdated={refetch} />
-                </td>
-                <td>
-                  <PoLinksControl po={po} onUpdated={refetch} />
-                </td>
-              </tr>
+              <Fragment key={po.id}>
+                <tr>
+                  <td>{po.poNumber}</td>
+                  <td>
+                    <span className={PO_STATUS_BADGE_CLASS[po.status] ?? DEFAULT_STATUS_BADGE_CLASS}>{po.status}</span>
+                    <div style={{ marginTop: "8px" }}>
+                      <button onClick={() => toggleExpanded(po.id)}>{expanded ? "Hide details ▴" : "Details ▾"}</button>
+                    </div>
+                  </td>
+                  <td>{po.plannedReadyDate ? new Date(po.plannedReadyDate).toISOString().slice(0, 10) : "—"}</td>
+                  <td>{expanded ? null : "(see details)"}</td>
+                  <td>{po.actualReadyDate ? new Date(po.actualReadyDate).toISOString().slice(0, 10) : "—"}</td>
+                  <td>{expanded ? null : "(see details)"}</td>
+                  <td>{expanded ? null : "(see details)"}</td>
+                  <td>{expanded ? null : "(see details)"}</td>
+                  <td>{po.contractLink || po.invoiceLink || po.addOnLink ? "links set" : "—"}</td>
+                </tr>
+                {expanded && (
+                  <tr>
+                    <td colSpan={9}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                        <div>
+                          <AdvanceStatusControl po={po} onAdvanced={refetch} />
+                          <div><Link to={`/change-log/purchase_order/${po.id}`}>History</Link></div>
+                        </div>
+                        <div>
+                          <input
+                            type="date"
+                            value={row.newDate}
+                            onChange={(e) => setRow(po.id, po.plannedReadyDate, { newDate: e.target.value })}
+                          />
+                          <select
+                            value={row.reasonCategory}
+                            onChange={(e) =>
+                              setRow(po.id, po.plannedReadyDate, { reasonCategory: e.target.value as ReasonCategory })
+                            }
+                          >
+                            {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                          {noteRequired && (
+                            <input
+                              type="text"
+                              placeholder="required note"
+                              value={row.reasonNote}
+                              onChange={(e) => setRow(po.id, po.plannedReadyDate, { reasonNote: e.target.value })}
+                            />
+                          )}
+                          <button
+                            disabled={!canSave || updateDate.isPending}
+                            onClick={() =>
+                              updateDate.mutate({
+                                id: po.id,
+                                newDate: new Date(row.newDate),
+                                reasonCategory: row.reasonCategory,
+                                reasonNote: noteRequired ? row.reasonNote : undefined,
+                              })
+                            }
+                          >
+                            Save
+                          </button>
+                        </div>
+                        <div>
+                          <ActualReadyDateControl po={po} onUpdated={refetch} />
+                        </div>
+                        <div>
+                          <PoPaymentsSection poId={po.id} />
+                        </div>
+                        <div>
+                          <PoShipmentsSection poId={po.id} />
+                        </div>
+                        <div>
+                          <PoLineItemsSection poId={po.id} onUpdated={refetch} />
+                        </div>
+                        <div>
+                          <PoLinksControl po={po} onUpdated={refetch} />
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             );
           })}
         </tbody>
