@@ -396,6 +396,44 @@ function PoLineItemCostComponentsControl({ line, onUpdated }: { line: PoLineItem
   );
 }
 
+// Control Tower's "Qty Ordered/Produced/Remaining to Produce/Remaining to
+// Ship" -- factory progress tracking, explicitly in scope per Artem (this
+// platform otherwise stays out of production/Ops tracking).
+function PoLineItemProductionControl({ line }: { line: PoLineItemWithId }) {
+  const progressQuery = trpc.purchaseOrders.lineItemProductionProgress.useQuery(line.id);
+  const utils = trpc.useUtils();
+  const updateProduction = trpc.purchaseOrders.updateLineItemProduction.useMutation({
+    onSuccess: () => utils.purchaseOrders.lineItemProductionProgress.invalidate(line.id),
+  });
+  const [qtyProduced, setQtyProduced] = useState(String(line.qtyProduced ?? 0));
+
+  if (progressQuery.error) return <div>Failed to load production progress: {progressQuery.error.message}</div>;
+  if (progressQuery.isLoading || !progressQuery.data) return <div>Loading production progress…</div>;
+  const p = progressQuery.data;
+
+  return (
+    <div>
+      <div>
+        Ordered {p.qtyOrdered} · Produced {p.qtyProduced} · Remaining to produce {p.qtyRemainingToProduce}
+        {" · "}Shipped {p.qtyShipped} · Remaining to ship {p.qtyRemainingToShip}
+      </div>
+      <input
+        type="text"
+        placeholder="qty produced"
+        value={qtyProduced}
+        onChange={(e) => setQtyProduced(e.target.value)}
+      />
+      <button
+        disabled={updateProduction.isPending || qtyProduced.trim() === ""}
+        onClick={() => updateProduction.mutate({ lineItemId: line.id, qtyProduced: Number(qtyProduced) })}
+      >
+        Save production progress
+      </button>
+      {updateProduction.error && <div>Failed to save: {updateProduction.error.message}</div>}
+    </div>
+  );
+}
+
 function PoLineItemsSection({ poId, onUpdated }: { poId: number; onUpdated: () => void }) {
   const linesQuery = trpc.purchaseOrders.getWithLineItems.useQuery(poId);
   const skusQuery = trpc.catalog.listSkus.useQuery();
@@ -412,6 +450,7 @@ function PoLineItemsSection({ poId, onUpdated }: { poId: number; onUpdated: () =
         <div key={line.id} style={{ marginTop: "4px" }}>
           {skuLabel(skusById.get(line.skuId) ?? { id: line.skuId })} — qty {line.qty}
           <PoLineItemCostComponentsControl line={line} onUpdated={onUpdated} />
+          <PoLineItemProductionControl line={line} />
         </div>
       ))}
     </div>

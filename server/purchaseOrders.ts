@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
-import { purchaseOrders, poLineItems, PO_STATUSES, type PurchaseOrder, type PoLineItem } from "../drizzle/schema";
+import { purchaseOrders, poLineItems, shipmentLineItems, PO_STATUSES, type PurchaseOrder, type PoLineItem } from "../drizzle/schema";
 import { logChange, normalizeDecimalForAudit, type ReasonCategory } from "./changeLog";
 
 const VALID_TRANSITIONS: Record<(typeof PO_STATUSES)[number], (typeof PO_STATUSES)[number][]> = {
@@ -193,4 +193,74 @@ export async function updatePoLineItemCostComponents(
 
   const [updated] = await dbClient.select().from(poLineItems).where(eq(poLineItems.id, lineItemId));
   return updated;
+}
+
+/**
+ * Sets factory production progress (Control Tower's "Qty Produced") for a PO
+ * line item. Audited on the parent purchase order, same rationale as
+ * updatePoLineItemCostComponents — po_line_items has no audit trail of its
+ * own.
+ */
+export async function updatePoLineItemProduction(
+  lineItemId: number,
+  qtyProduced: number,
+  opts: { changedBy: number; reasonCategory?: ReasonCategory; reasonNote?: string },
+  dbClient: DbClient = db,
+): Promise<PoLineItem> {
+  if (!Number.isInteger(qtyProduced) || qtyProduced < 0) {
+    throw new Error(`updatePoLineItemProduction: qtyProduced ${qtyProduced} must be a non-negative whole number`);
+  }
+  const [line] = await dbClient.select().from(poLineItems).where(eq(poLineItems.id, lineItemId));
+  if (!line) {
+    throw new Error(`updatePoLineItemProduction: no PO line item found with id ${lineItemId}`);
+  }
+  await dbClient.update(poLineItems).set({ qtyProduced }).where(eq(poLineItems.id, lineItemId));
+  await logChange({
+    entityType: "purchase_order",
+    entityId: line.poId,
+    field: "qtyProduced",
+    oldValue: line.qtyProduced === null ? null : String(line.qtyProduced),
+    newValue: String(qtyProduced),
+    reasonCategory: opts.reasonCategory,
+    reasonNote: opts.reasonNote,
+    changedBy: opts.changedBy,
+  }, dbClient);
+  const [updated] = await dbClient.select().from(poLineItems).where(eq(poLineItems.id, lineItemId));
+  return updated;
+}
+
+export interface PoLineItemProductionProgress {
+  qtyOrdered: number;
+  qtyProduced: number;
+  qtyRemainingToProduce: number;
+  qtyShipped: number;
+  qtyRemainingToShip: number;
+}
+
+/**
+ * Control Tower's "Qty Ordered/Produced/Remaining to Produce/Remaining to
+ * Ship" for one PO line item. Remaining-to-produce and remaining-to-ship are
+ * always computed fresh (never stored) — qtyShipped sums every
+ * shipment_line_items row referencing this PO line regardless of that
+ * shipment's own status, since committing units to a shipment (creating the
+ * line item) is what "shipped" means here, not physical departure.
+ */
+export async function getPoLineItemProductionProgress(
+  lineItemId: number,
+  dbClient: DbClient = db,
+): Promise<PoLineItemProductionProgress> {
+  const [line] = await dbClient.select().from(poLineItems).where(eq(poLineItems.id, lineItemId));
+  if (!line) {
+    throw new Error(`getPoLineItemProductionProgress: no PO line item found with id ${lineItemId}`);
+  }
+  const shippedLines = await dbClient.select().from(shipmentLineItems).where(eq(shipmentLineItems.poLineItemId, lineItemId));
+  const qtyShipped = shippedLines.reduce((sum, l) => sum + l.qty, 0);
+  const qtyProduced = line.qtyProduced ?? 0;
+  return {
+    qtyOrdered: line.qty,
+    qtyProduced,
+    qtyRemainingToProduce: Math.max(line.qty - qtyProduced, 0),
+    qtyShipped,
+    qtyRemainingToShip: Math.max(qtyProduced - qtyShipped, 0),
+  };
 }

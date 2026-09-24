@@ -3,7 +3,7 @@ import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { getRemainingBatches } from "./inventoryLedger";
 import { listSkus, createSku, updateSku, listVendors, createVendor, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
-import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
+import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, updatePoLineItemProduction, getPoLineItemProductionProgress, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation, upsertWeeklyInput, listWeeklyInputs } from "./salesPlan";
@@ -129,6 +129,21 @@ export const appRouter = router({
           { changedBy: ctx.user.id, reasonCategory: input.reasonCategory, reasonNote: input.reasonNote },
         ),
       ),
+    updateLineItemProduction: editorProcedure
+      .input(z.object({
+        lineItemId: z.number(),
+        qtyProduced: z.number().int().nonnegative(),
+        reasonCategory: manualReasonCategorySchema.optional(),
+        reasonNote: z.string().optional(),
+      }))
+      .mutation(({ input, ctx }) =>
+        updatePoLineItemProduction(
+          input.lineItemId,
+          input.qtyProduced,
+          { changedBy: ctx.user.id, reasonCategory: input.reasonCategory, reasonNote: input.reasonNote },
+        ),
+      ),
+    lineItemProductionProgress: protectedProcedure.input(z.number()).query(({ input }) => getPoLineItemProductionProgress(input)),
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("purchase_order", input)),
   }),
   shipments: router({

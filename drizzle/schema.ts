@@ -136,7 +136,13 @@ export const poLineItems = mysqlTable("po_line_items", {
   id: int("id").autoincrement().primaryKey(),
   poId: int("poId").notNull().references(() => purchaseOrders.id),
   skuId: int("skuId").notNull().references(() => skus.id),
+  /** "Qty ordered" (Control Tower naming). */
   qty: int("qty").notNull(),
+  /** Factory production progress toward `qty`. Nullable (null = 0, not yet
+   * reported). "Qty Remaining to Produce" (qty - qtyProduced) and "Qty
+   * Remaining to Ship" (qtyProduced - qty already shipped) are computed, not
+   * stored — see getPoLineItemProductionProgress. */
+  qtyProduced: int("qtyProduced"),
   /** The blended "Full Factory Cost/unit" (Control Tower naming) — EXW plus
    * per-unit lab-test/inspection/add-on — and the value every existing landed
    * cost/ledger calculation actually reads. The 4 component fields below are

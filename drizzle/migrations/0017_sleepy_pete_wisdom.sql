@@ -1,0 +1,1 @@
+ALTER TABLE `po_line_items` ADD `qtyProduced` int;

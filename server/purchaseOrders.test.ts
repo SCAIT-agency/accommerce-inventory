@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { sql, eq } from "drizzle-orm";
 import { db } from "./dbClient";
-import { purchaseOrders, poLineItems, skus, vendors, changeLog, users } from "../drizzle/schema";
-import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, getPurchaseOrderWithLineItems } from "./purchaseOrders";
-import { createSku, createVendor, createUser } from "./db";
+import { purchaseOrders, poLineItems, skus, vendors, changeLog, users, shipments, shipmentLineItems, warehouses } from "../drizzle/schema";
+import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, updatePoLineItemProduction, getPoLineItemProductionProgress, getPurchaseOrderWithLineItems } from "./purchaseOrders";
+import { createSku, createVendor, createUser, createWarehouse } from "./db";
+import { createShipment } from "./shipments";
 
 let userId: number;
 
@@ -22,10 +23,13 @@ beforeEach(async () => {
     await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 0`);
     try {
       await tx.delete(changeLog);
+      await tx.delete(shipmentLineItems);
+      await tx.delete(shipments);
       await tx.delete(poLineItems);
       await tx.delete(purchaseOrders);
       await tx.delete(skus);
       await tx.delete(vendors);
+      await tx.delete(warehouses);
       await tx.delete(users);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
@@ -238,5 +242,109 @@ describe("purchase orders", () => {
     await expect(
       updatePoLineItemCostComponents(999999, { exwUnitPrice: "0.10" }, { changedBy: userId, reasonNote: "test" }),
     ).rejects.toThrow(/no PO line item found with id 999999/);
+  });
+
+  it("updatePoLineItemProduction sets qtyProduced and logs an audited change on the parent purchase order", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO3-JELLO",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
+      createdBy: userId,
+    });
+    const [line] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+
+    const updated = await updatePoLineItemProduction(line.id, 400, { changedBy: userId, reasonCategory: "production_delay", reasonNote: "first batch off the line" });
+
+    expect(updated.qtyProduced).toBe(400);
+    const history = await db.select().from(changeLog).where(eq(changeLog.entityId, po.id));
+    const entry = history.find((h) => h.field === "qtyProduced");
+    expect(entry).toBeDefined();
+    expect(entry?.entityType).toBe("purchase_order");
+    expect(entry?.oldValue).toBeNull();
+    expect(entry?.newValue).toBe("400");
+    expect(entry?.reasonCategory).toBe("production_delay");
+  });
+
+  it("rejects a negative or non-integer qtyProduced", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO3-JELLO",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
+      createdBy: userId,
+    });
+    const [line] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+
+    await expect(
+      updatePoLineItemProduction(line.id, -5, { changedBy: userId, reasonNote: "test" }),
+    ).rejects.toThrow(/must be a non-negative whole number/);
+    await expect(
+      updatePoLineItemProduction(line.id, 4.5, { changedBy: userId, reasonNote: "test" }),
+    ).rejects.toThrow(/must be a non-negative whole number/);
+  });
+
+  it("rejects updatePoLineItemProduction for a nonexistent line item with a clear error", async () => {
+    await expect(
+      updatePoLineItemProduction(999999, 100, { changedBy: userId, reasonNote: "test" }),
+    ).rejects.toThrow(/no PO line item found with id 999999/);
+  });
+
+  it("getPoLineItemProductionProgress computes remaining-to-produce and remaining-to-ship from real shipment line items", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO3-JELLO",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
+      createdBy: userId,
+    });
+    const [line] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+    await updatePoLineItemProduction(line.id, 700, { changedBy: userId, reasonNote: "700 produced so far" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    await createShipment({
+      shipmentRef: "PO3-Container1",
+      warehouseId: ff.id,
+      lineItems: [{ poLineItemId: line.id, skuId: sku.id, qty: 300, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+
+    const progress = await getPoLineItemProductionProgress(line.id);
+
+    expect(progress).toEqual({
+      qtyOrdered: 1000,
+      qtyProduced: 700,
+      qtyRemainingToProduce: 300,
+      qtyShipped: 300,
+      qtyRemainingToShip: 400,
+    });
+  });
+
+  it("getPoLineItemProductionProgress treats an unset qtyProduced as 0", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO3-JELLO",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
+      createdBy: userId,
+    });
+    const [line] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+
+    const progress = await getPoLineItemProductionProgress(line.id);
+
+    expect(progress).toEqual({
+      qtyOrdered: 1000,
+      qtyProduced: 0,
+      qtyRemainingToProduce: 1000,
+      qtyShipped: 0,
+      qtyRemainingToShip: 0,
+    });
+  });
+
+  it("rejects getPoLineItemProductionProgress for a nonexistent line item with a clear error", async () => {
+    await expect(getPoLineItemProductionProgress(999999)).rejects.toThrow(/no PO line item found with id 999999/);
   });
 });
