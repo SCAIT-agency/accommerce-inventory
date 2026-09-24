@@ -133,6 +133,42 @@ export function defaultLandedCostTolerance(expected: number): number {
 export interface ReconcileOptions {
   /** Absolute tolerance for a landed-cost comparison, as a function of the expected value. Defaults to defaultLandedCostTolerance. */
   landedCostTolerance?: (expected: number) => number;
+  /**
+   * Sum of qty across still-status="planned" (not yet departed) shipments,
+   * keyed by "sku|warehouseCode" -- see computePlannedShipmentQty. The
+   * Sheet's own pre-aggregated "Current On-Hand" total can include these
+   * prematurely (a real, observed Sheet-side bug: Apps Script counts a
+   * shipment's units as on-hand before it has even left the factory) — not
+   * something fixable on our side, since the Sheet hands us only the final
+   * summed number, never its per-shipment breakdown, and not something that
+   * happens for every SKU/warehouse pair (observed 2026-09-24: two different
+   * planned shipments created the same day, one inflated its pair's Sheet
+   * total, the other didn't). So this is tolerance, not a forced adjustment:
+   * the gate accepts EITHER the Sheet's raw total OR the total minus this
+   * known, fully-explained quantity — never assumes one is always right —
+   * while still catching any gap neither explanation covers.
+   */
+  plannedShipmentQtyBySkuWarehouse?: Map<string, number>;
+}
+
+/**
+ * Sums qty across every still-"planned" (not yet departed) shipment row, per
+ * SKU/warehouse — see ReconcileOptions.plannedShipmentQtyBySkuWarehouse for
+ * why this exists. Rows with any other status, or an unparseable qty, are
+ * skipped.
+ */
+export function computePlannedShipmentQty(
+  shipmentRows: { status: string; sku: string; warehouse: string; qty: string }[],
+): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const row of shipmentRows) {
+    if (row.status !== "planned") continue;
+    const qty = parseFloat(row.qty);
+    if (!Number.isFinite(qty)) continue;
+    const key = `${row.sku}|${row.warehouse}`;
+    map.set(key, (map.get(key) ?? 0) + qty);
+  }
+  return map;
 }
 
 export async function reconcileMigration(
@@ -146,16 +182,23 @@ export async function reconcileMigration(
   const mismatches: Mismatch[] = [];
   for (const total of sheetTotals) {
     const actual = await deps.getMigratedSoh(total.sku, total.warehouseCode);
+    const plannedQty = options.plannedShipmentQtyBySkuWarehouse?.get(`${total.sku}|${total.warehouseCode}`) ?? 0;
+    const adjustedExpected = total.sohFromSheet - plannedQty;
     // A missing SKU/warehouse pair (null) is always a mismatch, regardless of
     // what the sheet expects — including when the sheet also expects 0,
     // which a bare number comparison would have let through as a false match.
-    if (actual === null || actual !== total.sohFromSheet) {
+    // A planned-shipment gap is tolerated either way: the Sheet's raw total,
+    // or the total minus the known planned quantity, both count as a match —
+    // see ReconcileOptions.plannedShipmentQtyBySkuWarehouse for why neither
+    // can be assumed to always be the right one.
+    if (actual === null || (actual !== total.sohFromSheet && actual !== adjustedExpected)) {
+      const expected = plannedQty > 0 ? adjustedExpected : total.sohFromSheet;
       mismatches.push({
         sku: total.sku,
         warehouseCode: total.warehouseCode,
-        expected: total.sohFromSheet,
+        expected,
         actual,
-        diff: actual === null ? null : actual - total.sohFromSheet,
+        diff: actual === null ? null : actual - expected,
         kind: "soh",
       });
     }

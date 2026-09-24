@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   transformSheetExport,
   reconcileMigration,
+  computePlannedShipmentQty,
   transformPurchaseOrders,
   transformShipments,
   transformPayments,
@@ -62,6 +63,39 @@ describe("transformSheetExport", () => {
   });
 });
 
+describe("computePlannedShipmentQty", () => {
+  it("sums qty across multiple planned shipments for the same SKU/warehouse", () => {
+    const result = computePlannedShipmentQty([
+      { status: "planned", sku: "JELLO-MIXER", warehouse: "Mutual", qty: "600" },
+      { status: "planned", sku: "JELLO-MIXER", warehouse: "Mutual", qty: "200" },
+    ]);
+    expect(result.get("JELLO-MIXER|Mutual")).toBe(800);
+  });
+
+  it("ignores shipments that aren't status=planned (already departed/delivered)", () => {
+    const result = computePlannedShipmentQty([
+      { status: "delivered", sku: "JELLO-MIXER", warehouse: "Mutual", qty: "600" },
+      { status: "in_transit", sku: "JELLO-MIXER", warehouse: "Mutual", qty: "300" },
+    ]);
+    expect(result.has("JELLO-MIXER|Mutual")).toBe(false);
+  });
+
+  it("keeps distinct SKU/warehouse pairs separate", () => {
+    const result = computePlannedShipmentQty([
+      { status: "planned", sku: "JELLO-MIXER", warehouse: "Mutual", qty: "600" },
+      { status: "planned", sku: "JELLO-MIXER", warehouse: "FF-DE", qty: "100" },
+      { status: "planned", sku: "JELLO-STRAW", warehouse: "Mutual", qty: "50" },
+    ]);
+    expect(result.get("JELLO-MIXER|Mutual")).toBe(600);
+    expect(result.get("JELLO-MIXER|FF-DE")).toBe(100);
+    expect(result.get("JELLO-STRAW|Mutual")).toBe(50);
+  });
+
+  it("returns an empty map for no shipment rows", () => {
+    expect(computePlannedShipmentQty([]).size).toBe(0);
+  });
+});
+
 describe("reconcileMigration", () => {
   it("passes when migrated SOH matches the Sheet's totals for every SKU/warehouse", () => {
     const result = reconcileMigration(
@@ -116,6 +150,70 @@ describe("reconcileMigration", () => {
         { sku: "JELLO-MAG-250", warehouseCode: "FF-DE", expected: 900, actual: 800, diff: -100, kind: "soh" },
       ],
     });
+  });
+
+  it("treats a SOH gap fully explained by still-planned (not yet departed) shipments as no mismatch", async () => {
+    // Real 2026-09-24 case: Sheet's own pre-aggregated Current-On-Hand total
+    // prematurely includes a shipment that's still status=planned (not yet
+    // departed) -- a genuine Sheet-side bug we can't fix (the Sheet only
+    // gives us the final summed number, not its breakdown), but one we CAN
+    // detect and route around using the shipment rows we already export.
+    const plannedQty = computePlannedShipmentQty([
+      { status: "planned", sku: "JELLO-MIXER", warehouse: "Mutual", qty: "600" },
+    ]);
+    const result = await reconcileMigration(
+      [{ sku: "JELLO-MIXER", warehouseCode: "Mutual", sohFromSheet: 1003 }],
+      { getMigratedSoh: async () => 403 },
+      [],
+      undefined,
+      { plannedShipmentQtyBySkuWarehouse: plannedQty },
+    );
+    expect(result).toEqual({ passed: true, mismatches: [] });
+  });
+
+  it("still fails when a SOH gap is only partly explained by planned shipments -- a real mismatch remains", async () => {
+    const plannedQty = computePlannedShipmentQty([
+      { status: "planned", sku: "JELLO-MIXER", warehouse: "Mutual", qty: "600" },
+    ]);
+    const result = await reconcileMigration(
+      [{ sku: "JELLO-MIXER", warehouseCode: "Mutual", sohFromSheet: 1003 }],
+      { getMigratedSoh: async () => 300 }, // expected after adjustment is 403, not 300
+      [],
+      undefined,
+      { plannedShipmentQtyBySkuWarehouse: plannedQty },
+    );
+    expect(result.passed).toBe(false);
+    expect(result.mismatches).toEqual([
+      { sku: "JELLO-MIXER", warehouseCode: "Mutual", expected: 403, actual: 300, diff: -103, kind: "soh" },
+    ]);
+  });
+
+  it("behaves exactly as before when no planned-shipment adjustment is passed (backward compatible)", async () => {
+    const result = await reconcileMigration(
+      [{ sku: "JELLO-CAL-500", warehouseCode: "FF-DE", sohFromSheet: 150827 }],
+      { getMigratedSoh: async () => 150827 },
+    );
+    expect(result).toEqual({ passed: true, mismatches: [] });
+  });
+
+  it("also treats the Sheet's unmodified total as a match when this row's On-Hand formula never inflated in the first place", async () => {
+    // Real 2026-09-24 case that the first version of this fix got wrong: a
+    // new planned PO ("PO3 Jello", 93600 units) was created mid-session, but
+    // the Sheet's Current-On-Hand cell for JELLO/FF did NOT include it --
+    // unlike the Mutual/JELLO-MIXER case above, this SKU/warehouse's formula
+    // was already correct. Forcing the subtraction unconditionally (the
+    // earlier fix) turned a passing check into a false mismatch. The gate
+    // must accept either explanation: the raw Sheet total, or the Sheet
+    // total minus still-planned quantities -- never force one over the other.
+    const plannedQty = computePlannedShipmentQty([{ status: "planned", sku: "JELLO", warehouse: "FF", qty: "93600" }]);
+    const result = await reconcileMigration(
+      [{ sku: "JELLO", warehouseCode: "FF", sohFromSheet: 221829 }],
+      { getMigratedSoh: async () => 221829 },
+      [],
+      undefined,
+      { plannedShipmentQtyBySkuWarehouse: plannedQty },
+    );
+    expect(result).toEqual({ passed: true, mismatches: [] });
   });
 
   it("passes a landed-cost mismatch within tolerance (0.1% or $0.01, whichever is greater)", async () => {

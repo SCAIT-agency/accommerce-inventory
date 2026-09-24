@@ -18,6 +18,7 @@ import {
   transformSalesActuals,
   transformSalesPlan,
   reconcileMigration,
+  computePlannedShipmentQty,
   pooledPaymentOwnerRef,
   resolveShipmentOwnerRef,
   type SheetExportRow,
@@ -596,7 +597,10 @@ export async function runMigration(input: RunMigrationInput, options: RunMigrati
           return line ? line.landedUnitCost : Number.NaN;
         },
       },
-      { landedCostTolerance: options.landedCostTolerance },
+      {
+        landedCostTolerance: options.landedCostTolerance,
+        plannedShipmentQtyBySkuWarehouse: computePlannedShipmentQty(input.shipmentRows),
+      },
     );
     if (!gate.passed) {
       throw new Error(`migration reconciliation failed: ${JSON.stringify(gate.mismatches)}`);
