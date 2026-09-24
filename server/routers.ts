@@ -3,7 +3,7 @@ import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { getRemainingBatches } from "./inventoryLedger";
 import { listSkus, createSku, updateSku, listVendors, createVendor, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
-import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
+import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation, upsertWeeklyInput, listWeeklyInputs } from "./salesPlan";
@@ -107,6 +107,28 @@ export const appRouter = router({
     updateLinks: editorProcedure
       .input(z.object({ id: z.number(), contractLink: z.string().optional(), invoiceLink: z.string().optional(), addOnLink: z.string().optional() }))
       .mutation(({ input }) => updatePurchaseOrderLinks(input.id, { contractLink: input.contractLink, invoiceLink: input.invoiceLink, addOnLink: input.addOnLink })),
+    updateLineItemCostComponents: editorProcedure
+      .input(z.object({
+        lineItemId: z.number(),
+        exwUnitPrice: nonNegativeDecimalString.optional(),
+        labTestUnitPrice: nonNegativeDecimalString.optional(),
+        inspectionUnitPrice: nonNegativeDecimalString.optional(),
+        addOnUnitPrice: nonNegativeDecimalString.optional(),
+        reasonCategory: manualReasonCategorySchema,
+        reasonNote: z.string().optional(),
+      }))
+      .mutation(({ input, ctx }) =>
+        updatePoLineItemCostComponents(
+          input.lineItemId,
+          {
+            exwUnitPrice: input.exwUnitPrice,
+            labTestUnitPrice: input.labTestUnitPrice,
+            inspectionUnitPrice: input.inspectionUnitPrice,
+            addOnUnitPrice: input.addOnUnitPrice,
+          },
+          { changedBy: ctx.user.id, reasonCategory: input.reasonCategory, reasonNote: input.reasonNote },
+        ),
+      ),
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("purchase_order", input)),
   }),
   shipments: router({
@@ -147,7 +169,10 @@ export const appRouter = router({
       .input(z.object({
         id: z.number(),
         freightCost: nonNegativeDecimalString,
+        adminFeesCost: nonNegativeDecimalString.optional(),
         dutyCost: nonNegativeDecimalString,
+        eustAmount: nonNegativeDecimalString.optional(),
+        vatAmount: nonNegativeDecimalString.optional(),
         costCurrency: z.string(),
         reasonCategory: manualReasonCategorySchema,
         reasonNote: z.string().optional(),
@@ -156,7 +181,14 @@ export const appRouter = router({
       .mutation(({ input, ctx }) =>
         recordShipmentCosts(
           input.id,
-          { freightCost: input.freightCost, dutyCost: input.dutyCost, costCurrency: input.costCurrency },
+          {
+            freightCost: input.freightCost,
+            adminFeesCost: input.adminFeesCost,
+            dutyCost: input.dutyCost,
+            eustAmount: input.eustAmount,
+            vatAmount: input.vatAmount,
+            costCurrency: input.costCurrency,
+          },
           {
             reasonCategory: input.reasonCategory,
             reasonNote: input.reasonNote,
@@ -230,14 +262,23 @@ export const appRouter = router({
       .input(z.object({
         shipmentId: z.number(),
         freightCost: nonNegativeDecimalString.optional(),
+        adminFeesCost: nonNegativeDecimalString.optional(),
         dutyCost: nonNegativeDecimalString.optional(),
+        eustAmount: nonNegativeDecimalString.optional(),
+        vatAmount: nonNegativeDecimalString.optional(),
         reasonNote: z.string().min(1),
         allowNegativeSoh: z.boolean().optional(),
       }))
       .mutation(({ input, ctx }) =>
         correctShipmentLandedCost(
           input.shipmentId,
-          { freightCost: input.freightCost, dutyCost: input.dutyCost },
+          {
+            freightCost: input.freightCost,
+            adminFeesCost: input.adminFeesCost,
+            dutyCost: input.dutyCost,
+            eustAmount: input.eustAmount,
+            vatAmount: input.vatAmount,
+          },
           { changedBy: ctx.user.id, reasonNote: input.reasonNote, allowNegativeSoh: input.allowNegativeSoh },
         ),
       ),

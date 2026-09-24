@@ -329,6 +329,95 @@ function PoShipmentsSection({ poId }: { poId: number }) {
   );
 }
 
+type PoLineItemWithId = RouterOutputs["purchaseOrders"]["getWithLineItems"]["lineItems"][number];
+
+interface CostComponentsFormState {
+  exwUnitPrice: string;
+  labTestUnitPrice: string;
+  inspectionUnitPrice: string;
+  addOnUnitPrice: string;
+  reasonCategory: ReasonCategory;
+  reasonNote: string;
+}
+
+function defaultCostComponentsForm(line: PoLineItemWithId): CostComponentsFormState {
+  return {
+    exwUnitPrice: line.exwUnitPrice ?? "",
+    labTestUnitPrice: line.labTestUnitPrice ?? "",
+    inspectionUnitPrice: line.inspectionUnitPrice ?? "",
+    addOnUnitPrice: line.addOnUnitPrice ?? "",
+    reasonCategory: "vendor_price_change",
+    reasonNote: "",
+  };
+}
+
+// Breaks down po_line_items.unitPrice (Control Tower's blended "Full Factory
+// Cost/unit") into its 4 real components. unitPrice itself stays the value
+// every landed-cost calculation reads -- this control only ever asks the
+// server to recompute it from whatever components are known, never sets it
+// directly.
+function PoLineItemCostComponentsControl({ line, onUpdated }: { line: PoLineItemWithId; onUpdated: () => void }) {
+  const updateComponents = trpc.purchaseOrders.updateLineItemCostComponents.useMutation({ onSuccess: onUpdated });
+  const [form, setForm] = useState<CostComponentsFormState>(() => defaultCostComponentsForm(line));
+  const noteRequired = form.reasonCategory === "other";
+  const canSave = !noteRequired || form.reasonNote.trim().length > 0;
+
+  return (
+    <div>
+      <div>Unit price (EXW+Lab-Test+Inspection+Add-on): {formatMoney(line.unitPrice, line.currency)}</div>
+      <input type="text" placeholder="EXW/unit" value={form.exwUnitPrice} onChange={(e) => setForm((prev) => ({ ...prev, exwUnitPrice: e.target.value }))} />
+      <input type="text" placeholder="lab-test/unit" value={form.labTestUnitPrice} onChange={(e) => setForm((prev) => ({ ...prev, labTestUnitPrice: e.target.value }))} />
+      <input type="text" placeholder="inspection/unit" value={form.inspectionUnitPrice} onChange={(e) => setForm((prev) => ({ ...prev, inspectionUnitPrice: e.target.value }))} />
+      <input type="text" placeholder="add-on/unit" value={form.addOnUnitPrice} onChange={(e) => setForm((prev) => ({ ...prev, addOnUnitPrice: e.target.value }))} />
+      <select value={form.reasonCategory} onChange={(e) => setForm((prev) => ({ ...prev, reasonCategory: e.target.value as ReasonCategory }))}>
+        {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {noteRequired && (
+        <input type="text" placeholder="required note" value={form.reasonNote} onChange={(e) => setForm((prev) => ({ ...prev, reasonNote: e.target.value }))} />
+      )}
+      <button
+        disabled={!canSave || updateComponents.isPending}
+        onClick={() =>
+          updateComponents.mutate({
+            lineItemId: line.id,
+            exwUnitPrice: form.exwUnitPrice || undefined,
+            labTestUnitPrice: form.labTestUnitPrice || undefined,
+            inspectionUnitPrice: form.inspectionUnitPrice || undefined,
+            addOnUnitPrice: form.addOnUnitPrice || undefined,
+            reasonCategory: form.reasonCategory,
+            reasonNote: noteRequired ? form.reasonNote : undefined,
+          })
+        }
+      >
+        Save cost breakdown
+      </button>
+      {updateComponents.error && <div>Failed to save: {updateComponents.error.message}</div>}
+    </div>
+  );
+}
+
+function PoLineItemsSection({ poId, onUpdated }: { poId: number; onUpdated: () => void }) {
+  const linesQuery = trpc.purchaseOrders.getWithLineItems.useQuery(poId);
+  const skusQuery = trpc.catalog.listSkus.useQuery();
+  const skusById = new Map((skusQuery.data ?? []).map((s) => [s.id, s]));
+
+  if (linesQuery.error) return <div>Failed to load line items: {linesQuery.error.message}</div>;
+  if (linesQuery.isLoading || !linesQuery.data) return <div>Loading line items…</div>;
+  if (linesQuery.data.lineItems.length === 0) return null;
+
+  return (
+    <div>
+      <strong>Line items</strong>
+      {linesQuery.data.lineItems.map((line) => (
+        <div key={line.id} style={{ marginTop: "4px" }}>
+          {skuLabel(skusById.get(line.skuId) ?? { id: line.skuId })} — qty {line.qty}
+          <PoLineItemCostComponentsControl line={line} onUpdated={onUpdated} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface NewPoLineItem {
   skuId: number;
   qty: number;
@@ -545,7 +634,7 @@ export function PurchaseOrdersPage() {
       <h1>Purchase Orders</h1>
       <CreatePoForm />
       <table>
-        <thead><tr><th>PO</th><th>Status</th><th>Planned Ready</th><th>Change date</th><th>Payments</th><th>Shipments</th><th>Links</th></tr></thead>
+        <thead><tr><th>PO</th><th>Status</th><th>Planned Ready</th><th>Change date</th><th>Payments</th><th>Shipments</th><th>Line Items</th><th>Links</th></tr></thead>
         <tbody>
           {pos.map((po) => {
             const row = rowState[po.id] ?? defaultRowState(po.plannedReadyDate);
@@ -601,6 +690,9 @@ export function PurchaseOrdersPage() {
                 </td>
                 <td>
                   <PoShipmentsSection poId={po.id} />
+                </td>
+                <td>
+                  <PoLineItemsSection poId={po.id} onUpdated={refetch} />
                 </td>
                 <td>
                   <PoLinksControl po={po} onUpdated={refetch} />

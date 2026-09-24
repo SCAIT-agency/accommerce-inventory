@@ -72,6 +72,63 @@ describe("getShipmentLandedUnitCost", () => {
     expect(result).toEqual([{ lineItemId: shipmentLineItem.id, skuId: sku.id, landedUnitCost: (150 + 20.0 + 1000 * 0.15) / 1000 }]);
   });
 
+  it("adds adminFeesCost to the weight-allocated freight component and subtracts eustAmount/vatAmount (value-allocated) from the gross figure", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "EUR" }],
+      createdBy: userId,
+    });
+    const [lineItem] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container2",
+      warehouseId: ff.id,
+      lineItems: [{ poLineItemId: lineItem.id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "150.00", dutyCost: "20.00", costCurrency: "EUR", adminFeesCost: "10.00", eustAmount: "5.00", vatAmount: "3.00" },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
+    );
+    const [shipmentLineItem] = await db.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, shipment.id));
+
+    const result = await getShipmentLandedUnitCost(shipment.id);
+    // EXW 150 + freight(150+10 adminFees) + duty 20 - recoverable(5 eust + 3 vat), all at 1.0 share, /1000 units
+    expect(result).toEqual([{ lineItemId: shipmentLineItem.id, skuId: sku.id, landedUnitCost: (1000 * 0.15 + 150 + 10 + 20 - 5 - 3) / 1000 }]);
+  });
+
+  it("treats unset adminFeesCost/eustAmount/vatAmount as zero — identical to the pre-existing formula (backward compatible)", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO1-W4",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "EUR" }],
+      createdBy: userId,
+    });
+    const [lineItem] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container2",
+      warehouseId: ff.id,
+      lineItems: [{ poLineItemId: lineItem.id, skuId: sku.id, qty: 1000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await recordShipmentCosts(
+      shipment.id,
+      { freightCost: "150.00", dutyCost: "20.00", costCurrency: "EUR" },
+      { reasonCategory: "freight_rate_change", changedBy: userId },
+    );
+    const [shipmentLineItem] = await db.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, shipment.id));
+
+    const result = await getShipmentLandedUnitCost(shipment.id);
+    expect(result).toEqual([{ lineItemId: shipmentLineItem.id, skuId: sku.id, landedUnitCost: (150 + 20.0 + 1000 * 0.15) / 1000 }]);
+  });
+
   it("returns a distinct lineItemId for two line items on one shipment that share the same SKU", async () => {
     const vendor = await createVendor({ name: "Lvmengkang" });
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });

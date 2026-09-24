@@ -169,7 +169,7 @@ export async function markShipmentDeparted(id: number, actualDate: Date, opts: {
 
 export async function recordShipmentCosts(
   id: number,
-  costs: { freightCost: string; dutyCost: string; costCurrency: string },
+  costs: ShipmentCostUpdates & { freightCost: string; dutyCost: string; costCurrency: string },
   opts: { reasonCategory: ReasonCategory; reasonNote?: string; changedBy: number; allowNegativeSoh?: boolean },
 ): Promise<Shipment> {
   return db.transaction(async (tx) => {
@@ -181,28 +181,23 @@ export async function recordShipmentCosts(
     if (before.status !== "delivered") {
       // Unchanged from before this design: no ledger involvement, reasonNote
       // stays optional. Preserves every existing caller's pre-arrival
-      // behavior exactly.
+      // behavior exactly. adminFeesCost/eustAmount/vatAmount are optional
+      // here too — only logged when actually provided, matching
+      // applyShipmentCostChange's own pattern below.
       await tx.update(shipments).set(costs).where(eq(shipments.id, id));
-      await logChange({
-        entityType: "shipment",
-        entityId: id,
-        field: "freightCost",
-        oldValue: normalizeDecimalForAudit(before.freightCost),
-        newValue: normalizeDecimalForAudit(costs.freightCost),
-        reasonCategory: opts.reasonCategory,
-        reasonNote: opts.reasonNote,
-        changedBy: opts.changedBy,
-      }, tx);
-      await logChange({
-        entityType: "shipment",
-        entityId: id,
-        field: "dutyCost",
-        oldValue: normalizeDecimalForAudit(before.dutyCost),
-        newValue: normalizeDecimalForAudit(costs.dutyCost),
-        reasonCategory: opts.reasonCategory,
-        reasonNote: opts.reasonNote,
-        changedBy: opts.changedBy,
-      }, tx);
+      for (const field of COST_FIELD_NAMES) {
+        if (costs[field] === undefined) continue;
+        await logChange({
+          entityType: "shipment",
+          entityId: id,
+          field,
+          oldValue: normalizeDecimalForAudit(before[field]),
+          newValue: normalizeDecimalForAudit(costs[field]!),
+          reasonCategory: opts.reasonCategory,
+          reasonNote: opts.reasonNote,
+          changedBy: opts.changedBy,
+        }, tx);
+      }
     } else if (before.costsLockedAt !== null) {
       throw new Error(
         `recordShipmentCosts: shipment ${id}'s costs are locked — use correctShipmentLandedCost to make further changes`,
@@ -221,10 +216,14 @@ export async function recordShipmentCosts(
       // currency-mismatch guard inside getShipmentLandedUnitCost, so it's
       // written directly, outside applyShipmentCostChange's own scope.
       await tx.update(shipments).set({ costCurrency: costs.costCurrency }).where(eq(shipments.id, id));
+      const costUpdates: ShipmentCostUpdates = { freightCost: costs.freightCost, dutyCost: costs.dutyCost };
+      if (costs.adminFeesCost !== undefined) costUpdates.adminFeesCost = costs.adminFeesCost;
+      if (costs.eustAmount !== undefined) costUpdates.eustAmount = costs.eustAmount;
+      if (costs.vatAmount !== undefined) costUpdates.vatAmount = costs.vatAmount;
       await applyShipmentCostChange(
         tx,
         id,
-        { freightCost: costs.freightCost, dutyCost: costs.dutyCost },
+        costUpdates,
         {
           changedBy: opts.changedBy,
           reasonCategory: opts.reasonCategory,
@@ -537,10 +536,20 @@ function isNoOpCorrection(err: unknown): boolean {
  * unevenly). Skipped lines are absent from the returned `corrections` array,
  * and nothing is written for them.
  */
+export interface ShipmentCostUpdates {
+  freightCost?: string;
+  adminFeesCost?: string;
+  dutyCost?: string;
+  eustAmount?: string;
+  vatAmount?: string;
+}
+
+const COST_FIELD_NAMES = ["freightCost", "adminFeesCost", "dutyCost", "eustAmount", "vatAmount"] as const;
+
 async function applyShipmentCostChange(
   tx: DbClient,
   shipmentId: number,
-  updates: { freightCost?: string; dutyCost?: string },
+  updates: ShipmentCostUpdates,
   opts: { changedBy: number; reasonCategory: ReasonCategory; reasonNote: string; allowNegativeSoh?: boolean },
 ): Promise<{ corrections: LedgerCorrectionResult[] }> {
   const [before] = await tx.select().from(shipments).where(eq(shipments.id, shipmentId));
@@ -548,25 +557,14 @@ async function applyShipmentCostChange(
     throw new Error(`applyShipmentCostChange: no shipment found with id ${shipmentId}`);
   }
   await tx.update(shipments).set(updates).where(eq(shipments.id, shipmentId));
-  if (updates.freightCost !== undefined) {
+  for (const field of COST_FIELD_NAMES) {
+    if (updates[field] === undefined) continue;
     await logChange({
       entityType: "shipment",
       entityId: shipmentId,
-      field: "freightCost",
-      oldValue: normalizeDecimalForAudit(before.freightCost),
-      newValue: normalizeDecimalForAudit(updates.freightCost),
-      reasonCategory: opts.reasonCategory,
-      reasonNote: opts.reasonNote,
-      changedBy: opts.changedBy,
-    }, tx);
-  }
-  if (updates.dutyCost !== undefined) {
-    await logChange({
-      entityType: "shipment",
-      entityId: shipmentId,
-      field: "dutyCost",
-      oldValue: normalizeDecimalForAudit(before.dutyCost),
-      newValue: normalizeDecimalForAudit(updates.dutyCost),
+      field,
+      oldValue: normalizeDecimalForAudit(before[field]),
+      newValue: normalizeDecimalForAudit(updates[field]!),
       reasonCategory: opts.reasonCategory,
       reasonNote: opts.reasonNote,
       changedBy: opts.changedBy,
@@ -627,15 +625,16 @@ async function applyShipmentCostChange(
  */
 export async function correctShipmentLandedCost(
   shipmentId: number,
-  costs: { freightCost?: string; dutyCost?: string },
+  costs: ShipmentCostUpdates,
   opts: { changedBy: number; reasonNote: string; allowNegativeSoh?: boolean },
 ): Promise<{ corrections: LedgerCorrectionResult[] }> {
   // An explicit `undefined` is dropped rather than written: `{ freightCost:
   // undefined }` is the same request as `{}` and must hit the same refusal,
   // not reach the UPDATE as a column-less write.
-  const updates: { freightCost?: string; dutyCost?: string } = {};
-  if (costs.freightCost !== undefined) updates.freightCost = costs.freightCost;
-  if (costs.dutyCost !== undefined) updates.dutyCost = costs.dutyCost;
+  const updates: ShipmentCostUpdates = {};
+  for (const field of COST_FIELD_NAMES) {
+    if (costs[field] !== undefined) updates[field] = costs[field];
+  }
   if (Object.keys(updates).length === 0) {
     throw new Error("correctShipmentLandedCost: no cost fields provided to correct");
   }

@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, type DbClient } from "./dbClient";
-import { purchaseOrders, poLineItems, PO_STATUSES, type PurchaseOrder } from "../drizzle/schema";
-import { logChange, type ReasonCategory } from "./changeLog";
+import { purchaseOrders, poLineItems, PO_STATUSES, type PurchaseOrder, type PoLineItem } from "../drizzle/schema";
+import { logChange, normalizeDecimalForAudit, type ReasonCategory } from "./changeLog";
 
 const VALID_TRANSITIONS: Record<(typeof PO_STATUSES)[number], (typeof PO_STATUSES)[number][]> = {
   draft: ["confirmed"],
@@ -130,4 +130,67 @@ export async function updatePurchaseOrderPlannedReadyDate(
       changedBy: opts.changedBy,
     }, tx);
   });
+}
+
+export interface PoLineItemCostComponents {
+  exwUnitPrice?: string;
+  labTestUnitPrice?: string;
+  inspectionUnitPrice?: string;
+  addOnUnitPrice?: string;
+}
+
+const COST_COMPONENT_FIELDS = ["exwUnitPrice", "labTestUnitPrice", "inspectionUnitPrice", "addOnUnitPrice"] as const;
+
+/**
+ * Sets one or more of a PO line item's cost components (Control Tower's
+ * EXW/Lab-Test/Inspection/Add-on breakdown of "Full Factory Cost/unit") and
+ * recomputes `unitPrice` — the field every landed-cost calculation actually
+ * reads — as their sum, treating a component that's never been set as 0.
+ * Merges with whatever components are already stored rather than replacing
+ * them wholesale, so a lab-test invoice that arrives after EXW was already
+ * confirmed doesn't erase it.
+ *
+ * Audited on the *parent* purchase order (po_line_items has no audit trail
+ * of its own) — this changes a real cost figure, unlike the reference-link
+ * fields elsewhere in this codebase.
+ */
+export async function updatePoLineItemCostComponents(
+  lineItemId: number,
+  components: PoLineItemCostComponents,
+  opts: { changedBy: number; reasonCategory?: ReasonCategory; reasonNote?: string },
+  dbClient: DbClient = db,
+): Promise<PoLineItem> {
+  const [line] = await dbClient.select().from(poLineItems).where(eq(poLineItems.id, lineItemId));
+  if (!line) {
+    throw new Error(`updatePoLineItemCostComponents: no PO line item found with id ${lineItemId}`);
+  }
+
+  const merged: Record<(typeof COST_COMPONENT_FIELDS)[number], string | null> = {
+    exwUnitPrice: components.exwUnitPrice ?? line.exwUnitPrice,
+    labTestUnitPrice: components.labTestUnitPrice ?? line.labTestUnitPrice,
+    inspectionUnitPrice: components.inspectionUnitPrice ?? line.inspectionUnitPrice,
+    addOnUnitPrice: components.addOnUnitPrice ?? line.addOnUnitPrice,
+  };
+  const unitPrice = COST_COMPONENT_FIELDS
+    .reduce((sum, field) => sum + (merged[field] !== null ? parseFloat(merged[field]!) : 0), 0)
+    .toFixed(8);
+
+  await dbClient.update(poLineItems).set({ ...merged, unitPrice }).where(eq(poLineItems.id, lineItemId));
+
+  for (const field of COST_COMPONENT_FIELDS) {
+    if (components[field] === undefined) continue;
+    await logChange({
+      entityType: "purchase_order",
+      entityId: line.poId,
+      field,
+      oldValue: normalizeDecimalForAudit(line[field]),
+      newValue: normalizeDecimalForAudit(components[field]!),
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, dbClient);
+  }
+
+  const [updated] = await dbClient.select().from(poLineItems).where(eq(poLineItems.id, lineItemId));
+  return updated;
 }

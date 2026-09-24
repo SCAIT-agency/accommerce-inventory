@@ -748,6 +748,42 @@ describe("shipments", () => {
     expect(history.some((h) => h.field === "dutyCost" && h.reasonCategory === "data_correction")).toBe(false);
   });
 
+  it("correctShipmentLandedCost restates adminFeesCost/eustAmount/vatAmount and the corrected receipt reflects them", async () => {
+    const { lineItemId, skuId } = await seedPoWithLineItem();
+    const shipment = await createShipment({
+      shipmentRef: "PO1-W4-Container13b",
+      warehouseId: ffWarehouseId,
+      lineItems: [{ poLineItemId: lineItemId, skuId, qty: 90000, weightShare: "1.0", valueShare: "1.0" }],
+      createdBy: userId,
+    });
+    await driveShipmentToDelivered(shipment.id);
+
+    const result = await correctShipmentLandedCost(
+      shipment.id,
+      { adminFeesCost: "50.00", eustAmount: "20.00", vatAmount: "10.00" },
+      { changedBy: userId, reasonNote: "final customs paperwork reconciled" },
+    );
+
+    expect(result.corrections).toHaveLength(1);
+    const [updatedShipment] = await db.select().from(shipments).where(eq(shipments.id, shipment.id));
+    expect(updatedShipment.adminFeesCost).toBe("50.0000");
+    expect(updatedShipment.eustAmount).toBe("20.0000");
+    expect(updatedShipment.vatAmount).toBe("10.0000");
+    // freightCost/dutyCost (from driveShipmentToDelivered) survive untouched.
+    expect(updatedShipment.freightCost).toBe("900.0000");
+    expect(updatedShipment.dutyCost).toBe("100.0000");
+
+    const events = await db.select().from(inventoryLedger).where(eq(inventoryLedger.skuId, skuId));
+    const correctedReceipt = events.find((e) => e.id === result.corrections[0].correctedId)!;
+    // (90000*0.15 EXW + (900 freight + 50 adminFees) + 100 duty - (20 eust + 10 vat)) / 90000
+    expect(parseFloat(correctedReceipt.unitCost ?? "0")).toBeCloseTo((90000 * 0.15 + 900 + 50 + 100 - 20 - 10) / 90000, 4);
+
+    const history = await listChangeLog("shipment", shipment.id);
+    expect(history.some((h) => h.field === "adminFeesCost" && h.reasonCategory === "data_correction" && h.newValue === "50")).toBe(true);
+    expect(history.some((h) => h.field === "eustAmount" && h.reasonCategory === "data_correction" && h.newValue === "20")).toBe(true);
+    expect(history.some((h) => h.field === "vatAmount" && h.reasonCategory === "data_correction" && h.newValue === "10")).toBe(true);
+  });
+
   it("correctShipmentLandedCost corrects every line item on a multi-line shipment, each with its own share", async () => {
     const vendor = await createVendor({ name: "MBS Logistics" });
     const sku1 = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });

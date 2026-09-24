@@ -46,7 +46,10 @@ function defaultStatusTransitionForm(): StatusTransitionFormState {
 
 interface CostsFormState {
   freightCost: string;
+  adminFeesCost: string;
   dutyCost: string;
+  eustAmount: string;
+  vatAmount: string;
   costCurrency: string;
   reasonCategory: ReasonCategory;
   reasonNote: string;
@@ -55,7 +58,10 @@ interface CostsFormState {
 function defaultCostsForm(shipment: ShipmentListItem): CostsFormState {
   return {
     freightCost: shipment.freightCost ?? "",
+    adminFeesCost: shipment.adminFeesCost ?? "",
     dutyCost: shipment.dutyCost ?? "",
+    eustAmount: shipment.eustAmount ?? "",
+    vatAmount: shipment.vatAmount ?? "",
     costCurrency: shipment.costCurrency ?? "USD",
     reasonCategory: "freight_rate_change",
     reasonNote: "",
@@ -94,7 +100,10 @@ interface ReceiptCorrectionFormState {
   lineItemId: string;
   newQty: string;
   freightCost: string;
+  adminFeesCost: string;
   dutyCost: string;
+  eustAmount: string;
+  vatAmount: string;
   reasonNote: string;
 }
 
@@ -103,7 +112,10 @@ function defaultReceiptCorrectionForm(shipment: ShipmentListItem): ReceiptCorrec
     lineItemId: "",
     newQty: "",
     freightCost: shipment.freightCost ?? "",
+    adminFeesCost: shipment.adminFeesCost ?? "",
     dutyCost: shipment.dutyCost ?? "",
+    eustAmount: shipment.eustAmount ?? "",
+    vatAmount: shipment.vatAmount ?? "",
     reasonNote: "",
   };
 }
@@ -433,7 +445,11 @@ function CorrectReceiptControl({
   if (shipment.status !== "delivered") return null;
 
   const canCorrectQty = form.lineItemId !== "" && form.newQty.trim().length > 0 && form.reasonNote.trim().length > 0;
-  const costsChanged = form.freightCost !== (shipment.freightCost ?? "") || form.dutyCost !== (shipment.dutyCost ?? "");
+  const costsChanged = form.freightCost !== (shipment.freightCost ?? "")
+    || form.adminFeesCost !== (shipment.adminFeesCost ?? "")
+    || form.dutyCost !== (shipment.dutyCost ?? "")
+    || form.eustAmount !== (shipment.eustAmount ?? "")
+    || form.vatAmount !== (shipment.vatAmount ?? "");
   const canCorrectCost = costsChanged && form.reasonNote.trim().length > 0;
 
   // Present only after a refusal whose message names this escape hatch OR
@@ -462,7 +478,10 @@ function CorrectReceiptControl({
       {
         shipmentId: shipment.id,
         freightCost: form.freightCost !== (shipment.freightCost ?? "") ? form.freightCost : undefined,
+        adminFeesCost: form.adminFeesCost !== (shipment.adminFeesCost ?? "") ? form.adminFeesCost : undefined,
         dutyCost: form.dutyCost !== (shipment.dutyCost ?? "") ? form.dutyCost : undefined,
+        eustAmount: form.eustAmount !== (shipment.eustAmount ?? "") ? form.eustAmount : undefined,
+        vatAmount: form.vatAmount !== (shipment.vatAmount ?? "") ? form.vatAmount : undefined,
         reasonNote: form.reasonNote,
         allowNegativeSoh,
       },
@@ -503,15 +522,33 @@ function CorrectReceiptControl({
       <div style={{ marginTop: "4px" }}>
         <input
           type="text"
-          placeholder="freight cost"
+          placeholder="freight (delivery) cost"
           value={form.freightCost}
           onChange={(e) => setForm((prev) => ({ ...prev, freightCost: e.target.value }))}
         />
         <input
           type="text"
-          placeholder="duty cost"
+          placeholder="admin fees"
+          value={form.adminFeesCost}
+          onChange={(e) => setForm((prev) => ({ ...prev, adminFeesCost: e.target.value }))}
+        />
+        <input
+          type="text"
+          placeholder="duty cost (non-refundable)"
           value={form.dutyCost}
           onChange={(e) => setForm((prev) => ({ ...prev, dutyCost: e.target.value }))}
+        />
+        <input
+          type="text"
+          placeholder="EUST (refundable)"
+          value={form.eustAmount}
+          onChange={(e) => setForm((prev) => ({ ...prev, eustAmount: e.target.value }))}
+        />
+        <input
+          type="text"
+          placeholder="VAT (refundable)"
+          value={form.vatAmount}
+          onChange={(e) => setForm((prev) => ({ ...prev, vatAmount: e.target.value }))}
         />
         <button disabled={!canCorrectCost || correctLandedCost.isPending} onClick={() => submitCost()}>
           Correct cost restated
@@ -725,7 +762,10 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
     recordCosts.mutate({
       id: shipment.id,
       freightCost: form.freightCost,
+      adminFeesCost: form.adminFeesCost || undefined,
       dutyCost: form.dutyCost,
+      eustAmount: form.eustAmount || undefined,
+      vatAmount: form.vatAmount || undefined,
       costCurrency: form.costCurrency,
       reasonCategory: form.reasonCategory,
       reasonNote: noteRequired ? form.reasonNote : undefined,
@@ -770,7 +810,13 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
         <div>
           Freight: {shipment.freightCost != null && shipment.costCurrency ? formatMoney(shipment.freightCost, shipment.costCurrency) : "—"}
           {" · "}
+          Admin fees: {shipment.adminFeesCost != null && shipment.costCurrency ? formatMoney(shipment.adminFeesCost, shipment.costCurrency) : "—"}
+          {" · "}
           Duty: {shipment.dutyCost != null && shipment.costCurrency ? formatMoney(shipment.dutyCost, shipment.costCurrency) : "—"}
+          {" · "}
+          EUST: {shipment.eustAmount != null && shipment.costCurrency ? formatMoney(shipment.eustAmount, shipment.costCurrency) : "—"}
+          {" · "}
+          VAT: {shipment.vatAmount != null && shipment.costCurrency ? formatMoney(shipment.vatAmount, shipment.costCurrency) : "—"}
         </div>
         {shipment.costsLockedAt != null && (
           <p>
@@ -785,17 +831,38 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
         )}
         <input
           type="text"
-          placeholder="freight cost"
+          placeholder="freight (delivery) cost"
           value={form.freightCost}
           disabled={shipment.costsLockedAt != null}
           onChange={(e) => setForm((prev) => ({ ...prev, freightCost: e.target.value }))}
         />
         <input
           type="text"
-          placeholder="duty cost"
+          placeholder="admin fees"
+          value={form.adminFeesCost}
+          disabled={shipment.costsLockedAt != null}
+          onChange={(e) => setForm((prev) => ({ ...prev, adminFeesCost: e.target.value }))}
+        />
+        <input
+          type="text"
+          placeholder="duty cost (non-refundable)"
           value={form.dutyCost}
           disabled={shipment.costsLockedAt != null}
           onChange={(e) => setForm((prev) => ({ ...prev, dutyCost: e.target.value }))}
+        />
+        <input
+          type="text"
+          placeholder="EUST (refundable)"
+          value={form.eustAmount}
+          disabled={shipment.costsLockedAt != null}
+          onChange={(e) => setForm((prev) => ({ ...prev, eustAmount: e.target.value }))}
+        />
+        <input
+          type="text"
+          placeholder="VAT (refundable)"
+          value={form.vatAmount}
+          disabled={shipment.costsLockedAt != null}
+          onChange={(e) => setForm((prev) => ({ ...prev, vatAmount: e.target.value }))}
         />
         <input
           type="text"

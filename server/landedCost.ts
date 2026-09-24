@@ -4,7 +4,10 @@ import { shipments, shipmentLineItems, poLineItems } from "../drizzle/schema";
 
 /**
  * Per-SKU landed unit cost for a shipment: PO line unit price (EXW) plus this
- * line's weight/value share of the shipment's total freight/duty cost.
+ * line's weight share of freight (freightCost + adminFeesCost) plus its value
+ * share of duty (dutyCost), minus its value share of recoverable amounts
+ * (eustAmount + vatAmount) — a net figure, matching the one-time migration's
+ * own convention of writing net-of-recoverable-VAT cost into the ledger.
  * unitCost must already be expressed in the instance's single reporting
  * currency — multi-currency PO components (EXW in USD/CNY, freight in EUR)
  * are converted to base currency by the caller before this function runs.
@@ -20,7 +23,10 @@ export async function getShipmentLandedUnitCost(
   const lines = await dbClient.select().from(shipmentLineItems).where(eq(shipmentLineItems.shipmentId, shipmentId));
 
   const freightCost = parseFloat(shipment.freightCost ?? "0");
+  const adminFeesCost = parseFloat(shipment.adminFeesCost ?? "0");
   const dutyCost = parseFloat(shipment.dutyCost ?? "0");
+  const eustAmount = parseFloat(shipment.eustAmount ?? "0");
+  const vatAmount = parseFloat(shipment.vatAmount ?? "0");
 
   // weightShare/valueShare are freeform decimal strings at input time —
   // validate them here, the one place every consumer (dashboards, and the
@@ -95,9 +101,10 @@ export async function getShipmentLandedUnitCost(
       );
     }
     const exwTotal = parseFloat(poLine.unitPrice) * line.qty;
-    const allocatedFreight = freightCost * weightShares.get(line.id)!;
+    const allocatedFreight = (freightCost + adminFeesCost) * weightShares.get(line.id)!;
     const allocatedDuty = dutyCost * valueShares.get(line.id)!;
-    const landedUnitCost = (exwTotal + allocatedFreight + allocatedDuty) / line.qty;
+    const allocatedRecoverable = (eustAmount + vatAmount) * valueShares.get(line.id)!;
+    const landedUnitCost = (exwTotal + allocatedFreight + allocatedDuty - allocatedRecoverable) / line.qty;
     if (!Number.isFinite(landedUnitCost)) {
       throw new Error(`getShipmentLandedUnitCost: computed a non-finite landedUnitCost for shipment ${shipmentId} line item ${line.id} — refusing to write this into the ledger`);
     }

@@ -137,7 +137,17 @@ export const poLineItems = mysqlTable("po_line_items", {
   poId: int("poId").notNull().references(() => purchaseOrders.id),
   skuId: int("skuId").notNull().references(() => skus.id),
   qty: int("qty").notNull(),
+  /** The blended "Full Factory Cost/unit" (Control Tower naming) — EXW plus
+   * per-unit lab-test/inspection/add-on — and the value every existing landed
+   * cost/ledger calculation actually reads. The 4 component fields below are
+   * an optional, purely informational breakdown; when a caller sets them via
+   * updatePoLineItemCostComponents, this field is recomputed as their sum
+   * server-side rather than trusted to already agree with it. */
   unitPrice: decimal("unitPrice", { precision: 18, scale: 8, mode: "string" }).notNull(),
+  exwUnitPrice: decimal("exwUnitPrice", { precision: 18, scale: 8, mode: "string" }),
+  labTestUnitPrice: decimal("labTestUnitPrice", { precision: 18, scale: 8, mode: "string" }),
+  inspectionUnitPrice: decimal("inspectionUnitPrice", { precision: 18, scale: 8, mode: "string" }),
+  addOnUnitPrice: decimal("addOnUnitPrice", { precision: 18, scale: 8, mode: "string" }),
   currency: varchar("currency", { length: 8 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
@@ -165,9 +175,25 @@ export const shipments = mysqlTable("shipments", {
   actualArrivalDate: timestamp("actualArrivalDate"),
   /** Total freight/duty for the whole shipment, in `costCurrency` — allocated to
    * individual SKU lines via each shipment_line_items row's weightShare/valueShare.
-   * Nullable: not every shipment has a real invoice yet at creation time. */
+   * Nullable: not every shipment has a real invoice yet at creation time.
+   * freightCost = "Delivery" (Control Tower naming); adminFeesCost is its own
+   * weight-allocated component, added to freightCost in the landed-cost
+   * formula (getShipmentLandedUnitCost) rather than folded into freightCost
+   * itself, so each stays independently visible/editable. dutyCost is the
+   * non-refundable duty (value-allocated); eustAmount/vatAmount are
+   * value-allocated *recoverable* amounts, subtracted from the gross landed
+   * cost to get the net figure written into inventory_ledger.unitCost —
+   * matching the one-time migration's own convention (net-of-recoverable-VAT
+   * landed cost, see scripts/control-tower/export.ts's own comments on this).
+   * All nullable and default to having no effect (null treated as 0) — an
+   * existing shipment
+   * created before this design never has these set, so its landed cost is
+   * unchanged. */
   freightCost: decimal("freightCost", { precision: 18, scale: 4, mode: "string" }),
+  adminFeesCost: decimal("adminFeesCost", { precision: 18, scale: 4, mode: "string" }),
   dutyCost: decimal("dutyCost", { precision: 18, scale: 4, mode: "string" }),
+  eustAmount: decimal("eustAmount", { precision: 18, scale: 4, mode: "string" }),
+  vatAmount: decimal("vatAmount", { precision: 18, scale: 4, mode: "string" }),
   costCurrency: varchar("costCurrency", { length: 8 }),
   /** Set once an operator confirms freight/duty are final (only possible once
    * status === "delivered"). Null means unlocked — recordShipmentCosts stays

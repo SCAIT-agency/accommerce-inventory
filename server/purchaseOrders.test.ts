@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql, eq } from "drizzle-orm";
 import { db } from "./dbClient";
 import { purchaseOrders, poLineItems, skus, vendors, changeLog, users } from "../drizzle/schema";
-import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, getPurchaseOrderWithLineItems } from "./purchaseOrders";
+import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, getPurchaseOrderWithLineItems } from "./purchaseOrders";
 import { createSku, createVendor, createUser } from "./db";
 
 let userId: number;
@@ -168,5 +168,75 @@ describe("purchase orders", () => {
     await expect(
       updatePurchaseOrderLinks(999999, { contractLink: "https://drive.google.com/contract" }),
     ).rejects.toThrow(/no purchase order found with id 999999/);
+  });
+
+  it("updatePoLineItemCostComponents recomputes unitPrice as the sum of all 4 components", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO3-JELLO",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
+      createdBy: userId,
+    });
+    const [line] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+
+    const updated = await updatePoLineItemCostComponents(
+      line.id,
+      { exwUnitPrice: "0.10", labTestUnitPrice: "0.02", inspectionUnitPrice: "0.01", addOnUnitPrice: "0.005" },
+      { changedBy: userId, reasonNote: "final factory invoice breakdown" },
+    );
+
+    expect(updated.exwUnitPrice).toBe("0.10000000");
+    expect(updated.labTestUnitPrice).toBe("0.02000000");
+    expect(updated.inspectionUnitPrice).toBe("0.01000000");
+    expect(updated.addOnUnitPrice).toBe("0.00500000");
+    expect(parseFloat(updated.unitPrice)).toBeCloseTo(0.10 + 0.02 + 0.01 + 0.005, 8);
+  });
+
+  it("updatePoLineItemCostComponents merges with previously-set components instead of resetting them", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO3-JELLO",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
+      createdBy: userId,
+    });
+    const [line] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+    await updatePoLineItemCostComponents(line.id, { exwUnitPrice: "0.10" }, { changedBy: userId, reasonNote: "EXW confirmed" });
+
+    const updated = await updatePoLineItemCostComponents(line.id, { labTestUnitPrice: "0.02" }, { changedBy: userId, reasonNote: "lab test invoice arrived" });
+
+    expect(updated.exwUnitPrice).toBe("0.10000000");
+    expect(updated.labTestUnitPrice).toBe("0.02000000");
+    expect(parseFloat(updated.unitPrice)).toBeCloseTo(0.12, 8);
+  });
+
+  it("updatePoLineItemCostComponents logs an audited change on the parent purchase order", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
+    const po = await createPurchaseOrder({
+      poNumber: "PO3-JELLO",
+      vendorId: vendor.id,
+      lineItems: [{ skuId: sku.id, qty: 1000, unitPrice: "0.15", currency: "USD" }],
+      createdBy: userId,
+    });
+    const [line] = await db.select().from(poLineItems).where(eq(poLineItems.poId, po.id));
+
+    await updatePoLineItemCostComponents(line.id, { exwUnitPrice: "0.10" }, { changedBy: userId, reasonCategory: "vendor_price_change", reasonNote: "renegotiated EXW" });
+
+    const history = await db.select().from(changeLog).where(eq(changeLog.entityId, po.id));
+    const entry = history.find((h) => h.field === "exwUnitPrice");
+    expect(entry).toBeDefined();
+    expect(entry?.entityType).toBe("purchase_order");
+    expect(entry?.reasonCategory).toBe("vendor_price_change");
+    expect(entry?.reasonNote).toBe("renegotiated EXW");
+  });
+
+  it("rejects updatePoLineItemCostComponents for a nonexistent line item with a clear error", async () => {
+    await expect(
+      updatePoLineItemCostComponents(999999, { exwUnitPrice: "0.10" }, { changedBy: userId, reasonNote: "test" }),
+    ).rejects.toThrow(/no PO line item found with id 999999/);
   });
 });
