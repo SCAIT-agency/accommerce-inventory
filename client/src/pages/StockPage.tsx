@@ -256,27 +256,6 @@ function WeeklySalesPlanSection() {
   );
 }
 
-// Combines every warehouse's SOH/avg-daily-sales for one SKU into a single
-// "Total" row, so the whole picture and the per-warehouse breakdown are both
-// visible at once instead of switching between them. Status is recomputed
-// from the combined figures using the same day-of-cover bands the backend
-// already classifies individual rows with, rather than just picking the
-// worst of the per-warehouse statuses -- a SKU that's "low" in one warehouse
-// but well-stocked overall shouldn't read as critical in aggregate.
-function combinedRow(byWarehouse: { soh: number; avgDailySales: number }[]) {
-  const soh = byWarehouse.reduce((sum, w) => sum + w.soh, 0);
-  const avgDailySales = byWarehouse.reduce((sum, w) => sum + w.avgDailySales, 0);
-  const daysOfCover = avgDailySales > 0 ? soh / avgDailySales : null;
-  let status: keyof typeof STATUS_BADGE_CLASS = "unknown";
-  if (daysOfCover !== null) {
-    if (daysOfCover < 14) status = "critical";
-    else if (daysOfCover < 30) status = "low";
-    else if (daysOfCover > 120) status = "overstock";
-    else status = "ok";
-  }
-  return { soh, avgDailySales, daysOfCover, status };
-}
-
 export function StockPage() {
   const stockQuery = trpc.dashboards.stock.useQuery();
   const warehousesQuery = trpc.catalog.listWarehouses.useQuery();
@@ -327,7 +306,7 @@ export function StockPage() {
             // Only worth a combined row once there's more than one warehouse
             // to combine — otherwise it would just repeat the single row above.
             if (multiWarehouse && row.byWarehouse.length > 1) {
-              const total = combinedRow(row.byWarehouse);
+              const total = row.total;
               rows.push(
                 <tr key={`${row.skuId}-total`} style={{ fontWeight: 600, background: "var(--surface)" }}>
                   <td>{row.sku}</td>

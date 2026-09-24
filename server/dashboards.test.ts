@@ -189,6 +189,37 @@ describe("dashboards", () => {
     expect(noHistoryWh?.status).toBe("unknown");
   });
 
+  it("getStockDashboard's combined multi-warehouse total uses the SKU's own reorder point, not a fixed band", async () => {
+    // Real bug: the client used to recompute the combined-total status with
+    // hardcoded day-of-cover bands (14/30/120) instead of this SKU's actual
+    // leadTimeDays/safetyStockDays, because the server never returned a
+    // combined total at all. Here leadTimeDays=66/safetyStockDays=14 (the
+    // real default) gives reorderPoint=80, so "ok" runs all the way out to
+    // 80*3=240 days of cover — a combined 150 is "ok", not "overstock" the
+    // way a fixed >120 band would wrongly call it.
+    const sku = await createSku({ sku: "JELLO-MULTI-WH", primaryIdentifierType: "sku", status: "active" });
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const mutual = await createWarehouse({ code: "MUTUAL-CH", name: "Mutual CH" });
+
+    // WH A: soh 900, 6/day -> 150 days of cover on its own.
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: ff.id, eventType: "receipt", qty: 1080, unitCost: "0.42", date: daysAgo(29), sourceRef: "PO-A" });
+    for (let i = 0; i < 30; i++) {
+      await recordSalesActual({ skuId: sku.id, warehouseId: ff.id, date: daysAgoStr(i), qty: 6, source: "manual" });
+    }
+    // WH B: soh 300, 2/day -> 150 days of cover on its own too.
+    await recordLedgerEvent({ skuId: sku.id, warehouseId: mutual.id, eventType: "receipt", qty: 360, unitCost: "0.45", date: daysAgo(29), sourceRef: "PO-B" });
+    for (let i = 0; i < 30; i++) {
+      await recordSalesActual({ skuId: sku.id, warehouseId: mutual.id, date: daysAgoStr(i), qty: 2, source: "manual" });
+    }
+
+    const stock = await getStockDashboard();
+    const row = stock.find((r) => r.skuId === sku.id);
+    expect(row?.total.soh).toBe(1200);
+    expect(row?.total.avgDailySales).toBeCloseTo(8);
+    expect(row?.total.daysOfCover).toBeCloseTo(150);
+    expect(row?.total.status).toBe("ok");
+  });
+
   it("averages sales over the full calendar window, not only the days a SKU happened to sell", async () => {
     const sku = await createSku({ sku: "JELLO-SPORADIC", primaryIdentifierType: "sku", status: "active" });
     const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });

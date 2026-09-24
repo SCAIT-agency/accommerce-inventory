@@ -119,7 +119,19 @@ export async function getStockDashboard() {
       const daysOfCover = avgDailySales > 0 ? w.soh / avgDailySales : null;
       return { ...w, avgDailySales, daysOfCover, status: getStockStatus(daysOfCover, sku.leadTimeDays, sku.safetyStockDays) };
     });
-    results.push({ skuId: sku.id, sku: sku.sku, byWarehouse: enriched });
+    // Combined across every warehouse, using this SKU's own reorder point —
+    // never a fixed day-of-cover band. Computed here so the client never has
+    // to reimplement (and risk drifting from) getStockStatus's thresholds.
+    const totalSoh = enriched.reduce((sum, w) => sum + w.soh, 0);
+    const totalAvgDailySales = enriched.reduce((sum, w) => sum + w.avgDailySales, 0);
+    const totalDaysOfCover = totalAvgDailySales > 0 ? totalSoh / totalAvgDailySales : null;
+    const total = {
+      soh: totalSoh,
+      avgDailySales: totalAvgDailySales,
+      daysOfCover: totalDaysOfCover,
+      status: getStockStatus(totalDaysOfCover, sku.leadTimeDays, sku.safetyStockDays),
+    };
+    results.push({ skuId: sku.id, sku: sku.sku, byWarehouse: enriched, total });
   }
   return results;
 }
