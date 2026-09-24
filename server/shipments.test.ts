@@ -210,6 +210,12 @@ describe("shipments", () => {
     expect(withItems.costCurrency).toBe("EUR");
   });
 
+  it("creates a shipment with costsLockedAt/costsLockedBy left null", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container-Lock1", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+    expect(shipment.costsLockedAt).toBeNull();
+    expect(shipment.costsLockedBy).toBeNull();
+  });
+
   it("rejects a shipment line item referencing a nonexistent PO line item", async () => {
     const sku = await createSku({ sku: "JELLO-CAL-500", primaryIdentifierType: "sku" });
     await expect(

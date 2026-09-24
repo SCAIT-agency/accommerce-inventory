@@ -158,6 +158,13 @@ export const shipments = mysqlTable("shipments", {
   freightCost: decimal("freightCost", { precision: 18, scale: 4, mode: "string" }),
   dutyCost: decimal("dutyCost", { precision: 18, scale: 4, mode: "string" }),
   costCurrency: varchar("costCurrency", { length: 8 }),
+  /** Set once an operator confirms freight/duty are final (only possible once
+   * status === "delivered"). Null means unlocked — recordShipmentCosts stays
+   * callable. Never cleared once set: lockShipmentCosts is one-way, matching
+   * this platform's append-only ledger philosophy. See
+   * docs/2026-09-23-freight-duty-cost-lock-design.md §3-4. */
+  costsLockedAt: timestamp("costsLockedAt"),
+  costsLockedBy: int("costsLockedBy").references(() => users.id),
   createdBy: int("createdBy").notNull().references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
