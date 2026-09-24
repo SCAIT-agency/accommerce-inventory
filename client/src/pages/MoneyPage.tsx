@@ -34,6 +34,10 @@ export function MoneyPage() {
     warehouseId: selectedWarehouseId,
     shipmentId: selectedShipmentId,
   });
+  // Landed cost's own rows only carry a bare lineItemId (an internal id,
+  // meaningless on screen) — this fetches the selected shipment's line items
+  // just to show each row's real qty instead.
+  const shipmentLinesQuery = trpc.shipments.getWithLineItems.useQuery(selectedShipmentId!, { enabled: selectedShipmentId !== undefined });
 
   const error = skusQuery.error ?? warehousesQuery.error ?? shipmentsQuery.error ?? moneyQuery.error;
   if (error) return <div>Failed to load: {error.message}</div>;
@@ -43,6 +47,7 @@ export function MoneyPage() {
   if (isLoading || !data) return <div>Loading…</div>;
 
   const skusById = new Map((skusQuery.data ?? []).map((s) => [s.id, s]));
+  const qtyByLineItemId = new Map((shipmentLinesQuery.data?.lineItems ?? []).map((li) => [li.id, li.qty]));
 
   return (
     <div>
@@ -120,10 +125,10 @@ export function MoneyPage() {
           <div>Failed to compute landed cost: {data.landedCostError}</div>
         ) : (
           <table>
-            <thead><tr><th>SKU</th><th>Line item</th><th>Landed unit cost</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Qty</th><th>Landed unit cost</th></tr></thead>
             <tbody>
               {data.landedCost.map((row) => (
-                <tr key={row.lineItemId}><td>{skuLabel(skusById.get(row.skuId) ?? { id: row.skuId })}</td><td>{row.lineItemId}</td><td>{row.landedUnitCost.toFixed(4)}</td></tr>
+                <tr key={row.lineItemId}><td>{skuLabel(skusById.get(row.skuId) ?? { id: row.skuId })}</td><td>{qtyByLineItemId.get(row.lineItemId) ?? "—"}</td><td>{row.landedUnitCost.toFixed(4)}</td></tr>
               ))}
             </tbody>
           </table>
