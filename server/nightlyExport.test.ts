@@ -4,10 +4,62 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "drizzle-orm";
+import { int, mysqlTable } from "drizzle-orm/mysql-core";
 import { db } from "./dbClient";
 import { warehouses } from "../drizzle/schema";
 import { createWarehouse } from "./db";
-import { generateCsvExport, runNightlyExport, exportTableToCsv } from "./nightlyExport";
+import { generateCsvExport, runNightlyExport, exportTableToCsv, deriveCoreTables } from "./nightlyExport";
+
+describe("deriveCoreTables", () => {
+  it("includes every real table in the schema module, keyed by its actual SQL table name", () => {
+    const included = mysqlTable("widgets", { id: int("id").primaryKey() });
+    const alsoIncluded = mysqlTable("gadgets", { id: int("id").primaryKey() });
+    const fakeSchema = { included, alsoIncluded };
+
+    const result = deriveCoreTables(fakeSchema, new Set());
+
+    expect(Object.keys(result)).toEqual(["widgets", "gadgets"]);
+    expect(result.widgets).toBe(included);
+  });
+
+  it("excludes named tables even though they're real Drizzle tables", () => {
+    const secret = mysqlTable("users", { id: int("id").primaryKey() });
+    const business = mysqlTable("skus", { id: int("id").primaryKey() });
+    const fakeSchema = { secret, business };
+
+    const result = deriveCoreTables(fakeSchema, new Set(["users"]));
+
+    expect(Object.keys(result)).toEqual(["skus"]);
+  });
+
+  it("ignores schema exports that aren't Drizzle tables at all (enums, types, helper values)", () => {
+    const real = mysqlTable("skus", { id: int("id").primaryKey() });
+    const fakeSchema = {
+      real,
+      SOME_ENUM: ["a", "b", "c"],
+      helperFn: () => 1,
+      plainObject: { not: "a table" },
+    };
+
+    const result = deriveCoreTables(fakeSchema, new Set());
+
+    expect(Object.keys(result)).toEqual(["skus"]);
+  });
+
+  it("a newly added schema table is picked up automatically, with no matching list entry required", () => {
+    // The regression this replaces: sales_plan_weekly_inputs/recipe_lines
+    // were added to the schema and imported here, but never added to the
+    // old hand-maintained CORE_TABLES object — silently dropped from every
+    // export. A schema-derived table set can't have that failure mode.
+    const existing = mysqlTable("skus", { id: int("id").primaryKey() });
+    const newlyAdded = mysqlTable("brand_new_table", { id: int("id").primaryKey() });
+    const fakeSchema = { existing, newlyAdded };
+
+    const result = deriveCoreTables(fakeSchema, new Set());
+
+    expect(Object.keys(result)).toContain("brand_new_table");
+  });
+});
 
 describe("generateCsvExport", () => {
   it("renders rows as CSV with a header row matching the first row's keys", () => {

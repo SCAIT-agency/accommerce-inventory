@@ -2,25 +2,10 @@
 import { createWriteStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { gt } from "drizzle-orm";
+import { gt, is, getTableName } from "drizzle-orm";
+import { MySqlTable } from "drizzle-orm/mysql-core";
 import { db } from "./dbClient";
-import {
-  skus,
-  vendors,
-  warehouses,
-  purchaseOrders,
-  poLineItems,
-  shipments,
-  shipmentLineItems,
-  payments,
-  transactions,
-  inventoryLedger,
-  salesPlan,
-  salesActuals,
-  changeLog,
-  salesPlanWeeklyInputs,
-  salesPlanWeeklyRecipeLines,
-} from "../drizzle/schema";
+import * as schema from "../drizzle/schema";
 
 function csvEscape(value: unknown): string {
   const str = value === null || value === undefined ? "" : String(value);
@@ -43,14 +28,29 @@ export function generateCsvExport(rows: Record<string, unknown>[]): string {
   return lines.join("\n");
 }
 
-const CORE_TABLES = {
-  skus, vendors, warehouses, purchase_orders: purchaseOrders, po_line_items: poLineItems,
-  shipments, shipment_line_items: shipmentLineItems, payments, transactions,
-  inventory_ledger: inventoryLedger, sales_plan: salesPlan, sales_actuals: salesActuals,
-  change_log: changeLog,
-  sales_plan_weekly_inputs: salesPlanWeeklyInputs,
-  sales_plan_weekly_recipe_lines: salesPlanWeeklyRecipeLines,
-} as const;
+// Tables that exist in the schema but must never leave it via this export:
+// users carries password hashes; app_settings is internal operational
+// config, not client business data. Everything else real gets exported —
+// deliberately not a hand-maintained allowlist, since that's exactly what
+// silently dropped sales_plan_weekly_inputs/recipe_lines for months (a real
+// commit claimed the fix but only added the import, never the list entry).
+const EXCLUDED_FROM_EXPORT = new Set(["users", "app_settings"]);
+
+/**
+ * Every real Drizzle table in a schema module, keyed by its actual SQL table
+ * name, minus the excluded set — a schema export that isn't a table (an
+ * enum array, a type, a helper function) is filtered out by the `is()`
+ * brand check, not by name, so it can't be mistaken for one.
+ */
+export function deriveCoreTables(schemaModule: Record<string, unknown>, excluded: Set<string>): Record<string, MySqlTable> {
+  const entries = Object.values(schemaModule)
+    .filter((value): value is MySqlTable => is(value, MySqlTable))
+    .map((table) => [getTableName(table), table] as const)
+    .filter(([name]) => !excluded.has(name));
+  return Object.fromEntries(entries);
+}
+
+const CORE_TABLES = deriveCoreTables(schema, EXCLUDED_FROM_EXPORT);
 
 const EXPORT_PAGE_SIZE = 5000;
 
