@@ -609,6 +609,35 @@ function defaultLinksForm(po: PoListItem): PoLinksFormState {
 // Reference links only (Google Drive etc.) -- this platform never stores the
 // documents themselves. No reasonCategory/audit trail: these don't affect
 // delay or cost, the only things this codebase's change_log tracks.
+function ActualReadyDateControl({ po, onUpdated }: { po: PoListItem; onUpdated: () => void }) {
+  const updateActualReadyDate = trpc.purchaseOrders.updateActualReadyDate.useMutation({ onSuccess: onUpdated });
+  const [newDate, setNewDate] = useState(po.actualReadyDate ? new Date(po.actualReadyDate).toISOString().slice(0, 10) : "");
+  const [reasonCategory, setReasonCategory] = useState<ReasonCategory>("production_delay");
+  const [reasonNote, setReasonNote] = useState("");
+  const noteRequired = reasonCategory === "other";
+  const canSave = newDate !== "" && (!noteRequired || reasonNote.trim().length > 0);
+
+  return (
+    <div>
+      <div>Actual ready: {po.actualReadyDate ? new Date(po.actualReadyDate).toISOString().slice(0, 10) : "—"}</div>
+      <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} />
+      <select value={reasonCategory} onChange={(e) => setReasonCategory(e.target.value as ReasonCategory)}>
+        {MANUAL_REASON_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {noteRequired && (
+        <input type="text" placeholder="required note" value={reasonNote} onChange={(e) => setReasonNote(e.target.value)} />
+      )}
+      <button
+        disabled={!canSave || updateActualReadyDate.isPending}
+        onClick={() => updateActualReadyDate.mutate({ id: po.id, newDate: new Date(newDate), reasonCategory, reasonNote: noteRequired ? reasonNote : undefined })}
+      >
+        Save actual ready date
+      </button>
+      {updateActualReadyDate.error && <div>Failed to save: {updateActualReadyDate.error.message}</div>}
+    </div>
+  );
+}
+
 function PoLinksControl({ po, onUpdated }: { po: PoListItem; onUpdated: () => void }) {
   const updateLinks = trpc.purchaseOrders.updateLinks.useMutation({ onSuccess: onUpdated });
   const [form, setForm] = useState<PoLinksFormState>(() => defaultLinksForm(po));
@@ -673,7 +702,7 @@ export function PurchaseOrdersPage() {
       <h1>Purchase Orders</h1>
       <CreatePoForm />
       <table>
-        <thead><tr><th>PO</th><th>Status</th><th>Planned Ready</th><th>Change date</th><th>Payments</th><th>Shipments</th><th>Line Items</th><th>Links</th></tr></thead>
+        <thead><tr><th>PO</th><th>Status</th><th>Planned Ready</th><th>Change date</th><th>Actual Ready</th><th>Payments</th><th>Shipments</th><th>Line Items</th><th>Links</th></tr></thead>
         <tbody>
           {pos.map((po) => {
             const row = rowState[po.id] ?? defaultRowState(po.plannedReadyDate);
@@ -723,6 +752,9 @@ export function PurchaseOrdersPage() {
                   >
                     Save
                   </button>
+                </td>
+                <td>
+                  <ActualReadyDateControl po={po} onUpdated={refetch} />
                 </td>
                 <td>
                   <PoPaymentsSection poId={po.id} />

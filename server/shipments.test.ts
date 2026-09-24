@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql, eq, and } from "drizzle-orm";
 import { db } from "./dbClient";
 import { shipments, shipmentLineItems, poLineItems, purchaseOrders, skus, vendors, changeLog, payments, warehouses, users } from "../drizzle/schema";
-import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks } from "./shipments";
+import { createShipment, markShipmentDeparted, updateShipmentPlannedDepartDate, getShipmentWithLineItems, recordShipmentCosts, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks, updateShipmentMethod } from "./shipments";
 import { createSku, createVendor, createWarehouse, createUser } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
 import { listChangeLog } from "./changeLog";
@@ -1374,5 +1374,19 @@ describe("shipments", () => {
     await expect(
       updateShipmentLinks(999999, { quoteLink: "https://drive.google.com/quote" }),
     ).rejects.toThrow(/no shipment found with id 999999/);
+  });
+
+  it("updateShipmentMethod sets shipMethod, unaudited", async () => {
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container-Method1", warehouseId: ffWarehouseId, lineItems: [], createdBy: userId });
+
+    const updated = await updateShipmentMethod(shipment.id, "Sea");
+
+    expect(updated.shipMethod).toBe("Sea");
+    const history = await listChangeLog("shipment", shipment.id);
+    expect(history).toHaveLength(0);
+  });
+
+  it("rejects updateShipmentMethod for a nonexistent shipment with a clear error", async () => {
+    await expect(updateShipmentMethod(999999, "Air")).rejects.toThrow(/no shipment found with id 999999/);
   });
 });

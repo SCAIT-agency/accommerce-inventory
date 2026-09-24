@@ -230,6 +230,10 @@ export async function listPaymentsForPo(poId: number, dbClient: DbClient = db): 
   return dbClient.select().from(payments).where(eq(payments.poId, poId));
 }
 
+export async function listPaymentsForShipment(shipmentId: number, dbClient: DbClient = db): Promise<Payment[]> {
+  return dbClient.select().from(payments).where(eq(payments.shipmentId, shipmentId));
+}
+
 export interface UnpaidPayment extends Payment {
   poNumber: string | null;
 }

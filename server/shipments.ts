@@ -265,6 +265,25 @@ export async function updateShipmentLinks(
   return updated;
 }
 
+/**
+ * Sets a shipment's transport method (Control Tower's "Ship method" — free
+ * text in the real Sheet too, e.g. "Sea"/"Air"). Unaudited, same rationale
+ * as updateShipmentLinks: not delay/cost-affecting on its own.
+ */
+export async function updateShipmentMethod(
+  id: number,
+  shipMethod: string,
+  dbClient: DbClient = db,
+): Promise<Shipment> {
+  const [shipment] = await dbClient.select().from(shipments).where(eq(shipments.id, id));
+  if (!shipment) {
+    throw new Error(`updateShipmentMethod: no shipment found with id ${id}`);
+  }
+  await dbClient.update(shipments).set({ shipMethod }).where(eq(shipments.id, id));
+  const [updated] = await dbClient.select().from(shipments).where(eq(shipments.id, id));
+  return updated;
+}
+
 export async function lockShipmentCosts(
   id: number,
   opts: { changedBy: number; reasonNote: string },

@@ -698,6 +698,112 @@ function ShipmentLinksControl({ shipment, onUpdated }: { shipment: ShipmentListI
   );
 }
 
+function ShipMethodControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
+  const updateMethod = trpc.shipments.updateMethod.useMutation({ onSuccess: onUpdated });
+  const [shipMethod, setShipMethod] = useState(shipment.shipMethod ?? "");
+
+  return (
+    <div>
+      <input type="text" placeholder="ship method (e.g. Sea, Air)" value={shipMethod} onChange={(e) => setShipMethod(e.target.value)} />
+      <button disabled={updateMethod.isPending || shipMethod.trim() === ""} onClick={() => updateMethod.mutate({ id: shipment.id, shipMethod })}>
+        Save method
+      </button>
+      {updateMethod.error && <div>Failed to save: {updateMethod.error.message}</div>}
+    </div>
+  );
+}
+
+interface NewShipmentPaymentFormState {
+  sequenceNo: string;
+  expectedAmount: string;
+  expectedDate: string;
+  currency: string;
+}
+
+function defaultNewShipmentPaymentForm(): NewShipmentPaymentFormState {
+  return { sequenceNo: "1", expectedAmount: "", expectedDate: new Date().toISOString().slice(0, 10), currency: "EUR" };
+}
+
+// Minimal shipment-owned payments (customs clearance fees, freight
+// instalments) — the payments table already supports shipmentId ownership
+// generically; this page simply had no UI for it before. Deliberately
+// lighter than PurchaseOrdersPage's own payments section (no correction
+// control, no history link) -- proportionate to closing this one gap.
+function ShipmentPaymentsSection({ shipmentId }: { shipmentId: number }) {
+  const utils = trpc.useUtils();
+  const paymentsQuery = trpc.payments.listForShipment.useQuery(shipmentId);
+  const [form, setForm] = useState<NewShipmentPaymentFormState>(() => defaultNewShipmentPaymentForm());
+  const createPayment = trpc.payments.createExpectedPayment.useMutation({
+    onSuccess: () => {
+      utils.payments.listForShipment.invalidate(shipmentId);
+      setForm((prev) => ({ ...defaultNewShipmentPaymentForm(), sequenceNo: String(Number(prev.sequenceNo) + 1) }));
+      utils.dashboards.money.invalidate();
+    },
+  });
+  const markPaid = trpc.payments.markPaid.useMutation({
+    onSuccess: () => {
+      utils.payments.listForShipment.invalidate(shipmentId);
+      utils.dashboards.money.invalidate();
+    },
+  });
+  const canCreate = form.expectedAmount.trim().length > 0 && form.currency.trim().length > 0;
+
+  if (paymentsQuery.error) return <div>Failed to load payments: {paymentsQuery.error.message}</div>;
+
+  return (
+    <div>
+      <strong>Payments</strong>
+      {paymentsQuery.isLoading && <div>Loading payments…</div>}
+      {paymentsQuery.data && paymentsQuery.data.length > 0 && (
+        <ul>
+          {paymentsQuery.data.map((payment) => (
+            <li key={payment.id}>
+              #{payment.sequenceNo}: {formatMoney(payment.expectedAmount, payment.currency)} — {payment.paid ? "paid" : "unpaid"}
+              {!payment.paid && (
+                <button
+                  disabled={markPaid.isPending}
+                  onClick={() =>
+                    markPaid.mutate({
+                      id: payment.id,
+                      amount: payment.expectedAmount,
+                      fxRate: "1.0",
+                      paidDate: new Date(),
+                      reasonCategory: "payment_timing",
+                    })
+                  }
+                >
+                  Mark paid
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div>
+        <input type="text" placeholder="sequence no" value={form.sequenceNo} onChange={(e) => setForm((prev) => ({ ...prev, sequenceNo: e.target.value }))} />
+        <input type="text" placeholder="expected amount" value={form.expectedAmount} onChange={(e) => setForm((prev) => ({ ...prev, expectedAmount: e.target.value }))} />
+        <input type="date" value={form.expectedDate} onChange={(e) => setForm((prev) => ({ ...prev, expectedDate: e.target.value }))} />
+        <input type="text" placeholder="currency" value={form.currency} onChange={(e) => setForm((prev) => ({ ...prev, currency: e.target.value }))} />
+        <button
+          disabled={!canCreate || createPayment.isPending}
+          onClick={() =>
+            createPayment.mutate({
+              shipmentId,
+              sequenceNo: Number(form.sequenceNo) || 1,
+              expectedAmount: form.expectedAmount,
+              expectedDate: new Date(form.expectedDate),
+              currency: form.currency,
+            })
+          }
+        >
+          Add expected payment (customs, freight instalment, etc.)
+        </button>
+        {createPayment.error && <div>Failed to save: {createPayment.error.message}</div>}
+      </div>
+    </div>
+  );
+}
+
 function LockCostsControl({ shipment, onUpdated }: { shipment: ShipmentListItem; onUpdated: () => void }) {
   const lockCosts = trpc.shipments.lockCosts.useMutation({ onSuccess: onUpdated });
   const [reasonNote, setReasonNote] = useState("");
@@ -737,8 +843,8 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
   });
   const [form, setForm] = useState<CostsFormState>(() => defaultCostsForm(shipment));
 
-  if (error) return <tr><td colSpan={5}>Failed to load {shipment.shipmentRef}: {error.message}</td></tr>;
-  if (isLoading || !data) return <tr><td colSpan={5}>Loading {shipment.shipmentRef}…</td></tr>;
+  if (error) return <tr><td colSpan={7}>Failed to load {shipment.shipmentRef}: {error.message}</td></tr>;
+  if (isLoading || !data) return <tr><td colSpan={7}>Loading {shipment.shipmentRef}…</td></tr>;
 
   // Once a shipment has arrived, the server requires reasonNote regardless of
   // reasonCategory — this now performs a real ledger correction, not just an
@@ -914,6 +1020,12 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
       <td>
         <ShipmentLinksControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
       </td>
+      <td>
+        <ShipMethodControl shipment={shipment} onUpdated={() => { refetch(); utils.shipments.list.invalidate(); }} />
+      </td>
+      <td>
+        <ShipmentPaymentsSection shipmentId={shipment.id} />
+      </td>
     </tr>
   );
 }
@@ -1039,7 +1151,7 @@ export function ShipmentsPage() {
       <p>Each shipment lists the PO line items it carries — one shipment can pool cargo from multiple POs.</p>
       <CreateShipmentForm />
       <table>
-        <thead><tr><th>Ref</th><th>Status</th><th>Line items</th><th>Costs</th><th>Links</th></tr></thead>
+        <thead><tr><th>Ref</th><th>Status</th><th>Line items</th><th>Costs</th><th>Links</th><th>Method</th><th>Payments</th></tr></thead>
         <tbody>
           {shipmentsList.map((shipment) => (
             <ShipmentRow key={shipment.id} shipment={shipment} />

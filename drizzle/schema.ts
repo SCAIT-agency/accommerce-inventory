@@ -119,6 +119,7 @@ export const purchaseOrders = mysqlTable("purchase_orders", {
   vendorReference: varchar("vendorReference", { length: 128 }),
   status: mysqlEnum("status", PO_STATUSES).default("draft").notNull(),
   plannedReadyDate: date("plannedReadyDate", { mode: "string" }),
+  actualReadyDate: date("actualReadyDate", { mode: "string" }),
   notes: text("notes"),
   /** External reference links (e.g. Google Drive) — kept as links, not stored
    * files, so this platform never becomes the document store. Not audited:
@@ -166,6 +167,9 @@ export const shipments = mysqlTable("shipments", {
   id: int("id").autoincrement().primaryKey(),
   shipmentRef: varchar("shipmentRef", { length: 64 }).notNull().unique(),
   vendorReference: varchar("vendorReference", { length: 128 }),
+  /** Free text (e.g. "Sea", "Air", "Air Freight") — Control Tower's "Ship
+   * method" is not a fixed enum in the real Sheet either. */
+  shipMethod: varchar("shipMethod", { length: 32 }),
   status: mysqlEnum("status", SHIPMENT_STATUSES).default("planned").notNull(),
   customsStatus: mysqlEnum("customsStatus", CUSTOMS_STATUSES).default("not_declared").notNull(),
   customsDeclarationLink: varchar("customsDeclarationLink", { length: 512 }),

@@ -3,9 +3,9 @@ import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { getRemainingBatches } from "./inventoryLedger";
 import { listSkus, createSku, updateSku, listVendors, createVendor, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
-import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, updatePoLineItemProduction, getPoLineItemProductionProgress, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
-import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
-import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listUnpaidPayments, listTransactions } from "./payments";
+import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderActualReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, updatePoLineItemProduction, getPoLineItemProductionProgress, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
+import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks, updateShipmentMethod, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
+import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listPaymentsForShipment, listUnpaidPayments, listTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation, upsertWeeklyInput, listWeeklyInputs } from "./salesPlan";
 import { PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES } from "../drizzle/schema";
 import { MANUAL_REASON_CATEGORIES } from "../shared/constants";
@@ -103,6 +103,11 @@ export const appRouter = router({
       .input(z.object({ id: z.number(), newDate: z.date(), reasonCategory: manualReasonCategorySchema, reasonNote: z.string().optional() }))
       .mutation(({ input, ctx }) =>
         updatePurchaseOrderPlannedReadyDate(input.id, input.newDate.toISOString().slice(0, 10), { ...input, changedBy: ctx.user.id }),
+      ),
+    updateActualReadyDate: editorProcedure
+      .input(z.object({ id: z.number(), newDate: z.date(), reasonCategory: manualReasonCategorySchema, reasonNote: z.string().optional() }))
+      .mutation(({ input, ctx }) =>
+        updatePurchaseOrderActualReadyDate(input.id, input.newDate.toISOString().slice(0, 10), { ...input, changedBy: ctx.user.id }),
       ),
     updateLinks: editorProcedure
       .input(z.object({ id: z.number(), contractLink: z.string().optional(), invoiceLink: z.string().optional(), addOnLink: z.string().optional() }))
@@ -316,10 +321,14 @@ export const appRouter = router({
           customsDeclarationLink: input.customsDeclarationLink,
         }),
       ),
+    updateMethod: editorProcedure
+      .input(z.object({ id: z.number(), shipMethod: z.string() }))
+      .mutation(({ input }) => updateShipmentMethod(input.id, input.shipMethod)),
     history: protectedProcedure.input(z.number()).query(({ input }) => listChangeLog("shipment", input)),
   }),
   payments: router({
     listForPo: protectedProcedure.input(z.number()).query(({ input }) => listPaymentsForPo(input)),
+    listForShipment: protectedProcedure.input(z.number()).query(({ input }) => listPaymentsForShipment(input)),
     listUnmatchedTransactions: protectedProcedure.query(() => listUnmatchedTransactions()),
     listTransactions: protectedProcedure.query(() => listTransactions()),
     listUnpaid: protectedProcedure.query(() => listUnpaidPayments()),

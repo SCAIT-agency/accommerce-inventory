@@ -2,11 +2,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { payments, transactions, purchaseOrders, vendors, changeLog, users } from "../drizzle/schema";
-import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listUnpaidPayments, listTransactions, correctPaymentAmount } from "./payments";
+import { payments, transactions, purchaseOrders, vendors, changeLog, users, shipments, warehouses } from "../drizzle/schema";
+import { createExpectedPayment, markPaymentPaid, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listUnpaidPayments, listTransactions, correctPaymentAmount, listPaymentsForShipment } from "./payments";
 import { listChangeLog } from "./changeLog";
-import { createVendor, createUser } from "./db";
+import { createVendor, createUser, createWarehouse } from "./db";
 import { createPurchaseOrder } from "./purchaseOrders";
+import { createShipment } from "./shipments";
 
 let userId: number;
 
@@ -27,8 +28,10 @@ beforeEach(async () => {
       await tx.delete(changeLog);
       await tx.delete(transactions);
       await tx.delete(payments);
+      await tx.delete(shipments);
       await tx.delete(purchaseOrders);
       await tx.delete(vendors);
+      await tx.delete(warehouses);
       await tx.delete(users);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
@@ -220,6 +223,18 @@ describe("payments and transactions", () => {
 
     const { listPaymentsForPo } = await import("./payments");
     const result = await listPaymentsForPo(po.id);
+    expect(result).toHaveLength(2);
+    expect(result.map((p) => p.sequenceNo).sort()).toEqual([1, 2]);
+  });
+
+  it("lists payments for a shipment (customs/freight payments), same shape as listPaymentsForPo", async () => {
+    const ff = await createWarehouse({ code: "FF-DE", name: "Fulfillment DE" });
+    const shipment = await createShipment({ shipmentRef: "PO1-W4-Container1", warehouseId: ff.id, lineItems: [], createdBy: userId });
+    await createExpectedPayment({ shipmentId: shipment.id, sequenceNo: 1, expectedAmount: "500.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });
+    await createExpectedPayment({ shipmentId: shipment.id, sequenceNo: 2, expectedAmount: "150.00", expectedDate: new Date("2026-09-09"), currency: "EUR" });
+
+    const result = await listPaymentsForShipment(shipment.id);
+
     expect(result).toHaveLength(2);
     expect(result.map((p) => p.sequenceNo).sort()).toEqual([1, 2]);
   });

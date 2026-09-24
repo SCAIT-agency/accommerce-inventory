@@ -132,6 +132,30 @@ export async function updatePurchaseOrderPlannedReadyDate(
   });
 }
 
+export async function updatePurchaseOrderActualReadyDate(
+  id: number,
+  newDate: string,
+  opts: { reasonCategory: ReasonCategory; reasonNote?: string; changedBy: number },
+) {
+  await db.transaction(async (tx) => {
+    const [po] = await tx.select().from(purchaseOrders).where(eq(purchaseOrders.id, id));
+    if (!po) {
+      throw new Error(`updatePurchaseOrderActualReadyDate: no purchase order found with id ${id}`);
+    }
+    await tx.update(purchaseOrders).set({ actualReadyDate: newDate }).where(eq(purchaseOrders.id, id));
+    await logChange({
+      entityType: "purchase_order",
+      entityId: id,
+      field: "actualReadyDate",
+      oldValue: po.actualReadyDate ?? null,
+      newValue: newDate,
+      reasonCategory: opts.reasonCategory,
+      reasonNote: opts.reasonNote,
+      changedBy: opts.changedBy,
+    }, tx);
+  });
+}
+
 export interface PoLineItemCostComponents {
   exwUnitPrice?: string;
   labTestUnitPrice?: string;

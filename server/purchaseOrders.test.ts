@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql, eq } from "drizzle-orm";
 import { db } from "./dbClient";
 import { purchaseOrders, poLineItems, skus, vendors, changeLog, users, shipments, shipmentLineItems, warehouses } from "../drizzle/schema";
-import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, updatePoLineItemProduction, getPoLineItemProductionProgress, getPurchaseOrderWithLineItems } from "./purchaseOrders";
+import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderActualReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, updatePoLineItemProduction, getPoLineItemProductionProgress, getPurchaseOrderWithLineItems } from "./purchaseOrders";
 import { createSku, createVendor, createUser, createWarehouse } from "./db";
 import { createShipment } from "./shipments";
 
@@ -346,5 +346,23 @@ describe("purchase orders", () => {
 
   it("rejects getPoLineItemProductionProgress for a nonexistent line item with a clear error", async () => {
     await expect(getPoLineItemProductionProgress(999999)).rejects.toThrow(/no PO line item found with id 999999/);
+  });
+
+  it("updatePurchaseOrderActualReadyDate logs a change_log entry with the required reason", async () => {
+    const vendor = await createVendor({ name: "Lvmengkang" });
+    const po = await createPurchaseOrder({ poNumber: "PO3-JELLO", vendorId: vendor.id, lineItems: [], createdBy: userId });
+
+    await updatePurchaseOrderActualReadyDate(po.id, "2026-10-08", { reasonCategory: "production_delay", changedBy: userId });
+
+    const [updated] = await db.select().from(purchaseOrders).where(eq(purchaseOrders.id, po.id));
+    expect(updated.actualReadyDate).toBe("2026-10-08");
+    const entries = await db.select().from(changeLog).where(eq(changeLog.entityId, po.id));
+    expect(entries.find((e) => e.field === "actualReadyDate")?.reasonCategory).toBe("production_delay");
+  });
+
+  it("rejects updatePurchaseOrderActualReadyDate for a nonexistent purchase order with a clear error", async () => {
+    await expect(
+      updatePurchaseOrderActualReadyDate(999999, "2026-10-01", { reasonCategory: "logistics_delay", changedBy: userId }),
+    ).rejects.toThrow(/no purchase order found/);
   });
 });
