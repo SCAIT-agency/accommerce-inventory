@@ -127,10 +127,13 @@ function RecordTransactionForm({ onRecorded }: { onRecorded: () => void }) {
   );
 }
 
+const TRANSACTIONS_PAGE_SIZE = 50;
+
 export function TransactionsPage() {
   const utils = trpc.useUtils();
   const transactionsQuery = trpc.payments.listTransactions.useQuery();
   const unpaidQuery = trpc.payments.listUnpaid.useQuery();
+  const [visibleCount, setVisibleCount] = useState(TRANSACTIONS_PAGE_SIZE);
 
   const error = transactionsQuery.error ?? unpaidQuery.error;
   if (error) return <div>Failed to load: {error.message}</div>;
@@ -144,14 +147,22 @@ export function TransactionsPage() {
     utils.dashboards.money.invalidate();
   };
 
+  // Most recent first (listTransactions already orders this way) — sliced
+  // client-side since this list has no server-side pagination yet. Fine at
+  // today's real volume (hundreds of rows); would need real cursor
+  // pagination if that grows by an order of magnitude.
+  const visible = transactionsQuery.data.slice(0, visibleCount);
+  const remaining = transactionsQuery.data.length - visible.length;
+
   return (
     <div>
       <h1>Transactions</h1>
       <RecordTransactionForm onRecorded={onMatched} />
+      <p>{transactionsQuery.data.length} total — showing {visible.length}.</p>
       <table>
         <thead><tr><th>Date</th><th>Amount</th><th>Counterparty</th><th>Status</th></tr></thead>
         <tbody>
-          {transactionsQuery.data.map((tx) => (
+          {visible.map((tx) => (
             <tr key={tx.id}>
               <td>{new Date(tx.date).toISOString().slice(0, 10)}</td>
               <td>{formatMoney(tx.amount, tx.currency)}</td>
@@ -167,6 +178,11 @@ export function TransactionsPage() {
           ))}
         </tbody>
       </table>
+      {remaining > 0 && (
+        <button onClick={() => setVisibleCount((n) => n + TRANSACTIONS_PAGE_SIZE)}>
+          Show {Math.min(remaining, TRANSACTIONS_PAGE_SIZE)} more ({remaining} left)
+        </button>
+      )}
     </div>
   );
 }
