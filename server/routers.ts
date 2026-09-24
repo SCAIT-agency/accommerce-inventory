@@ -24,11 +24,19 @@ const manualReasonCategorySchema = z.enum(MANUAL_REASON_CATEGORIES);
 // Non-negative, plain-decimal string (no exponent/scientific notation, no
 // sign) — same shape as scripts/migrate-from-sheet.ts's DECIMAL_PATTERN with
 // the leading `-?` dropped, since every field this guards (money/FX amounts)
-// is non-negative by definition. Scoped to the three new correction
-// procedures below, matching correctLedgerReceipt's own validation
-// precedent (server/inventoryLedger.ts) at the router's input layer instead
-// of leaving a malformed string to reach a `decimal` column as `"NaN"`.
-const nonNegativeDecimalString = z.string().regex(/^\d+(\.\d+)?$/, "must be a non-negative number in plain decimal notation");
+// is non-negative by definition. Matches correctLedgerReceipt's own
+// validation precedent (server/inventoryLedger.ts) at the router's input
+// layer instead of leaving a malformed string to reach a `decimal` column as
+// `"NaN"`. Exported for direct testing (server/routers.test.ts) — this
+// project has no tRPC-caller test harness, so the Zod schema is the unit.
+export const nonNegativeDecimalString = z.string().regex(/^\d+(\.\d+)?$/, "must be a non-negative number in plain decimal notation");
+
+// A weightShare/valueShare value: same plain-decimal shape as
+// nonNegativeDecimalString, additionally bounded to [0, 1] — a share above 1
+// is a realistic typo (e.g. "1.5" meant as "0.15") that previously wasn't
+// caught until getShipmentLandedUnitCost ran at cost-compute time, long
+// after the shipment line was created.
+export const shareString = nonNegativeDecimalString.refine((v) => parseFloat(v) <= 1, "must be between 0 and 1");
 
 export const appRouter = router({
   dashboards: router({
@@ -93,7 +101,7 @@ export const appRouter = router({
       .input(z.object({
         poNumber: z.string(),
         vendorId: z.number(),
-        lineItems: z.array(z.object({ skuId: z.number(), qty: z.number(), unitPrice: z.string(), currency: z.string() })),
+        lineItems: z.array(z.object({ skuId: z.number(), qty: z.number(), unitPrice: nonNegativeDecimalString, currency: z.string() })),
       }))
       .mutation(({ input, ctx }) => createPurchaseOrder({ ...input, createdBy: ctx.user.id })),
     updateStatus: editorProcedure
@@ -162,7 +170,7 @@ export const appRouter = router({
       .input(z.object({
         shipmentRef: z.string(),
         warehouseId: z.number(),
-        lineItems: z.array(z.object({ poLineItemId: z.number(), skuId: z.number(), qty: z.number(), weightShare: z.string(), valueShare: z.string() })),
+        lineItems: z.array(z.object({ poLineItemId: z.number(), skuId: z.number(), qty: z.number(), weightShare: shareString, valueShare: shareString })),
       }))
       .mutation(({ input, ctx }) => createShipment({ ...input, createdBy: ctx.user.id })),
     updatePlannedDepartDate: editorProcedure
@@ -337,7 +345,7 @@ export const appRouter = router({
         poId: z.number().optional(),
         shipmentId: z.number().optional(),
         sequenceNo: z.number(),
-        expectedAmount: z.string(),
+        expectedAmount: nonNegativeDecimalString,
         expectedDate: z.date(),
         currency: z.string(),
       }))
@@ -345,8 +353,8 @@ export const appRouter = router({
     markPaid: editorProcedure
       .input(z.object({
         id: z.number(),
-        amount: z.string(),
-        fxRate: z.string(),
+        amount: nonNegativeDecimalString,
+        fxRate: nonNegativeDecimalString,
         paidDate: z.date(),
         reasonCategory: manualReasonCategorySchema,
         reasonNote: z.string().optional(),
@@ -381,9 +389,9 @@ export const appRouter = router({
     recordTransaction: editorProcedure
       .input(z.object({
         date: z.date(),
-        amount: z.string(),
+        amount: nonNegativeDecimalString,
         currency: z.string(),
-        fxRate: z.string(),
+        fxRate: nonNegativeDecimalString,
         counterparty: z.string().optional(),
         description: z.string().optional(),
       }))
