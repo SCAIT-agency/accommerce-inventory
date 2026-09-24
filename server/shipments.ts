@@ -495,6 +495,21 @@ function isNoOpCorrection(err: unknown): boolean {
   return err instanceof Error && /changes nothing/.test(err.message);
 }
 
+/**
+ * Restates a shipment's freight/duty cost and corrects every line item's
+ * receipt to the landed unit cost that recomputes from it. Shared by
+ * recordShipmentCosts (post-arrival) and correctShipmentLandedCost.
+ *
+ * One deliberate exception to "any failing line rolls everything back": a
+ * line whose recomputed landed cost is unchanged is SKIPPED, not failed. That
+ * shape is ordinary, not exceptional — a freight-only restatement leaves a
+ * line with `weightShare = 0` exactly where it was, as does any line whose
+ * cost happens to round to the same 8 decimals — and refusing the whole
+ * shipment-wide correction over it would make the feature unusable on pooled
+ * containers (multiple SKUs sharing one shipment where freight/duty is split
+ * unevenly). Skipped lines are absent from the returned `corrections` array,
+ * and nothing is written for them.
+ */
 async function applyShipmentCostChange(
   tx: DbClient,
   shipmentId: number,
@@ -551,8 +566,14 @@ async function applyShipmentCostChange(
       );
     } catch (err) {
       // Narrow on purpose: ONLY correctLedgerReceipt's no-op refusal means
-      // "this line needed no correction". Every other refusal it can raise
-      // is a real failure and must still roll the whole change back.
+      // "this line needed no correction". Every other refusal it can raise —
+      // ambiguous receipt, unreplayable FIFO history, negative SOH, invalid
+      // qty/cost, blank reasonNote — is a real failure and must still roll
+      // the whole change back.
+      //
+      // Safe to swallow here because that check runs before either ledger
+      // row (reversal or replacement) is written, so a skipped line leaves no
+      // partial state behind in the open transaction.
       if (!isNoOpCorrection(err)) throw err;
     }
   }
@@ -592,7 +613,15 @@ export async function correctShipmentLandedCost(
     throw new Error("correctShipmentLandedCost: no cost fields provided to correct");
   }
 
-  return db.transaction((tx) =>
-    applyShipmentCostChange(tx, shipmentId, updates, { ...opts, reasonCategory: "data_correction" }),
-  );
+  return db.transaction(async (tx) => {
+    // Own not-found check, ahead of applyShipmentCostChange's own (identical)
+    // one, so a missing shipment fails with this function's name in the
+    // message rather than the shared helper's — mirrors recordShipmentCosts's
+    // same pattern above.
+    const [shipment] = await tx.select().from(shipments).where(eq(shipments.id, shipmentId));
+    if (!shipment) {
+      throw new Error(`correctShipmentLandedCost: no shipment found with id ${shipmentId}`);
+    }
+    return applyShipmentCostChange(tx, shipmentId, updates, { ...opts, reasonCategory: "data_correction" });
+  });
 }

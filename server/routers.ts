@@ -11,14 +11,14 @@ import { PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES 
 import { MANUAL_REASON_CATEGORIES } from "../shared/constants";
 import { listChangeLog } from "./changeLog";
 
-// "data_correction" is reserved for the 3 correction procedures below
-// (correctReceiptQty/correctLandedCost/correctAmount), which hardcode it
-// server-side and don't accept a reasonCategory field at all — every OTHER
-// procedure that takes a reasonCategory is an ordinary, first-time write and
-// must use this narrower schema so an operator can't hand-pick
-// "data_correction" there, which would make it indistinguishable from a real
-// correction in change_log (see server/payments.ts's doc comment on
-// correctPaymentAmount).
+// "data_correction" is reserved for the 4 correction procedures below
+// (correctReceiptQty/correctLandedCost/correctAmount/lockCosts), which
+// hardcode it server-side and don't accept a reasonCategory field at all —
+// every OTHER procedure that takes a reasonCategory is an ordinary,
+// first-time write and must use this narrower schema so an operator can't
+// hand-pick "data_correction" there, which would make it indistinguishable
+// from a real correction in change_log (see server/payments.ts's doc comment
+// on correctPaymentAmount).
 const manualReasonCategorySchema = z.enum(MANUAL_REASON_CATEGORIES);
 
 // Non-negative, plain-decimal string (no exponent/scientific notation, no
@@ -143,8 +143,8 @@ export const appRouter = router({
     recordCosts: editorProcedure
       .input(z.object({
         id: z.number(),
-        freightCost: z.string(),
-        dutyCost: z.string(),
+        freightCost: nonNegativeDecimalString,
+        dutyCost: nonNegativeDecimalString,
         costCurrency: z.string(),
         reasonCategory: manualReasonCategorySchema,
         reasonNote: z.string().optional(),

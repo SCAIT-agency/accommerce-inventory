@@ -699,8 +699,13 @@ function ShipmentRow({ shipment }: { shipment: ShipmentListItem }) {
         </div>
         {shipment.costsLockedAt != null && (
           <p>
-            🔒 Locked on {new Date(shipment.costsLockedAt).toISOString().slice(0, 10)} — use the correction form
-            above ("Correct cost restated") to make further changes.
+            🔒 Locked on {new Date(shipment.costsLockedAt).toISOString().slice(0, 10)} — use this shipment's
+            "Correct cost restated" control to make further changes.
+          </p>
+        )}
+        {shipment.status === "delivered" && shipment.costsLockedAt == null && (
+          <p>
+            This shipment has arrived — saving here restates the ledger receipt for every affected line.
           </p>
         )}
         <input
