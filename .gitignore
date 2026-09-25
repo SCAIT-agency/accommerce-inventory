@@ -30,3 +30,6 @@ docs/dryrun/**/*.json
 .env.dryrun
 docs/dryrun/latest.md
 docs/dryrun/**/delta.md
+
+# Visual brainstorming companion scratch (superpowers:brainstorming skill)
+.superpowers/

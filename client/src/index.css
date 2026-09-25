@@ -13,23 +13,28 @@
  */
 
 :root {
-  --ink: #12182b;
-  --muted: #5a6472;
-  --surface: #f5f6f8;
+  /* Tucann-derived palette (2026-09-25, Artem's call) — same hue family as
+     Tucann's "Dark Ops" system (cyan/red/amber/emerald), reapplied to this
+     app's own token structure instead of porting Tucann's Tailwind/shadcn
+     stack. Every foreground/background pair here is WCAG AA (>=4.5:1 for
+     text, badge fg-on-soft-bg included) — verified pair by pair, not eyeballed. */
+  --ink: #0f1522;
+  --muted: #5b6472;
+  --surface: #f4f7fa;
   --surface-raised: #ffffff;
-  --border: #dbdfe6;
-  --accent: #26456f;
-  --accent-soft: #e4ecf5;
+  --border: #d8dee8;
+  --accent: #0e7490;
+  --accent-soft: #e0f5f9;
   --accent-contrast: #ffffff;
 
-  --critical: #b00020;
-  --critical-soft: #fbe7ea;
-  --warning: #8a5300;
-  --warning-soft: #fbf0dc;
-  --ok: #157030;
-  --ok-soft: #e4f3e8;
-  --neutral-status: #5a5a5a;
-  --neutral-status-soft: #eceef0;
+  --critical: #dc2626;
+  --critical-soft: #fff5f5;
+  --warning: #b45309;
+  --warning-soft: #fdf3df;
+  --ok: #047857;
+  --ok-soft: #e1f7ee;
+  --neutral-status: #5b6472;
+  --neutral-status-soft: #eceef2;
 
   --font-ui: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-data: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -39,23 +44,27 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
+    /* Straight from Tucann's own CSS comment (deepest/mid/elevated surfaces,
+       red/amber/emerald/cyan status) — the one case where "take Tucann's
+       colors" applies almost literally, since Tucann has no light mode to
+       diverge from. */
     --ink: #e7e9ee;
-    --muted: #9aa1ac;
-    --surface: #14171c;
-    --surface-raised: #1c2027;
-    --border: #2b3038;
-    --accent: #7fa3d1;
-    --accent-soft: #202a38;
-    --accent-contrast: #0d1117;
+    --muted: #8b93a7;
+    --surface: #0a0f1c;
+    --surface-raised: #131b2e;
+    --border: #263352;
+    --accent: #06b6d4;
+    --accent-soft: #113340;
+    --accent-contrast: #0a0f1c;
 
-    --critical: #e8887a;
-    --critical-soft: #3a2224;
-    --warning: #e0b155;
-    --warning-soft: #3a2f1a;
-    --ok: #7bcb98;
-    --ok-soft: #1f3527;
-    --neutral-status: #9aa1ac;
-    --neutral-status-soft: #262a30;
+    --critical: #ef4444;
+    --critical-soft: #260c10;
+    --warning: #f59e0b;
+    --warning-soft: #3a2a10;
+    --ok: #10b981;
+    --ok-soft: #0f2e22;
+    --neutral-status: #8b93a7;
+    --neutral-status-soft: #1c2640;
   }
 }
 
