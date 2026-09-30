@@ -72,7 +72,10 @@ export const vendors = mysqlTable("vendors", {
   contactEmail: varchar("contactEmail", { length: 320 }),
   notes: text("notes"),
   type: mysqlEnum("type", VENDOR_TYPES).default("other").notNull(),
-  products: json("products").$type<string[]>().default([]).notNull(),
+  // TiDB rejects a JSON column DEFAULT given as a string literal (only expressions like
+  // json_array() are accepted) — a plain `.default([])` would generate `DEFAULT ('[]')`,
+  // which works on MySQL 8 but fails on TiDB. json_array() is valid on both.
+  products: json("products").$type<string[]>().default(sql`(json_array())`).notNull(),
   active: boolean("active").default(true).notNull(),
   createdBy: int("createdBy").references(() => users.id),
   updatedBy: int("updatedBy").references(() => users.id),

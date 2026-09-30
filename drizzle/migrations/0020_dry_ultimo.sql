@@ -1,1 +1,0 @@
-ALTER TABLE `warehouses` ADD `active` boolean DEFAULT true NOT NULL;
