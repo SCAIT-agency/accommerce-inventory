@@ -225,56 +225,62 @@ function VendorRow({ vendor, onUpdated }: {
   const updateVendor = trpc.catalog.updateVendor.useMutation({ onSuccess: () => { setEditing(false); onUpdated(); } });
   const toggleActive = trpc.catalog.updateVendor.useMutation({ onSuccess: onUpdated });
 
-  if (!editing) {
-    return (
-      <tr>
-        <td>{vendor.name}</td>
-        <td>{vendor.type}</td>
-        <td>{vendor.products.join(", ") || "—"}</td>
-        <td>{vendor.contactEmail ?? "—"}</td>
-        <td>{vendor.notes ?? "—"}</td>
-        <td>
-          <span className={vendor.active ? "badge badge-ok" : "badge badge-neutral"}>{vendor.active ? "active" : "inactive"}</span>{" "}
-          <button disabled={toggleActive.isPending} onClick={() => toggleActive.mutate({ id: vendor.id, active: !vendor.active })}>
-            {vendor.active ? "Deactivate" : "Activate"}
-          </button>
-        </td>
-        <td><button onClick={() => setEditing(true)}>Edit</button></td>
-      </tr>
-    );
-  }
   return (
-    <tr>
-      <td><input value={name} onChange={(e) => setName(e.target.value)} /></td>
-      <td>
-        <select value={type} onChange={(e) => setType(e.target.value as (typeof VENDOR_TYPES)[number])}>
-          {VENDOR_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
-      </td>
-      <td><input value={productsText} onChange={(e) => setProductsText(e.target.value)} placeholder="comma-separated" /></td>
-      <td><input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} /></td>
-      <td><input value={notes} onChange={(e) => setNotes(e.target.value)} /></td>
-      <td>{vendor.active ? "active" : "inactive"}</td>
-      <td>
-        <button
-          disabled={updateVendor.isPending || !name}
-          onClick={() =>
-            updateVendor.mutate({
-              id: vendor.id,
-              name,
-              contactEmail: contactEmail || undefined,
-              notes: notes || undefined,
-              type,
-              products: productsText.split(",").map((p) => p.trim()).filter((p) => p.length > 0),
-            })
-          }
-        >
-          Save
-        </button>
-        <button onClick={() => setEditing(false)}>Cancel</button>
-        {updateVendor.error && <div>Failed: {updateVendor.error.message}</div>}
-      </td>
-    </tr>
+    <>
+      {!editing ? (
+        <tr>
+          <td>{vendor.name}</td>
+          <td>{vendor.type}</td>
+          <td>{vendor.products.join(", ") || "—"}</td>
+          <td>{vendor.contactEmail ?? "—"}</td>
+          <td>{vendor.notes ?? "—"}</td>
+          <td>
+            <span className={vendor.active ? "badge badge-ok" : "badge badge-neutral"}>{vendor.active ? "active" : "inactive"}</span>{" "}
+            <button disabled={toggleActive.isPending} onClick={() => toggleActive.mutate({ id: vendor.id, active: !vendor.active })}>
+              {vendor.active ? "Deactivate" : "Activate"}
+            </button>
+          </td>
+          <td><button onClick={() => setEditing(true)}>Edit</button></td>
+        </tr>
+      ) : (
+        <tr>
+          <td><input value={name} onChange={(e) => setName(e.target.value)} /></td>
+          <td>
+            <select value={type} onChange={(e) => setType(e.target.value as (typeof VENDOR_TYPES)[number])}>
+              {VENDOR_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </td>
+          <td><input value={productsText} onChange={(e) => setProductsText(e.target.value)} placeholder="comma-separated" /></td>
+          <td><input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} /></td>
+          <td><input value={notes} onChange={(e) => setNotes(e.target.value)} /></td>
+          <td>{vendor.active ? "active" : "inactive"}</td>
+          <td>
+            <button
+              disabled={updateVendor.isPending || !name}
+              onClick={() =>
+                updateVendor.mutate({
+                  id: vendor.id,
+                  name,
+                  contactEmail: contactEmail || undefined,
+                  notes: notes || undefined,
+                  type,
+                  products: productsText.split(",").map((p) => p.trim()).filter((p) => p.length > 0),
+                })
+              }
+            >
+              Save
+            </button>
+            <button onClick={() => setEditing(false)}>Cancel</button>
+            {updateVendor.error && <div>Failed: {updateVendor.error.message}</div>}
+          </td>
+        </tr>
+      )}
+      {toggleActive.error && (
+        <tr>
+          <td colSpan={7}>Failed: {toggleActive.error.message}</td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -321,32 +327,38 @@ function WarehouseRow({ warehouse, onUpdated }: { warehouse: { id: number; code:
   const updateWarehouse = trpc.catalog.updateWarehouse.useMutation({ onSuccess: () => { setEditing(false); onUpdated(); } });
   const toggleActive = trpc.catalog.updateWarehouse.useMutation({ onSuccess: onUpdated });
 
-  if (!editing) {
-    return (
-      <tr>
-        <td>{warehouse.code}</td>
-        <td>{warehouse.name}</td>
-        <td>
-          <span className={warehouse.active ? "badge badge-ok" : "badge badge-neutral"}>{warehouse.active ? "active" : "inactive"}</span>{" "}
-          <button disabled={toggleActive.isPending} onClick={() => toggleActive.mutate({ id: warehouse.id, active: !warehouse.active })}>
-            {warehouse.active ? "Deactivate" : "Activate"}
-          </button>
-        </td>
-        <td><button onClick={() => setEditing(true)}>Edit</button></td>
-      </tr>
-    );
-  }
   return (
-    <tr>
-      <td><input value={code} onChange={(e) => setCode(e.target.value)} /></td>
-      <td><input value={name} onChange={(e) => setName(e.target.value)} /></td>
-      <td>{warehouse.active ? "active" : "inactive"}</td>
-      <td>
-        <button disabled={updateWarehouse.isPending || !code || !name} onClick={() => updateWarehouse.mutate({ id: warehouse.id, code, name })}>Save</button>
-        <button onClick={() => setEditing(false)}>Cancel</button>
-        {updateWarehouse.error && <div>Failed: {updateWarehouse.error.message}</div>}
-      </td>
-    </tr>
+    <>
+      {!editing ? (
+        <tr>
+          <td>{warehouse.code}</td>
+          <td>{warehouse.name}</td>
+          <td>
+            <span className={warehouse.active ? "badge badge-ok" : "badge badge-neutral"}>{warehouse.active ? "active" : "inactive"}</span>{" "}
+            <button disabled={toggleActive.isPending} onClick={() => toggleActive.mutate({ id: warehouse.id, active: !warehouse.active })}>
+              {warehouse.active ? "Deactivate" : "Activate"}
+            </button>
+          </td>
+          <td><button onClick={() => setEditing(true)}>Edit</button></td>
+        </tr>
+      ) : (
+        <tr>
+          <td><input value={code} onChange={(e) => setCode(e.target.value)} /></td>
+          <td><input value={name} onChange={(e) => setName(e.target.value)} /></td>
+          <td>{warehouse.active ? "active" : "inactive"}</td>
+          <td>
+            <button disabled={updateWarehouse.isPending || !code || !name} onClick={() => updateWarehouse.mutate({ id: warehouse.id, code, name })}>Save</button>
+            <button onClick={() => setEditing(false)}>Cancel</button>
+            {updateWarehouse.error && <div>Failed: {updateWarehouse.error.message}</div>}
+          </td>
+        </tr>
+      )}
+      {toggleActive.error && (
+        <tr>
+          <td colSpan={4}>Failed: {toggleActive.error.message}</td>
+        </tr>
+      )}
+    </>
   );
 }
 
