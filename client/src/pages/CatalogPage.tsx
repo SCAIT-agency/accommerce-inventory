@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { trpc } from "../lib/trpc";
 import { SKU_IDENTIFIER_TYPES } from "../../../shared/constants";
+import { BulkPasteImport } from "../components/BulkPasteImport";
+import type { BulkPasteColumn } from "../lib/bulkPaste";
 
 // The 4 non-sku/non-name identifier types have no dedicated field on this
 // form — sku/name double as free reference fields for those, and this one
@@ -22,6 +24,7 @@ function SkusSection() {
       utils.catalog.listSkus.invalidate();
     },
   });
+  const bulkCreateSkusMutation = trpc.catalog.bulkCreateSkus.useMutation();
 
   if (skusQuery.error) return <div>Failed to load SKUs: {skusQuery.error.message}</div>;
 
@@ -76,6 +79,19 @@ function SkusSection() {
         </button>
         {createSku.error && <div>Failed to save: {createSku.error.message}</div>}
       </div>
+      <BulkPasteImport<{ sku: string; name: string; primaryIdentifierType: "sku" }>
+        columns={[
+          { key: "sku", label: "SKU", parse: (raw) => (raw.trim() ? { ok: true, value: raw.trim() } : { ok: false, error: "required" }) },
+          { key: "name", label: "Name", parse: (raw) => ({ ok: true, value: raw.trim() }) },
+        ] as BulkPasteColumn<{ sku: string; name: string; primaryIdentifierType: "sku" }>[]}
+        onSubmit={async (rows) => {
+          const results = await bulkCreateSkusMutation.mutateAsync(
+            rows.map((r) => ({ sku: r.sku, name: r.name || undefined, primaryIdentifierType: "sku" as const })),
+          );
+          return results;
+        }}
+        onImported={() => utils.catalog.listSkus.invalidate()}
+      />
     </div>
   );
 }
