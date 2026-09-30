@@ -282,6 +282,7 @@ button:disabled {
 .badge-low, .badge-warning { color: var(--warning); background: var(--warning-soft); }
 .badge-ok { color: var(--ok); background: var(--ok-soft); }
 .badge-overstock, .badge-unknown, .badge-neutral { color: var(--neutral-status); background: var(--neutral-status-soft); }
+.badge-info { color: var(--accent); background: var(--accent-soft); }
 
 [role="alert"] {
   color: var(--critical);
