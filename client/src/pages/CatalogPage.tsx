@@ -119,13 +119,11 @@ function SkusSection() {
   );
 }
 
-const SKU_IDENTIFIER_FIELDS = { sku: "sku", ssku: "ssku", asin: "asin", ean: "ean", fnsku: "fnsku", name: "name" } as const;
-
 function SkuRow({ sku, onUpdated }: {
   sku: {
     id: number; sku: string | null; name: string | null; primaryIdentifierType: (typeof SKU_IDENTIFIER_TYPES)[number];
     status: "active" | "inactive"; isBundle: boolean; leadTimeDays: number; safetyStockDays: number;
-    ssku: string | null; asin: string | null; ean: string | null; fnsku: string | null;
+    identifierValue: string;
   };
   onUpdated: () => void;
 }) {
@@ -133,7 +131,7 @@ function SkuRow({ sku, onUpdated }: {
   const [safetyStockDays, setSafetyStockDays] = useState(String(sku.safetyStockDays));
   const updateSku = trpc.catalog.updateSku.useMutation({ onSuccess: onUpdated });
 
-  const identifierValue = sku[SKU_IDENTIFIER_FIELDS[sku.primaryIdentifierType]] ?? "—";
+  const identifierValue = sku.identifierValue ?? "—";
 
   return (
     <>
