@@ -60,6 +60,25 @@ export async function createVendor(data: Omit<InsertVendor, "id">, dbClient: DbC
   return row;
 }
 
+export async function bulkCreateVendors(
+  rows: Omit<InsertVendor, "id">[],
+): Promise<({ index: number; ok: true; id: number } | { index: number; ok: false; error: string })[]> {
+  // One partial failure must not roll back the valid rows around it — this
+  // is a bulk *import* (independent rows), not a single atomic operation,
+  // so each row commits or fails on its own rather than the whole batch
+  // succeeding or failing together.
+  const results: ({ index: number; ok: true; id: number } | { index: number; ok: false; error: string })[] = [];
+  for (let index = 0; index < rows.length; index++) {
+    try {
+      const row = await createVendor(rows[index]);
+      results.push({ index, ok: true, id: row.id });
+    } catch (err) {
+      results.push({ index, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return results;
+}
+
 export async function listVendors() {
   return db.select().from(vendors);
 }

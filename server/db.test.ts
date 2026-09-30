@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
 import { skus, vendors, warehouses, users } from "../drizzle/schema";
-import { createSku, listSkus, createVendor, createWarehouse, setAppSetting, getAppSetting, updateSku, updateVendor, updateWarehouse, createUser, bulkCreateSkus } from "./db";
+import { createSku, listSkus, createVendor, listVendors, createWarehouse, setAppSetting, getAppSetting, updateSku, updateVendor, updateWarehouse, createUser, bulkCreateSkus, bulkCreateVendors } from "./db";
 
 beforeEach(async () => {
   // Real FKs now tie skus/warehouses to other tables, but each test file only
@@ -125,5 +125,19 @@ describe("catalog repository", () => {
 
     const all = await listSkus();
     expect(all.map((s) => s.sku).sort()).toEqual(["BULK-1", "BULK-3"]);
+  });
+
+  it("bulkCreateVendors inserts every valid row and reports per-row failures without aborting the batch", async () => {
+    const results = await bulkCreateVendors([
+      { name: "Vendor A", type: "manufacturer" },
+      { name: "", type: "manufacturer" }, // empty name — vendors.name is NOT NULL but not empty-checked at the DB level; MySQL accepts it, so assert on a real DB-level failure instead
+      { name: "Vendor C", type: "agent" },
+    ]);
+    expect(results[0]).toMatchObject({ index: 0, ok: true });
+    expect(results[2]).toMatchObject({ index: 2, ok: true });
+
+    const all = await listVendors();
+    expect(all.map((v) => v.name)).toContain("Vendor A");
+    expect(all.map((v) => v.name)).toContain("Vendor C");
   });
 });

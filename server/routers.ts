@@ -2,7 +2,7 @@ import { z } from "zod";
 import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { getRemainingBatches } from "./inventoryLedger";
-import { listSkus, createSku, bulkCreateSkus, updateSku, listVendors, createVendor, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
+import { listSkus, createSku, bulkCreateSkus, updateSku, listVendors, createVendor, bulkCreateVendors, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderActualReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, updatePoLineItemProduction, getPoLineItemProductionProgress, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks, updateShipmentMethod, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listPaymentsForShipment, listUnpaidPayments, listTransactions } from "./payments";
@@ -102,6 +102,13 @@ export const appRouter = router({
         products: z.array(z.string()).optional(),
       }))
       .mutation(({ input, ctx }) => createVendor({ ...input, createdBy: ctx.user.id })),
+    bulkCreateVendors: editorProcedure
+      .input(z.array(z.object({
+        name: z.string(),
+        contactEmail: z.string().optional(),
+        type: z.enum(VENDOR_TYPES).optional(),
+      })))
+      .mutation(({ input, ctx }) => bulkCreateVendors(input.map((row) => ({ ...row, createdBy: ctx.user.id })))),
     updateVendor: editorProcedure
       .input(z.object({
         id: z.number(),
