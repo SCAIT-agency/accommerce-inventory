@@ -7,7 +7,7 @@ import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlan
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks, updateShipmentMethod, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listPaymentsForShipment, listUnpaidPayments, listTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation, upsertWeeklyInput, listWeeklyInputs } from "./salesPlan";
-import { PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES } from "../drizzle/schema";
+import { PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES, VENDOR_TYPES } from "../drizzle/schema";
 import { MANUAL_REASON_CATEGORIES } from "../shared/constants";
 import { listChangeLog } from "./changeLog";
 
@@ -82,10 +82,26 @@ export const appRouter = router({
       }))
       .mutation(({ input }) => updateSku(input.id, { status: input.status, leadTimeDays: input.leadTimeDays, safetyStockDays: input.safetyStockDays })),
     listVendors: protectedProcedure.query(() => listVendors()),
-    createVendor: editorProcedure.input(z.object({ name: z.string() })).mutation(({ input }) => createVendor(input)),
+    createVendor: editorProcedure
+      .input(z.object({
+        name: z.string(),
+        contactEmail: z.string().optional(),
+        notes: z.string().optional(),
+        type: z.enum(VENDOR_TYPES).optional(),
+        products: z.array(z.string()).optional(),
+      }))
+      .mutation(({ input, ctx }) => createVendor({ ...input, createdBy: ctx.user.id })),
     updateVendor: editorProcedure
-      .input(z.object({ id: z.number(), name: z.string().optional(), contactEmail: z.string().optional(), notes: z.string().optional() }))
-      .mutation(({ input }) => updateVendor(input.id, { name: input.name, contactEmail: input.contactEmail, notes: input.notes })),
+      .input(z.object({
+        id: z.number(),
+        name: z.string().optional(),
+        contactEmail: z.string().optional(),
+        notes: z.string().optional(),
+        type: z.enum(VENDOR_TYPES).optional(),
+        products: z.array(z.string()).optional(),
+        active: z.boolean().optional(),
+      }))
+      .mutation(({ input, ctx }) => updateVendor(input.id, { ...input, id: undefined, updatedBy: ctx.user.id })),
     listWarehouses: protectedProcedure.query(() => listWarehouses()),
     createWarehouse: editorProcedure
       .input(z.object({ code: z.string(), name: z.string() }))
