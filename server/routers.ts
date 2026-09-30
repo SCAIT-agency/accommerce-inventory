@@ -2,12 +2,12 @@ import { z } from "zod";
 import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { getRemainingBatches } from "./inventoryLedger";
-import { listSkus, createSku, updateSku, listVendors, createVendor, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
+import { listSkus, createSku, bulkCreateSkus, updateSku, listVendors, createVendor, bulkCreateVendors, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderActualReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, updatePoLineItemProduction, getPoLineItemProductionProgress, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks, updateShipmentMethod, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listPaymentsForShipment, listUnpaidPayments, listTransactions } from "./payments";
 import { createSalesPlanEntry, getSalesVolatility, getPlanActualDeviation, upsertWeeklyInput, listWeeklyInputs } from "./salesPlan";
-import { PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES } from "../drizzle/schema";
+import { PO_STATUSES, SHIPMENT_STATUSES, CUSTOMS_STATUSES, SKU_IDENTIFIER_TYPES, VENDOR_TYPES } from "../drizzle/schema";
 import { MANUAL_REASON_CATEGORIES } from "../shared/constants";
 import { listChangeLog } from "./changeLog";
 
@@ -73,6 +73,17 @@ export const appRouter = router({
         return typeof value === "string" && value.trim().length > 0;
       }, { message: "the field matching primaryIdentifierType must be provided and non-empty" }))
       .mutation(({ input }) => createSku(input)),
+    bulkCreateSkus: editorProcedure
+      .input(z.array(z.object({
+        sku: z.string().optional(),
+        ssku: z.string().optional(),
+        asin: z.string().optional(),
+        ean: z.string().optional(),
+        fnsku: z.string().optional(),
+        name: z.string().optional(),
+        primaryIdentifierType: z.enum(SKU_IDENTIFIER_TYPES),
+      })))
+      .mutation(({ input }) => bulkCreateSkus(input)),
     updateSku: editorProcedure
       .input(z.object({
         id: z.number(),
@@ -82,17 +93,40 @@ export const appRouter = router({
       }))
       .mutation(({ input }) => updateSku(input.id, { status: input.status, leadTimeDays: input.leadTimeDays, safetyStockDays: input.safetyStockDays })),
     listVendors: protectedProcedure.query(() => listVendors()),
-    createVendor: editorProcedure.input(z.object({ name: z.string() })).mutation(({ input }) => createVendor(input)),
+    createVendor: editorProcedure
+      .input(z.object({
+        name: z.string(),
+        contactEmail: z.string().optional(),
+        notes: z.string().optional(),
+        type: z.enum(VENDOR_TYPES).optional(),
+        products: z.array(z.string()).optional(),
+      }))
+      .mutation(({ input, ctx }) => createVendor({ ...input, createdBy: ctx.user.id })),
+    bulkCreateVendors: editorProcedure
+      .input(z.array(z.object({
+        name: z.string(),
+        contactEmail: z.string().optional(),
+        type: z.enum(VENDOR_TYPES).optional(),
+      })))
+      .mutation(({ input, ctx }) => bulkCreateVendors(input.map((row) => ({ ...row, createdBy: ctx.user.id })))),
     updateVendor: editorProcedure
-      .input(z.object({ id: z.number(), name: z.string().optional(), contactEmail: z.string().optional(), notes: z.string().optional() }))
-      .mutation(({ input }) => updateVendor(input.id, { name: input.name, contactEmail: input.contactEmail, notes: input.notes })),
+      .input(z.object({
+        id: z.number(),
+        name: z.string().optional(),
+        contactEmail: z.string().optional(),
+        notes: z.string().optional(),
+        type: z.enum(VENDOR_TYPES).optional(),
+        products: z.array(z.string()).optional(),
+        active: z.boolean().optional(),
+      }))
+      .mutation(({ input, ctx }) => updateVendor(input.id, { ...input, id: undefined, updatedBy: ctx.user.id })),
     listWarehouses: protectedProcedure.query(() => listWarehouses()),
     createWarehouse: editorProcedure
       .input(z.object({ code: z.string(), name: z.string() }))
       .mutation(({ input }) => createWarehouse(input)),
     updateWarehouse: editorProcedure
-      .input(z.object({ id: z.number(), code: z.string().optional(), name: z.string().optional() }))
-      .mutation(({ input }) => updateWarehouse(input.id, { code: input.code, name: input.name })),
+      .input(z.object({ id: z.number(), code: z.string().optional(), name: z.string().optional(), active: z.boolean().optional() }))
+      .mutation(({ input }) => updateWarehouse(input.id, { code: input.code, name: input.name, active: input.active })),
   }),
   purchaseOrders: router({
     list: protectedProcedure.query(() => listPurchaseOrders()),

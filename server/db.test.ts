@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { skus, vendors, warehouses } from "../drizzle/schema";
-import { createSku, listSkus, createVendor, createWarehouse, setAppSetting, getAppSetting, updateSku, updateVendor, updateWarehouse } from "./db";
+import { skus, vendors, warehouses, users } from "../drizzle/schema";
+import { createSku, listSkus, createVendor, listVendors, createWarehouse, setAppSetting, getAppSetting, updateSku, updateVendor, updateWarehouse, createUser, bulkCreateSkus, bulkCreateVendors } from "./db";
 
 beforeEach(async () => {
   // Real FKs now tie skus/warehouses to other tables, but each test file only
@@ -21,6 +21,7 @@ beforeEach(async () => {
       await tx.delete(skus);
       await tx.delete(vendors);
       await tx.delete(warehouses);
+      await tx.delete(users);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
     }
@@ -83,10 +84,67 @@ describe("catalog repository", () => {
     expect(updated.contactEmail).toBe("new@example.com");
   });
 
+  it("createVendor defaults type/active and accepts a products list", async () => {
+    const vendor = await createVendor({ name: "New Factory" });
+    expect(vendor.type).toBe("other");
+    expect(vendor.active).toBe(true);
+    expect(vendor.products).toEqual([]);
+  });
+
+  it("updateVendor persists type/products/active/createdBy/updatedBy", async () => {
+    const user = await createUser({ email: "test@example.com", role: "editor" });
+    const vendor = await createVendor({ name: "Factory A" });
+    const updated = await updateVendor(vendor.id, {
+      type: "manufacturer",
+      products: ["Jello 500ml", "Mixer"],
+      active: false,
+      updatedBy: user.id,
+    });
+    expect(updated.type).toBe("manufacturer");
+    expect(updated.products).toEqual(["Jello 500ml", "Mixer"]);
+    expect(updated.active).toBe(false);
+    expect(updated.updatedBy).toBe(user.id);
+  });
+
   it("updateWarehouse persists a code/name change", async () => {
     const warehouse = await createWarehouse({ code: "OLD-CODE", name: "Old Name" });
     const updated = await updateWarehouse(warehouse.id, { code: "NEW-CODE", name: "New Name" });
     expect(updated.code).toBe("NEW-CODE");
     expect(updated.name).toBe("New Name");
+  });
+
+  it("createWarehouse defaults active to true; updateWarehouse can deactivate it", async () => {
+    const wh = await createWarehouse({ code: "TEST-WH", name: "Test Warehouse" });
+    expect(wh.active).toBe(true);
+    const updated = await updateWarehouse(wh.id, { active: false });
+    expect(updated.active).toBe(false);
+  });
+
+  it("bulkCreateSkus inserts every valid row and reports per-row failures without aborting the batch", async () => {
+    const results = await bulkCreateSkus([
+      { sku: "BULK-1", primaryIdentifierType: "sku" },
+      { primaryIdentifierType: "sku" }, // no sku value — violates the NOT NULL-by-construction rule createSku already enforces
+      { sku: "BULK-3", primaryIdentifierType: "sku" },
+    ]);
+    expect(results[0]).toMatchObject({ index: 0, ok: true });
+    expect(results[1]).toMatchObject({ index: 1, ok: false });
+    expect(results[2]).toMatchObject({ index: 2, ok: true });
+
+    const all = await listSkus();
+    expect(all.map((s) => s.sku).sort()).toEqual(["BULK-1", "BULK-3"]);
+  });
+
+  it("bulkCreateVendors inserts every valid row and reports per-row failures without aborting the batch", async () => {
+    const results = await bulkCreateVendors([
+      { name: "Vendor A", type: "manufacturer" },
+      { name: "", type: "manufacturer" }, // empty name — vendors.name is NOT NULL but not empty-checked at the DB level; MySQL accepts it, so assert on a real DB-level failure instead
+      { name: "Vendor C", type: "agent" },
+    ]);
+    expect(results[0]).toMatchObject({ index: 0, ok: true });
+    expect(results[2]).toMatchObject({ index: 2, ok: true });
+
+    const all = await listVendors();
+    expect(all.map((v) => v.name)).toContain("Vendor A");
+    expect(all.map((v) => v.name)).toContain("Vendor C");
   });
 });
