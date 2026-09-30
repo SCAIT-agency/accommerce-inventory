@@ -297,7 +297,7 @@ function WarehousesSection() {
     <div>
       <h2>Warehouses</h2>
       <table>
-        <thead><tr><th>Code</th><th>Name</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Code</th><th>Name</th><th>Active</th><th>Actions</th></tr></thead>
         <tbody>
           {(warehousesQuery.data ?? []).map((w) => <WarehouseRow key={w.id} warehouse={w} onUpdated={() => utils.catalog.listWarehouses.invalidate()} />)}
         </tbody>
@@ -314,17 +314,24 @@ function WarehousesSection() {
   );
 }
 
-function WarehouseRow({ warehouse, onUpdated }: { warehouse: { id: number; code: string; name: string }; onUpdated: () => void }) {
+function WarehouseRow({ warehouse, onUpdated }: { warehouse: { id: number; code: string; name: string; active: boolean }; onUpdated: () => void }) {
   const [editing, setEditing] = useState(false);
   const [code, setCode] = useState(warehouse.code);
   const [name, setName] = useState(warehouse.name);
   const updateWarehouse = trpc.catalog.updateWarehouse.useMutation({ onSuccess: () => { setEditing(false); onUpdated(); } });
+  const toggleActive = trpc.catalog.updateWarehouse.useMutation({ onSuccess: onUpdated });
 
   if (!editing) {
     return (
       <tr>
         <td>{warehouse.code}</td>
         <td>{warehouse.name}</td>
+        <td>
+          <span className={warehouse.active ? "badge badge-ok" : "badge badge-neutral"}>{warehouse.active ? "active" : "inactive"}</span>{" "}
+          <button disabled={toggleActive.isPending} onClick={() => toggleActive.mutate({ id: warehouse.id, active: !warehouse.active })}>
+            {warehouse.active ? "Deactivate" : "Activate"}
+          </button>
+        </td>
         <td><button onClick={() => setEditing(true)}>Edit</button></td>
       </tr>
     );
@@ -333,6 +340,7 @@ function WarehouseRow({ warehouse, onUpdated }: { warehouse: { id: number; code:
     <tr>
       <td><input value={code} onChange={(e) => setCode(e.target.value)} /></td>
       <td><input value={name} onChange={(e) => setName(e.target.value)} /></td>
+      <td>{warehouse.active ? "active" : "inactive"}</td>
       <td>
         <button disabled={updateWarehouse.isPending || !code || !name} onClick={() => updateWarehouse.mutate({ id: warehouse.id, code, name })}>Save</button>
         <button onClick={() => setEditing(false)}>Cancel</button>

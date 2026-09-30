@@ -125,8 +125,8 @@ export const appRouter = router({
       .input(z.object({ code: z.string(), name: z.string() }))
       .mutation(({ input }) => createWarehouse(input)),
     updateWarehouse: editorProcedure
-      .input(z.object({ id: z.number(), code: z.string().optional(), name: z.string().optional() }))
-      .mutation(({ input }) => updateWarehouse(input.id, { code: input.code, name: input.name })),
+      .input(z.object({ id: z.number(), code: z.string().optional(), name: z.string().optional(), active: z.boolean().optional() }))
+      .mutation(({ input }) => updateWarehouse(input.id, { code: input.code, name: input.name, active: input.active })),
   }),
   purchaseOrders: router({
     list: protectedProcedure.query(() => listPurchaseOrders()),

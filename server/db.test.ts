@@ -113,6 +113,13 @@ describe("catalog repository", () => {
     expect(updated.name).toBe("New Name");
   });
 
+  it("createWarehouse defaults active to true; updateWarehouse can deactivate it", async () => {
+    const wh = await createWarehouse({ code: "TEST-WH", name: "Test Warehouse" });
+    expect(wh.active).toBe(true);
+    const updated = await updateWarehouse(wh.id, { active: false });
+    expect(updated.active).toBe(false);
+  });
+
   it("bulkCreateSkus inserts every valid row and reports per-row failures without aborting the batch", async () => {
     const results = await bulkCreateSkus([
       { sku: "BULK-1", primaryIdentifierType: "sku" },

@@ -85,6 +85,7 @@ export const warehouses = mysqlTable("warehouses", {
   id: int("id").autoincrement().primaryKey(),
   code: varchar("code", { length: 32 }).notNull().unique(),
   name: varchar("name", { length: 128 }).notNull(),
+  active: boolean("active").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type Warehouse = typeof warehouses.$inferSelect;
