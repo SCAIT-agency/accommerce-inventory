@@ -2,7 +2,7 @@ import { z } from "zod";
 import { router, protectedProcedure, editorProcedure } from "./_core/trpc";
 import { getHomeSummary, getStockDashboard, getMoneyDashboard } from "./dashboards";
 import { getRemainingBatches } from "./inventoryLedger";
-import { listSkus, createSku, updateSku, listVendors, createVendor, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
+import { listSkus, createSku, bulkCreateSkus, updateSku, listVendors, createVendor, updateVendor, listWarehouses, createWarehouse, updateWarehouse } from "./db";
 import { createPurchaseOrder, updatePurchaseOrderStatus, updatePurchaseOrderPlannedReadyDate, updatePurchaseOrderActualReadyDate, updatePurchaseOrderLinks, updatePoLineItemCostComponents, updatePoLineItemProduction, getPoLineItemProductionProgress, getPurchaseOrderWithLineItems, listPurchaseOrders } from "./purchaseOrders";
 import { createShipment, updateShipmentPlannedDepartDate, markShipmentDeparted, updateShipmentStatus, setShipmentCustomsStatus, markShipmentArrived, correctShipmentActualDepartDate, correctShipmentReceiptQty, correctShipmentLandedCost, lockShipmentCosts, updateShipmentLinks, updateShipmentMethod, getShipmentWithLineItems, listShipments, listShipmentsForPo, recordShipmentCosts } from "./shipments";
 import { createExpectedPayment, markPaymentPaid, correctPaymentAmount, recordTransaction, matchTransactionToPayment, listUnmatchedTransactions, listPaymentsForPo, listPaymentsForShipment, listUnpaidPayments, listTransactions } from "./payments";
@@ -73,6 +73,17 @@ export const appRouter = router({
         return typeof value === "string" && value.trim().length > 0;
       }, { message: "the field matching primaryIdentifierType must be provided and non-empty" }))
       .mutation(({ input }) => createSku(input)),
+    bulkCreateSkus: editorProcedure
+      .input(z.array(z.object({
+        sku: z.string().optional(),
+        ssku: z.string().optional(),
+        asin: z.string().optional(),
+        ean: z.string().optional(),
+        fnsku: z.string().optional(),
+        name: z.string().optional(),
+        primaryIdentifierType: z.enum(SKU_IDENTIFIER_TYPES),
+      })))
+      .mutation(({ input }) => bulkCreateSkus(input)),
     updateSku: editorProcedure
       .input(z.object({
         id: z.number(),

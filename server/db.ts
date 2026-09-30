@@ -18,6 +18,25 @@ export async function createSku(data: Omit<InsertSku, "id">, dbClient: DbClient 
   return row;
 }
 
+export async function bulkCreateSkus(
+  rows: Omit<InsertSku, "id">[],
+): Promise<({ index: number; ok: true; id: number } | { index: number; ok: false; error: string })[]> {
+  // One partial failure must not roll back the valid rows around it — this
+  // is a bulk *import* (independent rows), not a single atomic operation
+  // like a shipment's cost allocation, so each row commits or fails on its
+  // own rather than the whole batch succeeding or failing together.
+  const results: ({ index: number; ok: true; id: number } | { index: number; ok: false; error: string })[] = [];
+  for (let index = 0; index < rows.length; index++) {
+    try {
+      const row = await createSku(rows[index]);
+      results.push({ index, ok: true, id: row.id });
+    } catch (err) {
+      results.push({ index, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return results;
+}
+
 export async function updateSku(id: number, data: Partial<InsertSku>, dbClient: DbClient = db) {
   await dbClient.update(skus).set(data).where(eq(skus.id, id));
   const [row] = await dbClient.select().from(skus).where(eq(skus.id, id));
