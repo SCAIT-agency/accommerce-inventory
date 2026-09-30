@@ -171,13 +171,13 @@ function VendorsSection() {
   const utils = trpc.useUtils();
   const vendorsQuery = trpc.catalog.listVendors.useQuery();
   const [name, setName] = useState("");
+  const bulkCreateVendorsMutation = trpc.catalog.bulkCreateVendors.useMutation();
   const createVendor = trpc.catalog.createVendor.useMutation({
     onSuccess: () => {
       setName("");
       utils.catalog.listVendors.invalidate();
     },
   });
-  const bulkCreateVendorsMutation = trpc.catalog.bulkCreateVendors.useMutation();
 
   if (vendorsQuery.error) return <div>Failed to load vendors: {vendorsQuery.error.message}</div>;
 
@@ -185,7 +185,7 @@ function VendorsSection() {
     <div>
       <h2>Vendors</h2>
       <table>
-        <thead><tr><th>Name</th><th>Contact Email</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Name</th><th>Type</th><th>Products</th><th>Contact Email</th><th>Notes</th><th>Active</th><th>Actions</th></tr></thead>
         <tbody>
           {(vendorsQuery.data ?? []).map((v) => <VendorRow key={v.id} vendor={v} onUpdated={() => utils.catalog.listVendors.invalidate()} />)}
         </tbody>
@@ -212,17 +212,33 @@ function VendorsSection() {
   );
 }
 
-function VendorRow({ vendor, onUpdated }: { vendor: { id: number; name: string; contactEmail: string | null }; onUpdated: () => void }) {
+function VendorRow({ vendor, onUpdated }: {
+  vendor: { id: number; name: string; contactEmail: string | null; notes: string | null; type: (typeof VENDOR_TYPES)[number]; products: string[]; active: boolean };
+  onUpdated: () => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(vendor.name);
   const [contactEmail, setContactEmail] = useState(vendor.contactEmail ?? "");
+  const [notes, setNotes] = useState(vendor.notes ?? "");
+  const [type, setType] = useState(vendor.type);
+  const [productsText, setProductsText] = useState(vendor.products.join(", "));
   const updateVendor = trpc.catalog.updateVendor.useMutation({ onSuccess: () => { setEditing(false); onUpdated(); } });
+  const toggleActive = trpc.catalog.updateVendor.useMutation({ onSuccess: onUpdated });
 
   if (!editing) {
     return (
       <tr>
         <td>{vendor.name}</td>
+        <td>{vendor.type}</td>
+        <td>{vendor.products.join(", ") || "—"}</td>
         <td>{vendor.contactEmail ?? "—"}</td>
+        <td>{vendor.notes ?? "—"}</td>
+        <td>
+          <span className={vendor.active ? "badge badge-ok" : "badge badge-neutral"}>{vendor.active ? "active" : "inactive"}</span>{" "}
+          <button disabled={toggleActive.isPending} onClick={() => toggleActive.mutate({ id: vendor.id, active: !vendor.active })}>
+            {vendor.active ? "Deactivate" : "Activate"}
+          </button>
+        </td>
         <td><button onClick={() => setEditing(true)}>Edit</button></td>
       </tr>
     );
@@ -230,9 +246,31 @@ function VendorRow({ vendor, onUpdated }: { vendor: { id: number; name: string; 
   return (
     <tr>
       <td><input value={name} onChange={(e) => setName(e.target.value)} /></td>
-      <td><input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} /></td>
       <td>
-        <button disabled={updateVendor.isPending || !name} onClick={() => updateVendor.mutate({ id: vendor.id, name, contactEmail: contactEmail || undefined })}>Save</button>
+        <select value={type} onChange={(e) => setType(e.target.value as (typeof VENDOR_TYPES)[number])}>
+          {VENDOR_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </td>
+      <td><input value={productsText} onChange={(e) => setProductsText(e.target.value)} placeholder="comma-separated" /></td>
+      <td><input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} /></td>
+      <td><input value={notes} onChange={(e) => setNotes(e.target.value)} /></td>
+      <td>{vendor.active ? "active" : "inactive"}</td>
+      <td>
+        <button
+          disabled={updateVendor.isPending || !name}
+          onClick={() =>
+            updateVendor.mutate({
+              id: vendor.id,
+              name,
+              contactEmail: contactEmail || undefined,
+              notes: notes || undefined,
+              type,
+              products: productsText.split(",").map((p) => p.trim()).filter((p) => p.length > 0),
+            })
+          }
+        >
+          Save
+        </button>
         <button onClick={() => setEditing(false)}>Cancel</button>
         {updateVendor.error && <div>Failed: {updateVendor.error.message}</div>}
       </td>
