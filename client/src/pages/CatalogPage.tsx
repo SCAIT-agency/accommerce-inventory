@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { trpc } from "../lib/trpc";
 import { SKU_IDENTIFIER_TYPES } from "../../../shared/constants";
+import { VENDOR_TYPES } from "../../../drizzle/schema";
 import { BulkPasteImport } from "../components/BulkPasteImport";
 import type { BulkPasteColumn } from "../lib/bulkPaste";
 
@@ -143,6 +144,7 @@ function VendorsSection() {
       utils.catalog.listVendors.invalidate();
     },
   });
+  const bulkCreateVendorsMutation = trpc.catalog.bulkCreateVendors.useMutation();
 
   if (vendorsQuery.error) return <div>Failed to load vendors: {vendorsQuery.error.message}</div>;
 
@@ -162,6 +164,17 @@ function VendorsSection() {
         </button>
         {createVendor.error && <div>Failed to save: {createVendor.error.message}</div>}
       </div>
+      <BulkPasteImport<{ name: string; type: (typeof VENDOR_TYPES)[number] }>
+        columns={[
+          { key: "name", label: "Name", parse: (raw) => (raw.trim() ? { ok: true, value: raw.trim() } : { ok: false, error: "required" }) },
+          { key: "type", label: "Type", parse: (raw) =>
+            VENDOR_TYPES.includes(raw.trim() as (typeof VENDOR_TYPES)[number])
+              ? { ok: true, value: raw.trim() as (typeof VENDOR_TYPES)[number] }
+              : { ok: false, error: `must be one of: ${VENDOR_TYPES.join(", ")}` } },
+        ]}
+        onSubmit={(rows) => bulkCreateVendorsMutation.mutateAsync(rows)}
+        onImported={() => utils.catalog.listVendors.invalidate()}
+      />
     </div>
   );
 }
