@@ -134,6 +134,13 @@
       "when": 1790247044087,
       "tag": "0018_colorful_red_skull",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1790795625074,
+      "tag": "0019_cynical_rhino",
+      "breakpoints": true
     }
   ]
 }

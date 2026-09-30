@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "./dbClient";
-import { skus, vendors, warehouses } from "../drizzle/schema";
-import { createSku, listSkus, createVendor, createWarehouse, setAppSetting, getAppSetting, updateSku, updateVendor, updateWarehouse } from "./db";
+import { skus, vendors, warehouses, users } from "../drizzle/schema";
+import { createSku, listSkus, createVendor, createWarehouse, setAppSetting, getAppSetting, updateSku, updateVendor, updateWarehouse, createUser } from "./db";
 
 beforeEach(async () => {
   // Real FKs now tie skus/warehouses to other tables, but each test file only
@@ -21,6 +21,7 @@ beforeEach(async () => {
       await tx.delete(skus);
       await tx.delete(vendors);
       await tx.delete(warehouses);
+      await tx.delete(users);
     } finally {
       await tx.execute(sql`SET FOREIGN_KEY_CHECKS = 1`);
     }
@@ -81,6 +82,28 @@ describe("catalog repository", () => {
     const updated = await updateVendor(vendor.id, { name: "New Name", contactEmail: "new@example.com" });
     expect(updated.name).toBe("New Name");
     expect(updated.contactEmail).toBe("new@example.com");
+  });
+
+  it("createVendor defaults type/active and accepts a products list", async () => {
+    const vendor = await createVendor({ name: "New Factory" });
+    expect(vendor.type).toBe("other");
+    expect(vendor.active).toBe(true);
+    expect(vendor.products).toEqual([]);
+  });
+
+  it("updateVendor persists type/products/active/createdBy/updatedBy", async () => {
+    const user = await createUser({ email: "test@example.com", role: "editor" });
+    const vendor = await createVendor({ name: "Factory A" });
+    const updated = await updateVendor(vendor.id, {
+      type: "manufacturer",
+      products: ["Jello 500ml", "Mixer"],
+      active: false,
+      updatedBy: user.id,
+    });
+    expect(updated.type).toBe("manufacturer");
+    expect(updated.products).toEqual(["Jello 500ml", "Mixer"]);
+    expect(updated.active).toBe(false);
+    expect(updated.updatedBy).toBe(user.id);
   });
 
   it("updateWarehouse persists a code/name change", async () => {
