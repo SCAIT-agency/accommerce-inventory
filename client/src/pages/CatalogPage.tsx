@@ -17,6 +17,10 @@ function SkusSection() {
   const [name, setName] = useState("");
   const [otherIdentifierValue, setOtherIdentifierValue] = useState("");
   const [primaryIdentifierType, setPrimaryIdentifierType] = useState<(typeof SKU_IDENTIFIER_TYPES)[number]>("sku");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [bundleOnly, setBundleOnly] = useState(false);
+  const bulkCreateSkusMutation = trpc.catalog.bulkCreateSkus.useMutation();
   const createSku = trpc.catalog.createSku.useMutation({
     onSuccess: () => {
       setSku("");
@@ -25,7 +29,6 @@ function SkusSection() {
       utils.catalog.listSkus.invalidate();
     },
   });
-  const bulkCreateSkusMutation = trpc.catalog.bulkCreateSkus.useMutation();
 
   if (skusQuery.error) return <div>Failed to load SKUs: {skusQuery.error.message}</div>;
 
@@ -40,13 +43,35 @@ function SkusSection() {
       ? sku.trim().length > 0
       : name.trim().length > 0;
 
+  const filtered = (skusQuery.data ?? []).filter((s) => {
+    if (statusFilter !== "all" && s.status !== statusFilter) return false;
+    if (bundleOnly && !s.isBundle) return false;
+    if (search.trim()) {
+      const needle = search.trim().toLowerCase();
+      const haystack = `${s.sku ?? ""} ${s.name ?? ""}`.toLowerCase();
+      if (!haystack.includes(needle)) return false;
+    }
+    return true;
+  });
+
   return (
     <div>
       <h2>SKUs</h2>
+      <div>
+        <input placeholder="search SKU/name" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}>
+          <option value="all">All statuses</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+        <label>
+          <input type="checkbox" checked={bundleOnly} onChange={(e) => setBundleOnly(e.target.checked)} /> Bundle only
+        </label>
+      </div>
       <table>
-        <thead><tr><th>SKU</th><th>Name</th><th>Identifier Type</th><th>Status</th><th>Lead Time (days)</th><th>Safety Stock (days)</th></tr></thead>
+        <thead><tr><th>SKU</th><th>Name</th><th>Identifier</th><th>Bundle</th><th>Status</th><th>Lead Time (days)</th><th>Safety Stock (days)</th></tr></thead>
         <tbody>
-          {(skusQuery.data ?? []).map((s) => <SkuRow key={s.id} sku={s} onUpdated={() => utils.catalog.listSkus.invalidate()} />)}
+          {filtered.map((s) => <SkuRow key={s.id} sku={s} onUpdated={() => utils.catalog.listSkus.invalidate()} />)}
         </tbody>
       </table>
       <div>
@@ -85,35 +110,45 @@ function SkusSection() {
           { key: "sku", label: "SKU", parse: (raw) => (raw.trim() ? { ok: true, value: raw.trim() } : { ok: false, error: "required" }) },
           { key: "name", label: "Name", parse: (raw) => ({ ok: true, value: raw.trim() }) },
         ] as BulkPasteColumn<{ sku: string; name: string; primaryIdentifierType: "sku" }>[]}
-        onSubmit={async (rows) => {
-          const results = await bulkCreateSkusMutation.mutateAsync(
-            rows.map((r) => ({ sku: r.sku, name: r.name || undefined, primaryIdentifierType: "sku" as const })),
-          );
-          return results;
-        }}
+        onSubmit={(rows) =>
+          bulkCreateSkusMutation.mutateAsync(rows.map((r) => ({ sku: r.sku, name: r.name || undefined, primaryIdentifierType: "sku" as const })))
+        }
         onImported={() => utils.catalog.listSkus.invalidate()}
       />
     </div>
   );
 }
 
-function SkuRow({ sku, onUpdated }: { sku: { id: number; sku: string | null; name: string | null; primaryIdentifierType: string; status: "active" | "inactive"; leadTimeDays: number; safetyStockDays: number }; onUpdated: () => void }) {
+const SKU_IDENTIFIER_FIELDS = { sku: "sku", ssku: "ssku", asin: "asin", ean: "ean", fnsku: "fnsku", name: "name" } as const;
+
+function SkuRow({ sku, onUpdated }: {
+  sku: {
+    id: number; sku: string | null; name: string | null; primaryIdentifierType: (typeof SKU_IDENTIFIER_TYPES)[number];
+    status: "active" | "inactive"; isBundle: boolean; leadTimeDays: number; safetyStockDays: number;
+    ssku: string | null; asin: string | null; ean: string | null; fnsku: string | null;
+  };
+  onUpdated: () => void;
+}) {
   const [leadTimeDays, setLeadTimeDays] = useState(String(sku.leadTimeDays));
   const [safetyStockDays, setSafetyStockDays] = useState(String(sku.safetyStockDays));
   const updateSku = trpc.catalog.updateSku.useMutation({ onSuccess: onUpdated });
+
+  const identifierValue = sku[SKU_IDENTIFIER_FIELDS[sku.primaryIdentifierType]] ?? "—";
 
   return (
     <>
       <tr>
         <td>{sku.sku ?? "—"}</td>
         <td>{sku.name ?? "—"}</td>
-        <td>{sku.primaryIdentifierType}</td>
+        <td>{identifierValue} <span style={{ color: "var(--neutral-status)" }}>({sku.primaryIdentifierType})</span></td>
+        <td>{sku.isBundle && <span className="badge badge-info">Bundle</span>}</td>
         <td>
+          <span className={sku.status === "active" ? "badge badge-ok" : "badge badge-neutral"}>{sku.status}</span>{" "}
           <button
             disabled={updateSku.isPending}
             onClick={() => updateSku.mutate({ id: sku.id, status: sku.status === "active" ? "inactive" : "active" })}
           >
-            {sku.status}
+            {sku.status === "active" ? "Deactivate" : "Activate"}
           </button>
         </td>
         <td>
@@ -127,7 +162,7 @@ function SkuRow({ sku, onUpdated }: { sku: { id: number; sku: string | null; nam
       </tr>
       {updateSku.error && (
         <tr>
-          <td colSpan={6}>Failed: {updateSku.error.message}</td>
+          <td colSpan={7}>Failed: {updateSku.error.message}</td>
         </tr>
       )}
     </>
@@ -272,12 +307,18 @@ function WarehouseRow({ warehouse, onUpdated }: { warehouse: { id: number; code:
 }
 
 export function CatalogPage() {
+  const [tab, setTab] = useState<"skus" | "vendors" | "warehouses">("skus");
   return (
     <div>
       <h1>Catalog</h1>
-      <SkusSection />
-      <VendorsSection />
-      <WarehousesSection />
+      <div>
+        <button onClick={() => setTab("skus")}>SKUs</button>
+        <button onClick={() => setTab("vendors")}>Vendors</button>
+        <button onClick={() => setTab("warehouses")}>Warehouses</button>
+      </div>
+      {tab === "skus" && <SkusSection />}
+      {tab === "vendors" && <VendorsSection />}
+      {tab === "warehouses" && <WarehousesSection />}
     </div>
   );
 }
