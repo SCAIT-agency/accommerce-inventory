@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "18c3ef3e-3e90-4f85-aad6-6bfa5bbe1d17",
+  "id": "6cb01f04-4c91-4cd1-9959-698e68fca1ae",
   "prevId": "182dd794-8c67-41d2-a302-f37ad5d4db08",
   "tables": {
     "app_settings": {
@@ -1860,9 +1860,8 @@
           "name": "products",
           "type": "json",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "(json_array())"
+          "notNull": false,
+          "autoincrement": false
         },
         "active": {
           "name": "active",

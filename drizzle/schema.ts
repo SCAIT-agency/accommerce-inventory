@@ -72,10 +72,13 @@ export const vendors = mysqlTable("vendors", {
   contactEmail: varchar("contactEmail", { length: 320 }),
   notes: text("notes"),
   type: mysqlEnum("type", VENDOR_TYPES).default("other").notNull(),
-  // TiDB rejects a JSON column DEFAULT given as a string literal (only expressions like
-  // json_array() are accepted) — a plain `.default([])` would generate `DEFAULT ('[]')`,
-  // which works on MySQL 8 but fails on TiDB. json_array() is valid on both.
-  products: json("products").$type<string[]>().default(sql`(json_array())`).notNull(),
+  // No DB-level default on purpose: TiDB rejects a JSON DEFAULT given as a string
+  // literal ('[]') and, on this cluster, also rejects a function-expression default
+  // (json_array()) as unsafe for binlog replication (ER_BINLOG_UNSAFE_SYSTEM_FUNCTION),
+  // regardless of what PingCAP's own docs say is allowed. Rather than chase this per
+  // JSON column, the column stays nullable and the app treats null as [] (createVendor/
+  // updateVendor already always pass products explicitly) — see getVendorProducts below.
+  products: json("products").$type<string[]>(),
   active: boolean("active").default(true).notNull(),
   createdBy: int("createdBy").references(() => users.id),
   updatedBy: int("updatedBy").references(() => users.id),

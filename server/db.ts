@@ -54,10 +54,19 @@ export async function listSkus(status?: "active" | "inactive") {
   return db.select().from(skus);
 }
 
+// vendors.products has no DB-level default (TiDB rejects both a literal and a
+// function-expression JSON default — see the column's comment in schema.ts), so a row
+// inserted/updated without it, or one left over from before the column existed, reads
+// back as null. Normalize to [] here, the one place every vendor row is read, so no
+// caller has to know the DB can hand back null for this field.
+function withProductsDefault<T extends { products: string[] | null }>(row: T): T & { products: string[] } {
+  return { ...row, products: row.products ?? [] };
+}
+
 export async function createVendor(data: Omit<InsertVendor, "id">, dbClient: DbClient = db) {
   const [result] = await dbClient.insert(vendors).values(data);
   const [row] = await dbClient.select().from(vendors).where(eq(vendors.id, result.insertId));
-  return row;
+  return withProductsDefault(row);
 }
 
 export async function bulkCreateVendors(
@@ -80,13 +89,14 @@ export async function bulkCreateVendors(
 }
 
 export async function listVendors() {
-  return db.select().from(vendors);
+  const rows = await db.select().from(vendors);
+  return rows.map(withProductsDefault);
 }
 
 export async function updateVendor(id: number, data: Partial<InsertVendor>, dbClient: DbClient = db) {
   await dbClient.update(vendors).set(data).where(eq(vendors.id, id));
   const [row] = await dbClient.select().from(vendors).where(eq(vendors.id, id));
-  return row;
+  return withProductsDefault(row);
 }
 
 export async function createWarehouse(data: Omit<InsertWarehouse, "id">, dbClient: DbClient = db) {

@@ -1,5 +1,5 @@
 ALTER TABLE `vendors` ADD `type` enum('manufacturer','trading_company','agent','other') DEFAULT 'other' NOT NULL;--> statement-breakpoint
-ALTER TABLE `vendors` ADD `products` json DEFAULT (json_array()) NOT NULL;--> statement-breakpoint
+ALTER TABLE `vendors` ADD `products` json;--> statement-breakpoint
 ALTER TABLE `vendors` ADD `active` boolean DEFAULT true NOT NULL;--> statement-breakpoint
 ALTER TABLE `vendors` ADD `createdBy` int;--> statement-breakpoint
 ALTER TABLE `vendors` ADD `updatedBy` int;--> statement-breakpoint
